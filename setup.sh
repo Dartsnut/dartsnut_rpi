@@ -53,7 +53,7 @@ Description=Dartsnut RGB Matrix Service
 
 [Service]
 Type=simple
-User=rpi
+User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 ExecStart=/home/rpi/dartsnut_rpi/DartsnutRGBMatrix
 Restart=on-failure
@@ -76,7 +76,7 @@ Requires=dartsnut_matrix.service
 
 [Service]
 Type=simple
-User=rpi
+User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 ExecStart=/home/rpi/dartsnut_rpi/venv0/bin/python /home/rpi/dartsnut_rpi/main.py
 Restart=on-failure
