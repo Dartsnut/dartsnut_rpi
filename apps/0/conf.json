@@ -1,0 +1,21 @@
+{
+    "id": "0",
+    "type": "widget",
+    "name": "Media player",
+    "auther": "PixelBoard Team",
+    "version": "1.0.0",
+    "description": "A widget to show media files, support jpg, png, bmp, gif, mp4.",
+    "size": [128,128],
+    "fields": [
+        {
+            "id": "files",
+            "name": "files",
+            "type": "files",
+            "desc": "Upload files",
+            "accept": ["bmp","jpg","png","gif","mp4"],
+            "counts": [1,10],
+            "default": []
+        }
+    ],
+    "preview": []
+}

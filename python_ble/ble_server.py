@@ -1,0 +1,172 @@
+# Bluezero modules
+from bluezero import adapter
+from bluezero import peripheral
+from bluezero import device
+import json
+import subprocess
+import time
+import asyncio
+import threading
+
+# constants
+UART_SERVICE = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
+RX_CHARACTERISTIC = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'
+TX_CHARACTERISTIC = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
+
+class UARTDevice:
+    tx_obj = None
+    callback = None
+
+    @classmethod
+    def on_connect(cls, ble_device: device.Device):
+        print("Connected to " + str(ble_device.address))
+
+    @classmethod
+    def on_disconnect(cls, adapter_address, device_address):
+        print("Disconnected from " + device_address)
+
+    @classmethod
+    def uart_notify(cls, notifying, characteristic):
+        if notifying:
+            cls.tx_obj = characteristic
+        else:
+            cls.tx_obj = None
+
+    @classmethod
+    def send_data(cls, value):
+        print(value)
+        if cls.tx_obj:
+            cls.tx_obj.set_value(json.dumps(value).encode('utf-8'))
+
+    @classmethod
+    def uart_write(cls, value, options):
+        try:
+            data = json.loads(value.decode('utf-8'))
+            print("Received JSON:", data)
+            command = data.get("command")
+            if command is None:
+                print("No command found in data")
+                return
+            elif (command == "scan_wifi"):
+                # Use a system command to scan for WiFi networks
+                try:
+                    result = subprocess.run(['iwlist', 'wlan0', 'scan'], capture_output=True, text=True, check=True)
+                    networks = []
+                    for line in result.stdout.splitlines():
+                        if "ESSID" in line:
+                            essid = line.split(':')[1].strip('"')
+                            if essid:
+                                networks.append(essid)
+                                total_bytes = sum(len(n.encode('utf-8')) for n in networks)
+                                if total_bytes > 64:
+                                    cls.send_data({"command": "scan_wifi", "networks": networks})
+                                    networks = []
+                    # After the loop, send any remaining SSIDs
+                    if networks:
+                        cls.send_data({"command": "scan_wifi", "networks": networks, "end": True})
+                    else:
+                        cls.send_data({"command": "scan_wifi", "networks": [], "end": True})
+                except subprocess.CalledProcessError as e:
+                    print("Failed to scan WiFi networks:", e)
+                    cls.send_data({"command": "scan_wifi", "error": "Failed to scan WiFi networks"})
+            elif (command == "enable_wifi"):
+                # Enable WiFi using nmcli
+                try:
+                    result = subprocess.run(['nmcli', 'radio', 'wifi', 'on'], capture_output=True, text=True, check=True)
+                    cls.send_data({"command": "enable_wifi", "status": "success"})
+                except subprocess.CalledProcessError as e:
+                    print("Failed to enable WiFi:", e)
+                    cls.send_data({"command": "enable_wifi", "status": "error", "message": str(e)})
+            elif (command == "wifi_status"):
+                # Check WiFi status
+                try:
+                    # Check if WiFi is enabled
+                    result = subprocess.run(['nmcli', 'radio', 'wifi'], capture_output=True, text=True, check=True)
+                    wifi_enabled = result.stdout.strip() == "enabled"
+                    if wifi_enabled:
+                        # Check connection status
+                        result = subprocess.run(['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'], capture_output=True, text=True, check=True)
+                        connected_info = [line for line in result.stdout.splitlines() if line.startswith("yes:")]
+                        if connected_info:
+                            _, ssid = connected_info[0].split(':')
+                            # Get the IP address of the connected WiFi
+                            result = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=True)
+                            ip_address = result.stdout.strip().split()[0]
+                            cls.send_data({"command": "wifi_status", "wifi_enabled": True, "connected": True, "ssid": ssid, "ip_address": ip_address})
+                        else:
+                            cls.send_data({"command": "wifi_status", "wifi_enabled": True, "connected": False})
+                    else:
+                        cls.send_data({"command": "wifi_status", "wifi_enabled": False})
+                except subprocess.CalledProcessError as e:
+                    print("Failed to get WiFi status:", e)
+                    cls.send_data({"command": "wifi_status", "error": "Failed to get WiFi status"})
+            elif (command == "connect_wifi"):
+                # Connect to a WiFi network
+                ssid = data.get("ssid")
+                password = data.get("password")
+                if ssid and password:
+                    try:
+                        # Use nmcli to connect to the WiFi network
+                        result = subprocess.run(['nmcli', 'dev', 'wifi', 'connect', ssid, 'password', password], capture_output=True, text=True, check=True)
+                        cls.send_data({"command": "connect_wifi", "status": "success"})
+                    except subprocess.CalledProcessError as e:
+                        print("Failed to connect to WiFi:", e)
+                        cls.send_data({"command": "connect_wifi", "status": "error", "message": str(e)})
+                else:
+                    cls.send_data({"command": "connect_wifi", "status": "error", "message": "SSID or password missing"})
+            elif (command == "device_info"):
+                # Get device information
+                try:
+                    with open("device.json", 'r') as file:
+                        device_info = json.load(file)
+                    # Get the MAC address of the device
+                    result = subprocess.run(['cat', '/sys/class/net/wlan0/address'], capture_output=True, text=True, check=True)
+                    mac_address = result.stdout.strip()
+                    device_info["mac_address"] = mac_address
+                    cls.send_data({"command": "device_info", "info": device_info})
+                except subprocess.CalledProcessError as e:
+                    print("Failed to get device info:", e)
+                    cls.send_data({"command": "device_info", "error": "Failed to get device info"})
+            elif (command == "locate_device"):
+                UARTDevice.callback("locate_device") if UARTDevice.callback else None
+                cls.send_data({"command": "locate_device", "status": "success"})
+            else:
+                cls.send_data({"error": "Unknown command"})
+
+
+        except json.JSONDecodeError as e:
+            print("Failed to decode JSON:", e)
+
+
+def start_ble_server(callback=None):
+    UARTDevice.callback = callback if callback else None
+    adapter_address = list(adapter.Adapter.available())[0].address
+    ble_uart = peripheral.Peripheral(adapter_address, local_name='PixelBoard')
+    ble_uart.add_service(srv_id=1, uuid=UART_SERVICE, primary=True)
+    ble_uart.add_characteristic(srv_id=1, chr_id=1, uuid=RX_CHARACTERISTIC,
+                                value=[], notifying=False,
+                                flags=['write', 'write-without-response'],
+                                write_callback=UARTDevice.uart_write,
+                                read_callback=None,
+                                notify_callback=None)
+    ble_uart.add_characteristic(srv_id=1, chr_id=2, uuid=TX_CHARACTERISTIC,
+                                value=[], notifying=False,
+                                flags=['notify'],
+                                notify_callback=UARTDevice.uart_notify,
+                                read_callback=None,
+                                write_callback=None)
+
+    ble_uart.on_connect = UARTDevice.on_connect
+    ble_uart.on_disconnect = UARTDevice.on_disconnect
+
+    ble_uart.publish()
+
+if __name__ == '__main__':
+    server_thread = threading.Thread(target=start_ble_server, daemon=True)
+    server_thread.start()
+
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print("ble_server exiting...")
