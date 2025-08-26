@@ -71,8 +71,8 @@ if [ ! -f /etc/systemd/system/dartsnut_python.service ]; then
     sudo tee /etc/systemd/system/dartsnut_python.service > /dev/null <<EOL
 [Unit]
 Description=Dartsnut Python Service
-After=dartsnut_matrix.service
-Requires=dartsnut_matrix.service
+After=bluetooth.target network.target dartsnut_matrix.service
+Requires=bluetooth.target network.target dartsnut_matrix.service
 
 [Service]
 Type=simple
