@@ -45,7 +45,15 @@ sudo apt-get install git -y
 # 7. Install the python modules
 sudo venv0/bin/pip install -r requirement.txt
 
-# 8. Create the services
+# 8. Set Swap Memory to 0
+sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=0/' /etc/dphys-swapfile
+
+# If CONF_SWAPSIZE is not present, add it
+if ! grep -q "^CONF_SWAPSIZE=" /etc/dphys-swapfile; then
+  echo "CONF_SWAPSIZE=0" | sudo tee -a /etc/dphys-swapfile
+fi
+
+# 9. Create the services
 if [ ! -f /etc/systemd/system/dartsnut_matrix.service ]; then
     sudo tee /etc/systemd/system/dartsnut_matrix.service > /dev/null <<EOL
 [Unit]
