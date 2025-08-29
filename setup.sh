@@ -56,7 +56,7 @@ Type=simple
 User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 ExecStart=/home/rpi/dartsnut_rpi/DartsnutRGBMatrix
-Restart=on-failure
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
@@ -79,7 +79,7 @@ Type=simple
 User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 ExecStart=/home/rpi/dartsnut_rpi/venv0/bin/python /home/rpi/dartsnut_rpi/main.py
-Restart=on-failure
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
