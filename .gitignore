@@ -10,3 +10,6 @@ __pycache__/
 *.pyo
 *.pyd
 *.pycache/
+
+# Ignore Python local editable package
+*.egg-info/

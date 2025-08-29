@@ -81,6 +81,19 @@
                     "text": "Lower Half"
                 }
             }]
+        },
+        {
+            "uuid": "e5c8a7f2-3b1d-4e6a-9c2f-7a8b9c0d1e2f",
+            "title": "calendar",
+            "duration" : "5",
+            "combination" : "0",
+            "enabled" : true,
+            "widgets" : [{
+                "id": "3",
+                "position": [0,0,127,159],
+                "fields": {
+                }
+            }]
         }
     ],
     "latestGame": ""

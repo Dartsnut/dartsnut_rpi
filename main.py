@@ -11,7 +11,9 @@ from PIL import Image
 import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server, screen_buffer, preview_buffer
-from dartsnut import set_brightness, update_frame_buffer, get_buttons
+from pydartsnut import Dartsnut
+
+dartsnut = Dartsnut()
 
 # Function to set PR_SET_PDEATHSIG
 def set_pdeathsig():
@@ -234,18 +236,7 @@ process_message.set_brightness = -1  # Default value, -1 means not set
 
 def get_buttons_pressed():
     # Get the buttons from the shared memory
-    buttons = get_buttons()
-    # Decode the buttons into individual bits
-    button_states = {
-        "btn_a" : bool(buttons & 0b00000001),
-        "btn_b" : bool(buttons & 0b00000010),
-        "btn_left" : bool(buttons & 0b00000100),
-        "btn_up" : bool(buttons & 0b00001000),
-        "btn_right" : bool(buttons & 0b00010000),
-        "btn_down" : bool(buttons & 0b00100000),
-        "btn_home" : bool(buttons & 0b01000000),
-        "btn_reserved" : bool(buttons & 0b10000000)
-    }
+    button_states = dartsnut.get_buttons()
     button_pressed = {
         "btn_a" : False,
         "btn_b" : False,
@@ -304,7 +295,7 @@ try:
         time.sleep(1/60)
         # set brightness
         if (process_message.set_brightness != -1):
-            set_brightness(process_message.set_brightness)
+            dartsnut.set_brightness(process_message.set_brightness)
             try:
                 # Read the existing device info
                 with open("./device.json", 'r') as file:
@@ -324,14 +315,14 @@ try:
         # locate device
         if (process_message.locate_device_intv > 0):
             buffer = bytearray([255] * (128 * 160 * 3))
-            update_frame_buffer(buffer)
+            dartsnut.update_frame_buffer(buffer)
             process_message.locate_device_intv -= 1
         # reload configuration
         elif (process_message.reload_conf):
             process_message.reload_conf = False
             # load a loading screen, todo
             buffer = bytearray(128 * 160 * 3)
-            update_frame_buffer(buffer)
+            dartsnut.update_frame_buffer(buffer)
             # init state
             state = "widget"
             # quit preview
@@ -362,7 +353,7 @@ try:
             if (preview_conf != process_message.preview_conf):
                 # load a loading screen, todo
                 buffer = bytearray(128 * 160 * 3)
-                update_frame_buffer(buffer)
+                dartsnut.update_frame_buffer(buffer)
                 # first time preview, start the preview pages
                 if preview_conf is None:
                     preview_buffer.clear()
@@ -458,7 +449,7 @@ try:
                     # update the screen_buffer with the same uuids
                     if page["uuid"] == preview_uuid:
                         screen_buffer[:] = buffer
-                        update_frame_buffer(buffer)       
+                        dartsnut.update_frame_buffer(buffer)       
         # normal mode
         elif (state == "widget"):
             #if in preview, terminate it
@@ -494,7 +485,7 @@ try:
                                 buffer[dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
                         shm_buf[0] = 1
                     screen_buffer[:] = buffer
-                    update_frame_buffer(buffer)
+                    dartsnut.update_frame_buffer(buffer)
         # game selecting page
         elif (state == "game_select"):
             # draw the game preview to the screen
@@ -504,7 +495,7 @@ try:
                     game_preview_index = 0
                 page_tick = time.time()
             screen_buffer[:] = game_list[game_index]["preview"][game_preview_index]
-            update_frame_buffer(game_list[game_index]["preview"][game_preview_index])
+            dartsnut.update_frame_buffer(game_list[game_index]["preview"][game_preview_index])
         # in game
         elif (state == "in_game"):
             # check if the game object is not None
@@ -519,7 +510,7 @@ try:
             elif game is not None:
                 if game["shm"].buf[0] == 0:
                     screen_buffer[:] = game["shm"].buf[1:]
-                    update_frame_buffer(game["shm"].buf[1:])
+                    dartsnut.update_frame_buffer(game["shm"].buf[1:])
                     game["shm"].buf[0] = 1
 
         # read the buttons
@@ -592,7 +583,7 @@ try:
                     # Write the updated info back to the file
                     with open("./device.json", 'w') as file:
                         json.dump(device_info, file)
-                    set_brightness(brightness)
+                    dartsnut.set_brightness(brightness)
                 except Exception as e:
                     print(f"Error reading or updating device brightness: {e}")
         elif (buttons["btn_down"]):
@@ -607,7 +598,7 @@ try:
                     # Write the updated info back to the file
                     with open("./device.json", 'w') as file:
                         json.dump(device_info, file)
-                    set_brightness(brightness)
+                    dartsnut.set_brightness(brightness)
                 except Exception as e:
                     print(f"Error reading or updating device brightness: {e}")
         elif (buttons["btn_home"]):
