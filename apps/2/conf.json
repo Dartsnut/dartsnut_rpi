@@ -1,18 +1,19 @@
 {
-    "id": "2",
+    "id": "",
     "type": "widget",
-    "name": "Simple Half Demo",
+    "name": "Simple Clock",
     "auther": "PixelBoard Team",
-    "description": "A simple demo application for PixelBoard with half size.",
-    "size": [128,64],
+    "version": "1.0.0",
+    "description": "A simple clock widget, user can set a city name to show the local time",
+    "size": [128,160],
     "fields": [
         {
-            "id": "text", 
-            "name": "text",
+            "id": "city", 
+            "name": "City",
             "type": "text",
-            "desc": "Text to display",
-            "default": "Guess which half?"
+            "desc": "The city name for the clock, e.g., New york",
+            "default": ""
         }
     ],
-    "preview":[]
+    "preview": []
 }

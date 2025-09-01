@@ -1,0 +1,11 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Package temp files
+*.egg-info/
+build/
+dist/
+*.tmp
+*.log

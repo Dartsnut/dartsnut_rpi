@@ -77,12 +77,11 @@ class Dartsnut:
         else:
             raise TypeError("frame must be a bytearray or have a 'tobytes' method")
         
-        shm_buffer = self.shm_buffer
-        if (shm_buffer[0] == 2):
+        if (self.shm_buffer[0] == 2):
             return False
-        elif (shm_buffer[0] == 1):
-            shm_buffer[1:len(image_bytes)+1] = image_bytes
-            shm_buffer[0] = 0
+        elif (self.shm_buffer[0] == 1):
+            self.shm_buffer[1:len(image_bytes)+1] = image_bytes
+            self.shm_buffer[0] = 0
             return True
         else:
             return False
