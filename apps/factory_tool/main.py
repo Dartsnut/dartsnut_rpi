@@ -1,3 +1,4 @@
+import re
 from PIL import Image, ImageDraw
 import time
 import numpy
@@ -14,6 +15,19 @@ for i in range(128):
     for j in range(160):
         color = colors[(i + j) % 3]
         draw.point((i, j), fill=color)
+
+def find_usb_audio_device(name_hint="USB"):
+    # Get device list
+    result = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        # Example line: card 1: Device [USB LCS audio], device 0: USB Audio [USB Audio]
+        if name_hint in line:
+            match = re.search(r'card (\d+):.*device (\d+):', line)
+            if match:
+                card = match.group(1)
+                device = match.group(2)
+                return f"hw:{card},{device}"
+    return None
 
 try:
     while True:
@@ -54,6 +68,13 @@ try:
                     draw.point((i, j), fill=color)
         elif (buttons["btn_home"]):
             dart_mode = True
+        elif (buttons["btn_reserved"]):
+            import subprocess
+            device = find_usb_audio_device("USB")
+            if device:
+                subprocess.Popen(["aplay", "-D", device, "1.wav"])
+            else:
+                print("USB audio device not found!")
         elif dart_mode:
             #for dart test
             currentImage.paste((0,0,0),(0,0,128,160))
