@@ -1,0 +1,11 @@
+{
+    "id": "factory_tool",
+    "type": "widget",
+    "name": "Factory tool for pixeldart and pixelboard",
+    "author": "PixelBoard Team",
+    "version": "1.0.0",
+    "description": "A simple factory tool for pixeldart and pixelboard",
+    "size": [128,160],
+    "fields": [],
+    "preview": []
+}

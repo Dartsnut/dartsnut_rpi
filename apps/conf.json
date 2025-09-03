@@ -1,64 +1,25 @@
 {
     "user": "",
-    "date": "2023-10-01",
+    "date": "2025-09-03",
     "pages": [
         {
-            "uuid": "7e2b1c7a-2e6c-4e2a-9e2a-8b7e2c1d4f3a",
-            "title": "calendar",
-            "duration" : "10",
-            "combination" : "0",
-            "enabled" : true,
-            "widgets" : [{
-                "id": "1",
-                "position": [0,0,127,159],
-                "fields": {}
-            }]
-        },
-        {
-            "uuid": "3f8c9b2d-1a4e-4c8b-9d2e-7a6b3c2e1f4d",
-            "title": "clock",
-            "duration" : "10",
-            "combination" : "0",
-            "enabled" : true,
-            "widgets" : [{
-                "id": "2",
-                "position": [0,0,127,159],
-                "fields": {
-                    "city": "Shenzhen"
-                    }
-            }]
-        },
-        {
-            "uuid": "5a1e7c3b-8d2f-4b6a-9c1e-2f3a7b8c6d1e",
-            "title": "weather",
-            "duration" : "10",
-            "combination" : "0",
-            "enabled" : true,
-            "widgets" : [{
-                "id": "3",
-                "position": [0,0,127,159],
-                "fields": {
-                    "city": "Shenzhen",
-                    "temperature_unit": "celsius",
-                    "forecast_days": "3"
+            "uuid": "",
+            "title": "factory_tool",
+            "duration": "0",
+            "combination": "0",
+            "enabled": true,
+            "widgets": [
+                {
+                    "id": "factory_tool",
+                    "position": [
+                        0,
+                        0,
+                        127,
+                        159
+                    ],
+                    "fields": {}
                 }
-            }]
-        },
-        {
-            "uuid": "5a1e7c3b-8d2f-4b6a-9c1e-111111116d1e",
-            "title": "letter",
-            "duration" : "10",
-            "combination" : "0",
-            "enabled" : true,
-            "widgets" : [{
-                "id": "4",
-                "position": [0,0,127,159],
-                "fields": {
-                    "main_text": "O mistress mine, where are you roaming?\nO stay and hear! your true-love's coming\nThat can sing both high and low;\nTrip no further, pretty sweeting,\nJourney's end in lovers' meeting,\nJourney's end in lovers' meeting--\nEvery wise man's son doth know.\n\nWhat is love? 'tis not hereafter;\nPresent mirth hath present laughter;\nWhat's to come is still unsure:\nIn delay there lies no plenty,--\nThen come kiss me, Sweet and twenty,\nYouth's a stuff will not endure.",
-                    "second_text": "Carpe Diem\nWilliam Shakespeare"
-                }
-            }]
+            ]
         }
-    ],
-    "latestGame": ""
+    ]
 }
