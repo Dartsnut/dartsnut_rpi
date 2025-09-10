@@ -127,9 +127,6 @@ class UARTDevice:
                 except subprocess.CalledProcessError as e:
                     print("Failed to get device info:", e)
                     cls.send_data({"command": "device_info", "error": "Failed to get device info"})
-            elif (command == "locate_device"):
-                UARTDevice.callback("locate_device") if UARTDevice.callback else None
-                cls.send_data({"command": "locate_device", "status": "success"})
             else:
                 cls.send_data({"error": "Unknown command"})
 
@@ -138,8 +135,7 @@ class UARTDevice:
             print("Failed to decode JSON:", e)
 
 
-def start_ble_server(callback=None):
-    UARTDevice.callback = callback if callback else None
+def start_ble_server():
     adapter_address = list(adapter.Adapter.available())[0].address
     ble_uart = peripheral.Peripheral(adapter_address, local_name='PixelBoard')
     ble_uart.add_service(srv_id=1, uuid=UART_SERVICE, primary=True)
