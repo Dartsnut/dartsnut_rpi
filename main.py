@@ -476,12 +476,7 @@ try:
                     with open("./device.json", 'r') as file:
                         device_info = json.load(file)
                     brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
-                    # Update the device brightness
-                    device_info['brightness'] = str(brightness)
-                    # Write the updated info back to the file
-                    with open("./device.json", 'w') as file:
-                        json.dump(device_info, file)
-                    dartsnut.set_brightness(brightness)
+                    set_brightness(brightness)
                 except Exception as e:
                     print(f"Error reading or updating device brightness: {e}")
         elif (buttons["btn_down"]):
@@ -491,12 +486,7 @@ try:
                     with open("./device.json", 'r') as file:
                         device_info = json.load(file)
                     brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
-                    # Update the device brightness
-                    device_info['brightness'] = str(brightness)
-                    # Write the updated info back to the file
-                    with open("./device.json", 'w') as file:
-                        json.dump(device_info, file)
-                    dartsnut.set_brightness(brightness)
+                    set_brightness(brightness)
                 except Exception as e:
                     print(f"Error reading or updating device brightness: {e}")
         elif (buttons["btn_home"]):
