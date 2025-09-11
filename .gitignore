@@ -13,3 +13,6 @@ __pycache__/
 
 # Ignore Python local editable package
 *.egg-info/
+
+apps/
+device.json
