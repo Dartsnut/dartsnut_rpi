@@ -8,4 +8,4 @@ opencv-python
 uvicorn
 websockets
 RPi.GPIO
--e /home/rpi/dartsnut_rpi/pydartsnut
+pydartsnut
