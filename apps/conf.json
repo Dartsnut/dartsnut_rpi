@@ -1,0 +1,25 @@
+{
+    "user": "",
+    "date": "2025-09-03",
+    "pages": [
+        {
+            "uuid": "",
+            "title": "factory_tool",
+            "duration": "0",
+            "combination": "0",
+            "enabled": true,
+            "widgets": [
+                {
+                    "id": "factory_tool",
+                    "position": [
+                        0,
+                        0,
+                        127,
+                        159
+                    ],
+                    "fields": {}
+                }
+            ]
+        }
+    ]
+}
