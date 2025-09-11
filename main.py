@@ -281,11 +281,18 @@ def locate_device():
     locate_device_intv = 60*3 # 3 seconds for 60fps
 
 # Function to reload the widget conf.json
-def reload_conf():
+def reload_config():
     global reload_conf
     reload_conf = True
 
-# Funtion to init the widgets
+# Function to set the time zone
+def set_time_zone(time_zone):
+    try:
+        subprocess.run(['sudo', 'timedatectl', 'set-timezone', time_zone], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to set time zone: {e}")
+
+# Function to init the widgets
 def init_widgets():
     # Declare globals only if they have been defined previously
     global_vars = [
@@ -335,7 +342,7 @@ try:
     ble_thread.start()
 
     # start websocket server
-    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device), daemon=True)
+    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone), daemon=True)
     websocket_thread.start()
 
     # init the widgets

@@ -63,6 +63,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     await send_response(req_id, {"action": "set_brightness", "message": "Success"})
                 else:
                     await send_response(req_id, {"action": "set_brightness", "error": "Brightness must be between 10 and 100"})
+            elif action == "set_time_zone":
+                time_zone = message.get("time_zone", "UTC")
+                websocket_endpoint.set_time_zone(time_zone) if websocket_endpoint.set_time_zone else None
+                await send_response(req_id, {"action": "set_time_zone", "message": "Success"})
             elif action == "get_device_info":
                 await send_response(req_id, get_device_info())
             elif action == "set_device_name":
@@ -71,7 +75,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 websocket_endpoint.locate_device() if websocket_endpoint.locate_device else None
                 await send_response(req_id, {"action": "locate_device", "message": "Success"})
             elif action == "reload_conf":
-                websocket_endpoint.reload_conf() if websocket_endpoint.reload_conf else None
+                websocket_endpoint.reload_config() if websocket_endpoint.reload_config else None
                 await send_response(req_id, {"action": "reload_conf", "message": "Success"})
             elif action == "bluetooth_scan":
                 await send_response(req_id, scan_bluetooth_devices())
@@ -112,10 +116,11 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
             # await websocket.close()
 
-def start_websocket_server(set_brightness=None, locate_device=None, reload_conf=None):
+def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None):
     websocket_endpoint.set_brightness = set_brightness if set_brightness else None
     websocket_endpoint.locate_device = locate_device if locate_device else None
-    websocket_endpoint.reload_conf = reload_conf if reload_conf else None
+    websocket_endpoint.reload_config = reload_config if reload_config else None
+    websocket_endpoint.set_time_zone = set_time_zone if set_time_zone else None
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9251)
 
