@@ -264,7 +264,7 @@ def set_brightness(brightness):
         with open("./device.json", 'r') as file:
             device_info = json.load(file)
         # Update the device brightness
-        device_info['brightness'] = brightness
+        device_info['brightness'] = str(brightness)
         # Write the updated info back to the file
         with open("./device.json", 'w') as file:
             json.dump(device_info, file)
