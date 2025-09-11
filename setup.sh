@@ -8,8 +8,9 @@ else
     echo "isolcpus=3 already present in cmdline.txt"
 fi
 
-# 2. Change dtparam=audio=on to dtparam=audio=off in /boot/firmware/config.txt
+# 2. Change dtparam=audio=on to dtparam=audio=off and dtoverlay=vc4-kms-v3d to dtoverlay=vc4-kms-v3d,noaudio in /boot/firmware/config.txt
 sudo sed -i 's/dtparam=audio=on/dtparam=audio=off/g' /boot/firmware/config.txt
+sudo sed -i '/dtoverlay=vc4-kms-v3d$/ s/$/,noaudio/' /boot/firmware/config.txt
 
 # 3. Create blacklist-bcm2835.conf if it doesn't exist
 if [ ! -f /etc/modprobe.d/blacklist-bcm2835.conf ]; then
