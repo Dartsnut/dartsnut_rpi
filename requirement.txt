@@ -10,3 +10,4 @@ websockets
 RPi.GPIO
 pydartsnut
 pygame
+asyncio
