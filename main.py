@@ -7,6 +7,7 @@ import json
 import threading
 import base64
 import tempfile
+import requests
 from PIL import Image
 import io
 from python_ble.ble_server import start_ble_server
@@ -52,14 +53,53 @@ def process_widget_fields(widget_id, widget_fields_parameter):
                     params[field["id"]] = files
     return params
 
+# Function to download widget from the server
+def download_app(url, md5):
+    try:
+        if not url.endswith(".tar.gz"):
+            return False
+        
+        # Ensure the download directory exists
+        os.makedirs("downloads", exist_ok=True)
+        file_name = url.split("/")[-1]
+        download_path = os.path.join("downloads", file_name)
+
+        # Download the file using system console (wget)
+        os.system(f"wget -O '{download_path}' '{url}'")
+
+        # Check if file exists after download
+        if not os.path.isfile(download_path):
+            return False
+
+        # Check MD5 using system console
+        md5_check_cmd = f"md5sum '{download_path}' | awk '{{print $1}}'"
+        downloaded_md5_console = os.popen(md5_check_cmd).read().strip()
+        if downloaded_md5_console != md5:
+            os.remove(download_path)
+            return False
+
+        # Extract tar.gz using system console
+        apps_path = os.path.join(os.getcwd(), "apps")
+        extract_cmd = f"tar -xzf '{download_path}' -C '{apps_path}'"
+        extract_result = os.system(extract_cmd)
+        if extract_result != 0:
+            return False
+
+        if os.path.isfile(download_path):
+            os.remove(download_path)
+
+        return True
+    except Exception as e:
+        print(f"Error downloading app: {e}")
+        return False
+
 # Function to start the widget page process, return with the widget process and shared memory object
 def start_page_process(page):
     widgets = []
     for widget_index in range(len(page["widgets"])):
         widget = page["widgets"][widget_index]
-        # check if the widget exists
-        widget_path = os.path.join(os.getcwd(), "apps", widget["id"])
-        if os.path.isdir(widget_path):
+        # check if the widget is default widget
+        if widget["id"] == "0":
             page_uuid = page["uuid"]
             shm_name = f"widget_{page_uuid}_{widget_index}_shm"
             shm_size = (widget["position"][2] - widget["position"][0] + 1) * (widget["position"][3] - widget["position"][1] + 1) * 3 + 1  # Example size in bytes
@@ -75,28 +115,70 @@ def start_page_process(page):
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
                 # if the uuid is "0", it is a default widget
-                if (page_uuid == "0"):
-                    command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "default.py")]
-                else:
-                    command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", widget["id"], "main.py")]
-                command.extend(["--params", json.dumps(process_widget_fields(widget["id"], widget["fields"]))])
+                command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "default.py")]
+                command.extend(["--params", "{}"])
                 command.extend(["--shm", shm_name])
                 process = subprocess.Popen(
                     command,
-                    cwd=os.path.join("./apps/", widget["id"]),
+                    cwd=os.getcwd(),
                     preexec_fn=set_pdeathsig
                 )
-                # Pause the process right after starting
-                # os.kill(process.pid, signal.SIGSTOP)  
-                # add the widget to the widgets list
                 widgets.append({"process":process, "shm": shm, "widget": widget})
             except Exception as e:
-                print(f"Error starting widget {widget['id']}: {e}")
+                print(f"Error starting default widget: {e}")
                 # If the widget fails to start, we don't add it to the page
                 continue
+        # check if the widget exists
+        else:
+            widget_path = os.path.join(os.getcwd(), "apps", widget["id"])
+            # if the widget does not exist, try to get the download url
+            if not os.path.isdir(widget_path):
+                try:
+                    response = requests.get(f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget['id']}")
+                    if response.status_code == 200:
+                        download_info = response.json().get("data")
+                        if download_info is not None:
+                            widget_download_url = download_info.get("widget_download_url")
+                            widget_download_md5 = download_info.get("widget_download_md5")
+                            download_app(widget_download_url, widget_download_md5)
+                    else:
+                        print(f"Failed to get download info for widget {widget['id']}: {response.status_code}")
+                except Exception as e:
+                    print(f"Error fetching widget download info: {e}")
+
+            # if the widget exists, start the process
+            if os.path.isdir(widget_path):
+                page_uuid = page["uuid"]
+                shm_name = f"widget_{page_uuid}_{widget_index}_shm"
+                shm_size = (widget["position"][2] - widget["position"][0] + 1) * (widget["position"][3] - widget["position"][1] + 1) * 3 + 1  # Example size in bytes
+                try:
+                    existing_shm = shared_memory.SharedMemory(name=shm_name)
+                    existing_shm.close()
+                    shared_memory.SharedMemory(name=shm_name).unlink()
+                except FileNotFoundError:
+                    pass
+                except FileExistsError:
+                    shared_memory.SharedMemory(name=shm_name).unlink()
+                # start the process
+                try:
+                    shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
+                    # if the uuid is "0", it is a default widget
+                    command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", widget["id"], "main.py")]
+                    command.extend(["--params", json.dumps(process_widget_fields(widget["id"], widget["fields"]))])
+                    command.extend(["--shm", shm_name])
+                    process = subprocess.Popen(
+                        command,
+                        cwd=os.path.join("./apps/", widget["id"]),
+                        preexec_fn=set_pdeathsig
+                    )
+                    widgets.append({"process":process, "shm": shm, "widget": widget})
+                except Exception as e:
+                    print(f"Error starting widget {widget['id']}: {e}")
+                    # If the widget fails to start, we don't add it to the page
+                    continue
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
-        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "loading": True, "framebuffer": bytearray(128 * 160 * 3)}
+        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "loading": True, "framebuffer": bytearray(128 * 160 * 3), "enabled": page.get("enabled", True)}
     else:
         return None
 
@@ -180,26 +262,23 @@ def init_pages(config):
     pages = []
     # Start the processes based on the configuration
     for page in config["pages"]:
-        if (page["enabled"]):
-            page_process = start_page_process(page)
-            if page_process is not None:
-                pages.append(page_process)
-    # if no page is valid, add a default page
-    if len(pages) == 0:
-        page_process = start_page_process({
-            "uuid": "0",
-            "title": "default widget",
-            "duration" : "0",
-            "combination" : "0",
-            "enabled" : True,
-            "widgets" : [{
-                "id": "0",
-                "position": [0,0,127,127],
-                "fields": {}
-            }]
-        })
+        # if (page["enabled"]):
+        page_process = start_page_process(page)
         if page_process is not None:
             pages.append(page_process)
+    # add the default widget
+    pages.append(start_page_process({
+        "uuid": "0",
+        "title": "default widget",
+        "duration" : "60",
+        "combination" : "0",
+        "enabled" : True,
+        "widgets" : [{
+            "id": "0",
+            "position": [0,0,127,159],
+            "fields": {}
+        }]
+    }))
     return pages
 
 # Function to terminate all widget processes and clean up
@@ -294,24 +373,25 @@ def set_time_zone(time_zone):
 def get_widgets_framebuffer():
     framebuffers = []
     for page in pages:
-        img = Image.frombytes('RGB', (128, 160), bytes(page["framebuffer"]))
-        # main screen
-        main_img = img.crop((0, 0, 128, 128))
-        main_img_buffer = io.BytesIO()
-        main_img.save(main_img_buffer, format='JPEG')
-        main_img_bytes = main_img_buffer.getvalue()
-        main_img_base64_str = "data:image/png;base64," + base64.b64encode(main_img_bytes).decode('utf-8')
-        # secondary screen
-        second_img = img.crop((0, 128, 64, 160))
-        second_img_buffer = io.BytesIO()
-        second_img.save(second_img_buffer, format='JPEG')
-        second_img_bytes = second_img_buffer.getvalue()
-        second_img_base64_str = "data:image/png;base64," + base64.b64encode(second_img_bytes).decode('utf-8')
-        framebuffers.append({
-            "uuid": page["uuid"],
-            "main_screen": main_img_base64_str,
-            "sec_screen": second_img_base64_str
-        })
+        if page["uuid"] != "0":
+            img = Image.frombytes('RGB', (128, 160), bytes(page["framebuffer"]))
+            # main screen
+            main_img = img.crop((0, 0, 128, 128))
+            main_img_buffer = io.BytesIO()
+            main_img.save(main_img_buffer, format='JPEG')
+            main_img_bytes = main_img_buffer.getvalue()
+            main_img_base64_str = "data:image/png;base64," + base64.b64encode(main_img_bytes).decode('utf-8')
+            # secondary screen
+            second_img = img.crop((0, 128, 64, 160))
+            second_img_buffer = io.BytesIO()
+            second_img.save(second_img_buffer, format='JPEG')
+            second_img_bytes = second_img_buffer.getvalue()
+            second_img_base64_str = "data:image/png;base64," + base64.b64encode(second_img_bytes).decode('utf-8')
+            framebuffers.append({
+                "uuid": page["uuid"],
+                "main_screen": main_img_base64_str,
+                "sec_screen": second_img_base64_str
+            })
     return framebuffers
 
 # Function to init the widgets
@@ -386,18 +466,18 @@ try:
         # normal mode
         elif (state == "widget"):
             if (len(pages) > 1) & (not page_freeze):
-                if (int(pages[page_index]["duration"]) == 0):
-                    # if the duration is 0, stop the loop
-                    # page_tick = time.time()
-                    pass
-                elif (time.time() - page_tick > int(pages[page_index]["duration"])):
-                    # for widget in pages[page_index]["widgets"]:
-                    #     os.kill(widget["process"].pid, signal.SIGSTOP)
-                    page_index += 1
-                    if (page_index >= len(pages)):
-                        page_index = 0
-                    # for widget in pages[page_index]["widgets"]:
-                    #     os.kill(widget["process"].pid, signal.SIGCONT)
+                if (time.time() - page_tick > int(pages[page_index]["duration"])) or (not pages[page_index]["enabled"]):
+                    # Find the next enabled page
+                    next_index = page_index
+                    found_enabled = False
+                    for _ in range(len(pages)):
+                        next_index = (next_index + 1) % len(pages)
+                        if pages[next_index].get("enabled", True) and pages[next_index]["uuid"] != "0":
+                            page_index = next_index
+                            found_enabled = True
+                            break
+                    if not found_enabled:
+                        page_index = len(pages) - 1  # uuid "0" page is always last
                     page_tick = time.time()   
             for page in pages:
                 if all(widget["shm"].buf[0] == 0 for widget in page["widgets"]):
@@ -415,7 +495,7 @@ try:
                         shm_buf[0] = 1
                 elif page["loading"]:
                     # if the current page is still loading, show the loading image
-                    page["framebuffer"] = loading_image.tobytes()
+                    page["framebuffer"] = loading_image.tobytes()    
             #render the current page to the screen
             dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
         # game selecting page
@@ -466,15 +546,18 @@ try:
         elif (buttons["btn_left"]):
             # button LEFT to go to previous page in widget mode
             if state == "widget":
-                if len(pages) > 1:
-                    # for widget in pages[page_index]["widgets"]:
-                    #     os.kill(widget["process"].pid, signal.SIGSTOP)
-                    page_index -= 1
-                    if page_index < 0:
-                        page_index = len(pages) - 1
-                    # for widget in pages[page_index]["widgets"]:
-                    #     os.kill(widget["process"].pid, signal.SIGCONT)
-                    page_tick = time.time()
+                # Find the previous enabled page
+                prev_index = page_index
+                found_enabled = False
+                for _ in range(len(pages)):
+                    prev_index = (prev_index - 1 + len(pages)) % len(pages)
+                    if pages[prev_index].get("enabled", True) and pages[prev_index]["uuid"] != "0":
+                        page_index = prev_index
+                        found_enabled = True
+                        break
+                if not found_enabled:
+                    page_index = len(pages) - 1  # uuid "0" page is always last
+                page_tick = time.time()
             # button LEFT to select previous game in game select
             elif state == "game_select":
                 game_index -= 1
@@ -485,15 +568,18 @@ try:
         elif (buttons["btn_right"]):
             # button RIGHT to go to next page in widget mode
             if state == "widget":
-                if len(pages) > 1:
-                    # for widget in pages[page_index]["widgets"]:
-                    #     os.kill(widget["process"].pid, signal.SIGSTOP)
-                    page_index += 1
-                    if page_index >= len(pages):
-                        page_index = 0
-                    # for widget in pages[page_index]["widgets"]:
-                    #     os.kill(widget["process"].pid, signal.SIGCONT)
-                    page_tick = time.time()
+                # Find the next enabled page
+                next_index = page_index
+                found_enabled = False
+                for _ in range(len(pages)):
+                    next_index = (next_index + 1) % len(pages)
+                    if pages[next_index].get("enabled", True) and pages[next_index]["uuid"] != "0":
+                        page_index = next_index
+                        found_enabled = True
+                        break
+                if not found_enabled:
+                    page_index = len(pages) - 1  # uuid "0" page is always last
+                page_tick = time.time()
             # button RIGHT to select next game in game select
             elif state == "game_select":
                 game_index += 1

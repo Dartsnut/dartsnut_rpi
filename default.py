@@ -13,7 +13,7 @@ from pydartsnut import Dartsnut
 
 dartsnut = Dartsnut()
 
-currentImage = Image.new("RGB",(128,128))
+currentImage = Image.new("RGB",(128,160))
 
 draw = ImageDraw.Draw(currentImage)
 draw.text((0, 0), "default widget", (255,255,255), font_size=14)
