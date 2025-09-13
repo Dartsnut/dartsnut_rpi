@@ -16,6 +16,7 @@ TX_CHARACTERISTIC = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
 class UARTDevice:
     tx_obj = None
     callback = None
+    device_info = None
 
     @classmethod
     def on_connect(cls, ble_device: device.Device):
@@ -115,29 +116,28 @@ class UARTDevice:
                 else:
                     cls.send_data({"command": "connect_wifi", "status": "error", "message": "SSID or password missing"})
             elif (command == "device_info"):
-                # Get device information
                 try:
-                    with open("device.json", 'r') as file:
-                        device_info = json.load(file)
                     # Get the MAC address of the device
                     result = subprocess.run(['cat', '/sys/class/net/wlan0/address'], capture_output=True, text=True, check=True)
                     mac_address = result.stdout.strip()
-                    device_info["mac_address"] = mac_address
-                    cls.send_data({"command": "device_info", "info": device_info})
+                    UARTDevice.device_info["mac_address"] = mac_address
+                    cls.send_data({"command": "device_info", "info": UARTDevice.device_info})
                 except subprocess.CalledProcessError as e:
                     print("Failed to get device info:", e)
                     cls.send_data({"command": "device_info", "error": "Failed to get device info"})
             else:
                 cls.send_data({"error": "Unknown command"})
-
-
+                
         except json.JSONDecodeError as e:
-            print("Failed to decode JSON:", e)
+            cls.send_data({"error": "Failed to decode JSON"})
 
 
 def start_ble_server():
+    with open("device.json", 'r') as file:
+        UARTDevice.device_info = json.load(file)
+
     adapter_address = list(adapter.Adapter.available())[0].address
-    ble_uart = peripheral.Peripheral(adapter_address, local_name='PixelBoard')
+    ble_uart = peripheral.Peripheral(adapter_address, local_name=UARTDevice.device_info["model"])
     ble_uart.add_service(srv_id=1, uuid=UART_SERVICE, primary=True)
     ble_uart.add_characteristic(srv_id=1, chr_id=1, uuid=RX_CHARACTERISTIC,
                                 value=[], notifying=False,

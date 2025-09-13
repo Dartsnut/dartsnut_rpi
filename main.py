@@ -10,7 +10,7 @@ import tempfile
 from PIL import Image
 import io
 from python_ble.ble_server import start_ble_server
-from python_websocket.websocket_server import start_websocket_server, screen_buffer
+from python_websocket.websocket_server import start_websocket_server
 from pydartsnut import Dartsnut
 
 dartsnut = Dartsnut()
@@ -74,10 +74,6 @@ def start_page_process(page):
             # start the process
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
-                # Initialize shared memory with the loading image
-                img_bytes = loading_image.tobytes()
-                shm.buf[1:1+len(img_bytes)] = img_bytes
-                shm.buf[0] = 0
                 # if the uuid is "0", it is a default widget
                 if (page_uuid == "0"):
                     command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "default.py")]
@@ -91,7 +87,7 @@ def start_page_process(page):
                     preexec_fn=set_pdeathsig
                 )
                 # Pause the process right after starting
-                os.kill(process.pid, signal.SIGSTOP)  
+                # os.kill(process.pid, signal.SIGSTOP)  
                 # add the widget to the widgets list
                 widgets.append({"process":process, "shm": shm, "widget": widget})
             except Exception as e:
@@ -100,7 +96,7 @@ def start_page_process(page):
                 continue
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
-        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"]}
+        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "loading": True, "framebuffer": bytearray(128 * 160 * 3)}
     else:
         return None
 
@@ -291,6 +287,32 @@ def set_time_zone(time_zone):
         subprocess.run(['sudo', 'timedatectl', 'set-timezone', time_zone], check=True)
     except subprocess.CalledProcessError as e:
         print(f"Failed to set time zone: {e}")
+    finally:
+        return None
+
+# Function to get widget screens
+def get_widgets_framebuffer():
+    framebuffers = []
+    for page in pages:
+        img = Image.frombytes('RGB', (128, 160), bytes(page["framebuffer"]))
+        # main screen
+        main_img = img.crop((0, 0, 128, 128))
+        main_img_buffer = io.BytesIO()
+        main_img.save(main_img_buffer, format='JPEG')
+        main_img_bytes = main_img_buffer.getvalue()
+        main_img_base64_str = "data:image/png;base64," + base64.b64encode(main_img_bytes).decode('utf-8')
+        # secondary screen
+        second_img = img.crop((0, 128, 64, 160))
+        second_img_buffer = io.BytesIO()
+        second_img.save(second_img_buffer, format='JPEG')
+        second_img_bytes = second_img_buffer.getvalue()
+        second_img_base64_str = "data:image/png;base64," + base64.b64encode(second_img_bytes).decode('utf-8')
+        framebuffers.append({
+            "uuid": page["uuid"],
+            "main_screen": main_img_base64_str,
+            "sec_screen": second_img_base64_str
+        })
+    return framebuffers
 
 # Function to init the widgets
 def init_widgets():
@@ -329,8 +351,8 @@ def init_widgets():
     else:
         game_list.clear()
     # start the first page
-    for widget in pages[0]["widgets"]:
-        os.kill(widget["process"].pid, signal.SIGCONT)
+    # for widget in pages[0]["widgets"]:
+    #     os.kill(widget["process"].pid, signal.SIGCONT)
     page_tick = time.time()
 
 try:
@@ -342,7 +364,7 @@ try:
     ble_thread.start()
 
     # start websocket server
-    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone), daemon=True)
+    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer), daemon=True)
     websocket_thread.start()
 
     # init the widgets
@@ -366,31 +388,36 @@ try:
             if (len(pages) > 1) & (not page_freeze):
                 if (int(pages[page_index]["duration"]) == 0):
                     # if the duration is 0, stop the loop
-                    page_tick = time.time()
+                    # page_tick = time.time()
+                    pass
                 elif (time.time() - page_tick > int(pages[page_index]["duration"])):
-                    for widget in pages[page_index]["widgets"]:
-                        os.kill(widget["process"].pid, signal.SIGSTOP)
+                    # for widget in pages[page_index]["widgets"]:
+                    #     os.kill(widget["process"].pid, signal.SIGSTOP)
                     page_index += 1
                     if (page_index >= len(pages)):
                         page_index = 0
-                    for widget in pages[page_index]["widgets"]:
-                        os.kill(widget["process"].pid, signal.SIGCONT)
+                    # for widget in pages[page_index]["widgets"]:
+                    #     os.kill(widget["process"].pid, signal.SIGCONT)
                     page_tick = time.time()   
-            if all(widget["shm"].buf[0] == 0 for widget in pages[page_index]["widgets"]):
-                buffer = bytearray(128 * 160 * 3)
-                for widget in pages[page_index]["widgets"]:
-                    shm_buf = widget["shm"].buf
-                    x0, y0, x1, y1 = widget["widget"]["position"]
-                    width = x1 - x0 + 1
-                    height = y1 - y0 + 1
-                    for y in range(height):
-                        for x in range(width):
-                            src_idx = (y * width + x) * 3 + 1
-                            dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
-                            buffer[dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
-                    shm_buf[0] = 1
-                screen_buffer[:] = buffer
-                dartsnut.update_frame_buffer(buffer)
+            for page in pages:
+                if all(widget["shm"].buf[0] == 0 for widget in page["widgets"]):
+                    page["loading"] = False
+                    for widget in page["widgets"]:
+                        shm_buf = widget["shm"].buf
+                        x0, y0, x1, y1 = widget["widget"]["position"]
+                        width = x1 - x0 + 1
+                        height = y1 - y0 + 1
+                        for y in range(height):
+                            for x in range(width):
+                                src_idx = (y * width + x) * 3 + 1
+                                dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
+                                page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
+                        shm_buf[0] = 1
+                elif page["loading"]:
+                    # if the current page is still loading, show the loading image
+                    page["framebuffer"] = loading_image.tobytes()
+            #render the current page to the screen
+            dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
         # game selecting page
         elif (state == "game_select"):
             # draw the game preview to the screen
@@ -399,7 +426,6 @@ try:
                 if (game_preview_index >= len(game_list[game_index]["preview"])):
                     game_preview_index = 0
                 page_tick = time.time()
-            screen_buffer[:] = game_list[game_index]["preview"][game_preview_index]
             dartsnut.update_frame_buffer(game_list[game_index]["preview"][game_preview_index])
         # in game
         elif (state == "in_game"):
@@ -414,7 +440,6 @@ try:
             # render the game frame buffer
             elif game is not None:
                 if game["shm"].buf[0] == 0:
-                    screen_buffer[:] = game["shm"].buf[1:]
                     dartsnut.update_frame_buffer(game["shm"].buf[1:])
                     game["shm"].buf[0] = 1
 
@@ -442,13 +467,13 @@ try:
             # button LEFT to go to previous page in widget mode
             if state == "widget":
                 if len(pages) > 1:
-                    for widget in pages[page_index]["widgets"]:
-                        os.kill(widget["process"].pid, signal.SIGSTOP)
+                    # for widget in pages[page_index]["widgets"]:
+                    #     os.kill(widget["process"].pid, signal.SIGSTOP)
                     page_index -= 1
                     if page_index < 0:
                         page_index = len(pages) - 1
-                    for widget in pages[page_index]["widgets"]:
-                        os.kill(widget["process"].pid, signal.SIGCONT)
+                    # for widget in pages[page_index]["widgets"]:
+                    #     os.kill(widget["process"].pid, signal.SIGCONT)
                     page_tick = time.time()
             # button LEFT to select previous game in game select
             elif state == "game_select":
@@ -461,13 +486,13 @@ try:
             # button RIGHT to go to next page in widget mode
             if state == "widget":
                 if len(pages) > 1:
-                    for widget in pages[page_index]["widgets"]:
-                        os.kill(widget["process"].pid, signal.SIGSTOP)
+                    # for widget in pages[page_index]["widgets"]:
+                    #     os.kill(widget["process"].pid, signal.SIGSTOP)
                     page_index += 1
                     if page_index >= len(pages):
                         page_index = 0
-                    for widget in pages[page_index]["widgets"]:
-                        os.kill(widget["process"].pid, signal.SIGCONT)
+                    # for widget in pages[page_index]["widgets"]:
+                    #     os.kill(widget["process"].pid, signal.SIGCONT)
                     page_tick = time.time()
             # button RIGHT to select next game in game select
             elif state == "game_select":

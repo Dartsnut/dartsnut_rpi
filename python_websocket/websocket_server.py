@@ -17,12 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-screen_buffer = bytearray(128*160*3)
-preview_buffer = []
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    websocket_endpoint.reload_config() if websocket_endpoint.reload_config else None
     action = None
     while True:
         try:
@@ -87,40 +85,30 @@ async def websocket_endpoint(websocket: WebSocket):
                 await send_response(req_id, pair_and_connect_device(message.get("address")))
             elif action == "download_app":
                 await send_response(req_id, download_app(message.get("url"), message.get("md5")))
-            elif action == "capture_screen":
-                img = Image.frombytes('RGB', (128, 160), bytes(screen_buffer))
-                # main screen
-                main_img = img.crop((0, 0, 128, 128))
-                main_img_buffer = BytesIO()
-                main_img.save(main_img_buffer, format='JPEG')
-                main_img_bytes = main_img_buffer.getvalue()
-                main_img_base64_str = base64.b64encode(main_img_bytes).decode('utf-8')
-                # secondary screen
-                second_img = img.crop((0, 128, 64, 160))
-                second_img_buffer = BytesIO()
-                second_img.save(second_img_buffer, format='JPEG')
-                second_img_bytes = second_img_buffer.getvalue()
-                second_img_base64_str = base64.b64encode(second_img_bytes).decode('utf-8')
-                await send_response(req_id, {
-                    "action": "capture_screen",
-                    "main_screen": main_img_base64_str,
-                    "second_screen": second_img_base64_str,
-                    "req_id": req_id
-                })
+            elif action == "get_widgets_screen":
+                if websocket_endpoint.get_widgets_framebuffer:
+                    framebuffers = websocket_endpoint.get_widgets_framebuffer()
+                    await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
+                else:
+                    await send_response(req_id, {"action": "get_widgets_screen", "error": "Function not available"})
             else:
-                await send_response(req_id, {"action": action, "error": "Unknown action", "req_id": req_id})
+                await send_response(req_id, {"action": action, "error": "Unknown action"})
 
         except Exception as e:
-            pass
+            print(f"error: {e}")
+            if websocket.client_state.name == "DISCONNECTED":
+                websocket_endpoint.reload_config() if websocket_endpoint.reload_config else None
+                break
         finally:
             pass
             # await websocket.close()
 
-def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None):
+def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None):
     websocket_endpoint.set_brightness = set_brightness if set_brightness else None
     websocket_endpoint.locate_device = locate_device if locate_device else None
     websocket_endpoint.reload_config = reload_config if reload_config else None
     websocket_endpoint.set_time_zone = set_time_zone if set_time_zone else None
+    websocket_endpoint.get_widgets_framebuffer = get_widgets_framebuffer if get_widgets_framebuffer else None
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9251)
 
