@@ -608,22 +608,33 @@ try:
                 except Exception as e:
                     print(f"Error reading or updating device brightness: {e}")
         elif (buttons["btn_home"]):
-            # if in widget mode, show the game select 
-            if (state == "widget"):
-                # load the game list
-                game_list = load_game_list()
-                # if there is at least one game
-                if (len(game_list) > 0) :
-                    state = "game_select"
-                    game_index = 0
-                    game_preview_index = 0
+            with open("./device.json", 'r') as file:
+                device_info = json.load(file)
+            if device_info["model"] == "PixelBoard":
+                # to toggle widget freeze in widget mode
+                if state == "widget":
+                    page_freeze = ~page_freeze
                     page_tick = time.time()
-            # if in game select, go back to widget
-            elif (state == "game_select"):
-                state = "widget"
-            # if in game, trigger reload
-            elif (state == "in_game"):
-                reload_conf = True
+                # if in game, exit the game and go back to widget
+                if (state == "in_game"):
+                    reload_conf = True
+            else:
+                # if in widget mode, show the game select
+                if (state == "widget"):
+                    # load the game list
+                    game_list = load_game_list()
+                    # if there is at least one game
+                    if (len(game_list) > 0) :
+                        state = "game_select"
+                        game_index = 0
+                        game_preview_index = 0
+                        page_tick = time.time()
+                # if in game select, go back to widget
+                elif (state == "game_select"):
+                    state = "widget"
+                # if in game, trigger reload
+                elif (state == "in_game"):
+                    reload_conf = True
         elif (buttons["btn_reserved"]):
             pass
 except KeyboardInterrupt:

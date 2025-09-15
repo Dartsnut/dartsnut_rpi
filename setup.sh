@@ -105,6 +105,6 @@ sudo systemctl enable dartsnut_python.service
 
 echo "Service file creation steps complete."
 
-# 10. Edit /etc/bluetooth/main.conf: change "# ReverseServiceDiscovery = true" to "ReverseServiceDiscovery = false"
-sudo sed -i 's/^# ReverseServiceDiscovery = true/ReverseServiceDiscovery = false/' /etc/bluetooth/main.conf
+# 10. Edit /etc/bluetooth/main.conf: change "#ReverseServiceDiscovery = true" to "ReverseServiceDiscovery = false"
+sudo sed -i 's/^#ReverseServiceDiscovery = true/ReverseServiceDiscovery = false/' /etc/bluetooth/main.conf
 echo "Updated ReverseServiceDiscovery in /etc/bluetooth/main.conf"
