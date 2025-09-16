@@ -183,8 +183,23 @@ def start_page_process(page):
         return None
 
 # Function to start the game process, return with the game process and shared memory object
-def start_game_process(game):
-    game_path = os.path.join(os.getcwd(), "apps", game["id"])
+def start_game_process(game_id):
+    game_path = os.path.join(os.getcwd(), "apps", game_id)
+
+    if not os.path.isdir(game_path):
+        try:
+            response = requests.get(f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}")
+            if response.status_code == 200:
+                download_info = response.json().get("data")
+                if download_info is not None:
+                    game_download_url = download_info.get("game_download_url")
+                    game_download_md5 = download_info.get("game_download_md5")
+                    download_app(game_download_url, game_download_md5)
+            else:
+                print(f"Failed to get download info for game {game_id}: {response.status_code}")
+        except Exception as e:
+            print(f"Error fetching widget download info: {e}")
+
     if os.path.isdir(game_path):
         shm_name = f"game_shm"
         shm_size = 128 * 160 * 3 + 1  # Example size in bytes
@@ -452,7 +467,7 @@ try:
         
     # start the loop
     while True:
-        time.sleep(1/60)
+        time.sleep(1/30)
         # locate device
         if locate_device_intv:
             buffer = bytearray([255] * (128 * 160 * 3))
@@ -536,7 +551,7 @@ try:
                 if game is not None:
                     term_game_process(game)
                     game = None
-                game = start_game_process(game_list[game_index])
+                game = start_game_process(game_list[game_index]["id"])
                 if game is not None:
                     state = "in_game"
         elif (buttons["btn_b"]):
