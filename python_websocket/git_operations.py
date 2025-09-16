@@ -1,6 +1,7 @@
 import subprocess
 
 def check_update():
+    subprocess.run(['git', 'fetch', 'origin'], cwd='/home/rpi/dartsnut_rpi', check=True)
     result = subprocess.run(
         ['git', 'rev-list', '--count', 'HEAD..origin/release'],
         cwd='/home/rpi/dartsnut_rpi',
