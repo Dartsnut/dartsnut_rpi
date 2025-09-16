@@ -111,6 +111,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         await send_response(req_id, {"action": "start_game", "error": "Game start failed"})
                 else:
                     await send_response(req_id, {"action": "start_game", "error": "Function not available"})
+            elif action == "reboot":
+                os.system("sudo reboot")
             else:
                 await send_response(req_id, {"action": action, "error": "Unknown action"})
 
