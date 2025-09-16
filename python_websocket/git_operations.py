@@ -10,7 +10,7 @@ def check_update():
     )
     commits_ahead = int(result.stdout.strip())
     if commits_ahead > 0:
-         return {"action": "check_update", "update": True}
+        return {"action": "check_update", "update": True}
     else:
         return {"action": "check_update", "update": False}
 

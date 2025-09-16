@@ -219,28 +219,28 @@ def start_game_process(game_id):
             shm.buf[1:1+len(img_bytes)] = img_bytes
             shm.buf[0] = 0
             # if the uuid is "0", it is a default widget
-            command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", game["id"], "main.py")]
+            command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", game_id, "main.py")]
             command.extend(["--shm", shm_name])
             process = subprocess.Popen(
                 command,
-                cwd=os.path.join("./apps/", game["id"]),
+                cwd=os.path.join("./apps/", game_id),
                 preexec_fn=set_pdeathsig
             )
             return {"process":process, "shm": shm}
         except Exception as e:
             print(f"Error starting game {game['id']}: {e}")
-            # If the widget fails to start, we don't add it to the page
     return None
 
 # Function to terminate the game process and clean up
-def term_game_process(game):
-    if game is not None:
+def term_game_process(g):
+    if g is not None:
         try:
-            os.kill(game["process"].pid, signal.SIGCONT)
-            os.kill(game["process"].pid, signal.SIGTERM)
-            game["shm"].close()
-            game["shm"].unlink()
-            game.clear()
+            os.kill(g["process"].pid, signal.SIGCONT)
+            os.kill(g["process"].pid, signal.SIGTERM)
+            g["shm"].close()
+            g["shm"].unlink()
+            g.clear()
+            g = None
         except Exception as e:
             print(f"Error terminating game: {e}")
     return None
@@ -409,6 +409,22 @@ def get_widgets_framebuffer():
             })
     return framebuffers
 
+# Function to start game from websocket
+def start_game(game_id):
+    global game
+    term_game_process(game)
+    game = start_game_process(game_id)
+    if game is not None:
+        global pages, state
+        term_widget_processes(pages)
+        state = "in_game"
+        return True
+    else:
+        # start game failed, go back to widget
+        global reload_conf
+        reload_conf = True
+        return False
+
 # Function to init the widgets
 def init_widgets():
     # Declare globals only if they have been defined previously
@@ -437,9 +453,7 @@ def init_widgets():
     page_freeze = False
     locate_device_intv = 0
     reload_conf = False
-    if game is not None:
-        term_game_process(game)
-        game = None
+    term_game_process(game)
     game_index = 0
     if game_list is None:
         game_list = []
@@ -459,7 +473,7 @@ try:
     ble_thread.start()
 
     # start websocket server
-    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer), daemon=True)
+    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game), daemon=True)
     websocket_thread.start()
 
     # init the widgets
@@ -547,13 +561,14 @@ try:
                 page_tick = time.time()
             # button A to start game in game select
             elif state == "game_select":
-                term_widget_processes(pages)
-                if game is not None:
-                    term_game_process(game)
-                    game = None
+                term_game_process(game)
                 game = start_game_process(game_list[game_index]["id"])
                 if game is not None:
+                    term_widget_processes(pages)
                     state = "in_game"
+                else:
+                    # start game failed, go back to widget
+                    reload_conf = True
         elif (buttons["btn_b"]):
             # if in game_select, go back to widget
             if (state == "game_select"):

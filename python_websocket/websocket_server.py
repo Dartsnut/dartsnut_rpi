@@ -101,6 +101,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 subprocess.run("nmcli radio wifi off && nmcli radio wifi on", shell=True)
             elif action == "check_update":
                 await send_response(req_id, check_update())
+            elif action == "perform_update":
+                await send_response(req_id, perform_update())
+            elif action == "start_game":
+                if websocket_endpoint.start_game_process:
+                    if websocket_endpoint.start_game_process(message.get("game_id")):
+                        await send_response(req_id, {"action": "start_game", "message": "Game started"})
+                    else:
+                        await send_response(req_id, {"action": "start_game", "error": "Game start failed"})
+                else:
+                    await send_response(req_id, {"action": "start_game", "error": "Function not available"})
             else:
                 await send_response(req_id, {"action": action, "error": "Unknown action"})
 
@@ -112,10 +122,11 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
             # await websocket.close()
 
-def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None):
+def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None, start_game_process=None):
     websocket_endpoint.set_brightness = set_brightness if set_brightness else None
     websocket_endpoint.locate_device = locate_device if locate_device else None
     websocket_endpoint.reload_config = reload_config if reload_config else None
     websocket_endpoint.set_time_zone = set_time_zone if set_time_zone else None
     websocket_endpoint.get_widgets_framebuffer = get_widgets_framebuffer if get_widgets_framebuffer else None
+    websocket_endpoint.start_game_process = start_game_process if start_game_process else None
     uvicorn.run(app, host="0.0.0.0", port=9251)
