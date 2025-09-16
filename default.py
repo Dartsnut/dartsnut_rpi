@@ -13,16 +13,13 @@ from pydartsnut import Dartsnut
 
 dartsnut = Dartsnut()
 
-currentImage = Image.new("RGB",(128,160))
+qr_img = Image.open("qrcode.png")
 
-draw = ImageDraw.Draw(currentImage)
-draw.text((0, 0), "default widget", (255,255,255), font_size=14)
-
-dartsnut.update_frame_buffer(currentImage)
+dartsnut.update_frame_buffer(qr_img)
 
 try:
     while True:
-        time.sleep(1)
+        time.sleep(10)
         
 except KeyboardInterrupt:
     print("default widget exiting...")
