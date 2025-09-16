@@ -16,6 +16,7 @@ __pycache__/
 
 # Ignore all folders under apps
 apps/
+downloads/
 
 # Ignore device.json file
 device.json
