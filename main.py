@@ -468,6 +468,30 @@ try:
     # display the loading image
     dartsnut.update_frame_buffer(loading_image)
 
+    #check if apps folder and apps/conf.json exist
+    if not os.path.isdir("./apps"):
+        os.makedirs("./apps")
+    if not os.path.isfile("./apps/conf.json"):
+        with open("./apps/conf.json", "w") as config_file:
+            json.dump({
+                "user": "",
+                "date": "",
+                "pages": [
+                    {
+                        "uuid": "e7b8c2e2-4f3a-4b7e-9c1a-2d6e8f5a1b3c",
+                        "title": "factory_tool",
+                        "duration" : "60",
+                        "combination" : "0",
+                        "enabled" : True,
+                        "widgets" : [{
+                            "id": "factory_tool",
+                            "position": [0,0,127,159],
+                            "fields": {}
+                        }]
+                    }
+                ]
+            }, config_file)
+
     # start ble server
     ble_thread = threading.Thread(target=start_ble_server, daemon=True)
     ble_thread.start()
