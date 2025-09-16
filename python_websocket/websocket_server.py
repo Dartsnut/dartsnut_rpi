@@ -1,3 +1,6 @@
+from python_websocket.file_operations import receive_file, send_file, remove_directory, get_file_md5, get_file_list, create_directory, download_app, get_app_list
+from python_websocket.json_operations import read_json_file, write_json_file, get_device_info, set_device_name
+from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -5,6 +8,7 @@ import os
 import base64
 from PIL import Image
 from io import BytesIO
+import uvicorn
 
 app = FastAPI()
 
@@ -91,13 +95,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
                 else:
                     await send_response(req_id, {"action": "get_widgets_screen", "error": "Function not available"})
+            elif action == "forget_wifi":
+                subprocess.run("nmcli -t -f NAME,TYPE connection show | grep 802-11-wireless | cut -d: -f1 | xargs -r -n1 nmcli connection delete", shell=True)
+                subprocess.run("nmcli radio wifi off && nmcli radio wifi on", shell=True)
             else:
                 await send_response(req_id, {"action": action, "error": "Unknown action"})
 
         except Exception as e:
             print(f"error: {e}")
             if websocket.client_state.name == "DISCONNECTED":
-                websocket_endpoint.reload_config() if websocket_endpoint.reload_config else None
                 break
         finally:
             pass
@@ -109,15 +115,4 @@ def start_websocket_server(set_brightness=None, locate_device=None, reload_confi
     websocket_endpoint.reload_config = reload_config if reload_config else None
     websocket_endpoint.set_time_zone = set_time_zone if set_time_zone else None
     websocket_endpoint.get_widgets_framebuffer = get_widgets_framebuffer if get_widgets_framebuffer else None
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9251)
-
-if __name__ == "__main__":
-    from file_operations import receive_file, send_file, remove_directory, get_file_md5, get_file_list, create_directory, download_app, get_app_list
-    from json_operations import read_json_file, write_json_file, get_device_info, set_device_name
-    from bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
-    start_websocket_server()
-else:
-    from python_websocket.file_operations import receive_file, send_file, remove_directory, get_file_md5, get_file_list, create_directory, download_app, get_app_list
-    from python_websocket.json_operations import read_json_file, write_json_file, get_device_info, set_device_name
-    from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
