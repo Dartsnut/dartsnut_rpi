@@ -15,4 +15,7 @@ __pycache__/
 *.egg-info/
 
 # Ignore all folders under apps
-apps/*/
+apps/
+
+# Ignore device.json file
+device.json
