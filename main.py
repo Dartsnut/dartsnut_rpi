@@ -17,7 +17,7 @@ from pydartsnut import Dartsnut
 dartsnut = Dartsnut()
 
 # Load the loading image
-loading_image = Image.open("./loading.jpg")
+loading_image = Image.open("./loading.png")
 
 # Function to set PR_SET_PDEATHSIG
 def set_pdeathsig():
