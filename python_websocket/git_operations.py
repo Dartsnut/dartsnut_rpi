@@ -1,19 +1,33 @@
 import subprocess
 
+def get_version():
+    try:
+        result = subprocess.run(
+            ['git', 'describe', '--tags', '--abbrev=0'],
+            cwd='/home/rpi/dartsnut_rpi',
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True
+        )
+        version_tag = result.stdout.strip()
+        return {"action": "get_version", "version": version_tag}
+    except subprocess.CalledProcessError as e:
+        return {"action": "get_version", "error": f"Failed to get version: {str(e)}"}
+
 def check_update():
-    subprocess.run(['git', 'fetch', 'origin'], cwd='/home/rpi/dartsnut_rpi', check=True)
-    result = subprocess.run(
-        ['git', 'rev-list', '--count', 'HEAD..origin/release'],
-        cwd='/home/rpi/dartsnut_rpi',
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True
-    )
-    commits_ahead = int(result.stdout.strip())
-    if commits_ahead > 0:
-        return {"action": "check_update", "update": True}
-    else:
-        return {"action": "check_update", "update": False}
+    try:
+        subprocess.run(['git', 'fetch', 'origin'], cwd='/home/rpi/dartsnut_rpi', check=True)
+        result = subprocess.run(
+            ['git', 'describe', '--tags', 'origin/release', '--abbrev=0'],
+            cwd='/home/rpi/dartsnut_rpi',
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True
+        )
+        latest_tag = result.stdout.strip()
+        return {"action": "check_update", "latest_version": latest_tag}
+    except subprocess.CalledProcessError as e:
+        return {"action": "check_update", "error": f"Failed to check for updates: {str(e)}"}
 
 def perform_update():
     try:

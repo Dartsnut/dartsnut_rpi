@@ -1,7 +1,7 @@
 from python_websocket.file_operations import receive_file, send_file, remove_directory, get_file_md5, get_file_list, create_directory, download_app, get_app_list
 from python_websocket.json_operations import read_json_file, write_json_file, get_device_info, set_device_name
 from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
-from python_websocket.git_operations import check_update, perform_update
+from python_websocket.git_operations import check_update, perform_update, get_version
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -99,6 +99,8 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "forget_wifi":
                 subprocess.run("nmcli -t -f NAME,TYPE connection show | grep 802-11-wireless | cut -d: -f1 | xargs -r -n1 nmcli connection delete", shell=True)
                 subprocess.run("nmcli radio wifi off && nmcli radio wifi on", shell=True)
+            elif action == "get_version":
+                await send_response(req_id, get_version())
             elif action == "check_update":
                 await send_response(req_id, check_update())
             elif action == "perform_update":
