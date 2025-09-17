@@ -1,0 +1,62 @@
+# Dartsnut PixelDart & PixelBoard Raspberry Pi Deployment Guide
+
+This guide explains how to deploy the Dartsnut PixelDart and PixelBoard runtime environment on a Raspberry Pi.
+
+## 1. Install Raspberry Pi OS
+
+Use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to install the operating system. It is recommended to choose **Raspberry Pi OS Lite (64-bit)**.
+
+## 2. Install Git
+
+```bash
+sudo apt update
+sudo apt install git
+```
+
+## 3. Clone the Project Repository
+
+In the `/home/rpi/` directory, run:
+
+```bash
+cd /home/rpi/
+git clone https://github.com/sz1jrh/dartsnut_rpi_release.git
+mv dartsnut_rpi_release dartsnut_rpi
+```
+
+## 4. Run the Setup Script
+
+```bash
+cd /home/rpi/dartsnut_rpi
+sudo chmod +x setup.sh
+sudo ./setup.sh
+```
+
+## 5. Configure Device Information
+
+After installation, edit the device configuration file:
+
+```bash
+sudo vi /home/rpi/dartsnut_rpi/device.json
+```
+
+Paste the following content according to your device type:
+
+**PixelBoard:**
+```json
+{"name": "PixelBoard", "serial": "1234567890", "model": "PixelBoard", "brightness": "100", "volume": "100"}
+```
+
+**PixelDart:**
+```json
+{"name": "PixelDart", "serial": "1234567890", "model": "PixelDart", "brightness": "100", "volume": "100"}
+```
+
+## 6. Reboot the Device
+
+```bash
+sudo reboot
+```
+
+---
+
+For questions, please refer to the project repository or contact the developer.

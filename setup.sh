@@ -108,3 +108,6 @@ echo "Service file creation steps complete."
 # 10. Edit /etc/bluetooth/main.conf: change "#ReverseServiceDiscovery = true" to "ReverseServiceDiscovery = false"
 sudo sed -i 's/^#ReverseServiceDiscovery = true/ReverseServiceDiscovery = false/' /etc/bluetooth/main.conf
 echo "Updated ReverseServiceDiscovery in /etc/bluetooth/main.conf"
+
+# 11. Add safe directory for git
+sudo git config --global --add safe.directory /home/rpi/dartsnut_rpi
