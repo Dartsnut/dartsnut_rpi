@@ -459,9 +459,8 @@ def init_widgets():
         game_list = []
     else:
         game_list.clear()
-    # start the first page
-    # for widget in pages[0]["widgets"]:
-    #     os.kill(widget["process"].pid, signal.SIGCONT)
+    # reset the xvfb mode
+    dartsnut.shm_buffer[0] = 1
     page_tick = time.time()
 
 try:

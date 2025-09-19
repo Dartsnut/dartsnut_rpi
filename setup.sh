@@ -42,6 +42,8 @@ sudo apt-get install libdbus-1-dev -y
 sudo apt-get install libbluetooth-dev -y
 sudo apt-get install libgl1 -y
 sudo apt-get install git -y
+sudo apt-get install xvfb -y
+sudo apt-get install libsdl2-dev -y
 
 # 7. Install the python modules
 sudo venv0/bin/pip install -r requirement.txt

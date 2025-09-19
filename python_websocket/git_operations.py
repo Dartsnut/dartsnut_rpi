@@ -34,6 +34,7 @@ def perform_update():
         subprocess.run(['git', 'reset', '--hard'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['git', 'fetch', 'origin'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['git', 'reset', '--hard', 'origin/release'], cwd='/home/rpi/dartsnut_rpi', check=True)
+        subprocess.run(['sudo', './setup.sh'], cwd='/home/rpi/dartsnut_rpi', check=True)
         return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
         return {"action": "perform_update", "error": f"Update failed: {str(e)}"}
