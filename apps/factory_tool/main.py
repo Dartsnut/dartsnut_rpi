@@ -42,6 +42,7 @@ def find_usb_audio_device(name_hint="USB"):
     return None
 
 old_buttons = {}
+burning_intv = 0
 try:
     while True:
         time.sleep(0.05)
@@ -51,42 +52,40 @@ try:
                 pattern_index = (pattern_index + 1) % 6
         else:
             if buttons["btn_a"]:
-                pattern_index = 0
-            elif buttons["btn_b"]:
-                pattern_index = 1
-            elif buttons["btn_up"]:
-                pattern_index = 2
-            elif buttons["btn_left"]:
-                pattern_index = 3
-            elif buttons["btn_right"]:
-                pattern_index = 4
-            elif buttons["btn_down"]:
                 pattern_index = 5
+            elif buttons["btn_b"]:
+                pattern_index = 4
+                burning_intv = 0
+            elif buttons["btn_up"]:
+                pattern_index = 0
+            elif buttons["btn_left"]:
+                pattern_index = 1
+            elif buttons["btn_right"]:
+                pattern_index = 2
+            elif buttons["btn_down"]:
+                pattern_index = 3
             elif buttons["btn_home"]:
                 pattern_index = 6
                 
         if pattern_index == 0:
-            draw = ImageDraw.Draw(currentImage)
             draw.rectangle([(0, 0), currentImage.size], fill="#ffffff")
         elif pattern_index == 1:
-            draw = ImageDraw.Draw(currentImage)
             draw.rectangle([(0, 0), currentImage.size], fill="#ff0000")
         elif pattern_index == 2:
-            draw = ImageDraw.Draw(currentImage)
             draw.rectangle([(0, 0), currentImage.size], fill="#00ff00")
         elif pattern_index == 3:
-            draw = ImageDraw.Draw(currentImage)
             draw.rectangle([(0, 0), currentImage.size], fill="#0000ff")
         elif pattern_index == 4:
-            draw = ImageDraw.Draw(currentImage)
-            for i in range(128):
-                for j in range(160):
-                    r = int((i / 127) * 255)
-                    g = int((j / 159) * 255)
-                    b = int(((i + j) / (127 + 159)) * 255)
-                    draw.point((i, j), fill=(r, g, b))
+            burning_intv += 1
+            if burning_intv > 120:
+                burning_intv = 0
+            if burning_intv // 40 == 0:
+                draw.rectangle([(0, 0), currentImage.size], fill="#ff0000")
+            elif burning_intv // 40 == 1:
+                draw.rectangle([(0, 0), currentImage.size], fill="#00ff00")
+            else:
+                draw.rectangle([(0, 0), currentImage.size], fill="#0000ff")
         elif pattern_index == 5:
-            draw = ImageDraw.Draw(currentImage)
             colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
             for i in range(128):
                 for j in range(160):
