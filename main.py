@@ -35,7 +35,7 @@ def process_widget_fields(widget_id, widget_fields_parameter):
         conf = json.load(f)
         for field in conf["fields"]:
             # if there is files type in the field, decode the base64 data
-            if field["type"] == "files":
+            if field["type"] == "files" or field["type"] == "image":
                 # get the widget_fields_parameter with the field["id"]
                 if params.get(field["id"]) is not None:
                     files = []

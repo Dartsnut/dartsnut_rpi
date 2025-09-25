@@ -51,6 +51,7 @@ class UARTDevice:
             elif (command == "scan_wifi"):
                 # Use a system command to scan for WiFi networks
                 try:
+                    subprocess.run(['nmcli', 'dev', 'wifi', 'rescan'], capture_output=True)
                     result = subprocess.run(['iwlist', 'wlan0', 'scan'], capture_output=True, text=True, check=True)
                     networks = []
                     for line in result.stdout.splitlines():
