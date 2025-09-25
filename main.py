@@ -33,9 +33,10 @@ def process_widget_fields(widget_id, widget_fields_parameter):
     conf_path = os.path.join(os.getcwd(), "apps", widget_id, "conf.json")
     with open(conf_path, "r") as f:
         conf = json.load(f)
+        # special handling for files and image type
         for field in conf["fields"]:
             # if there is files type in the field, decode the base64 data
-            if field["type"] == "files" or field["type"] == "image":
+            if field["type"] == "files":
                 # get the widget_fields_parameter with the field["id"]
                 if params.get(field["id"]) is not None:
                     files = []
@@ -51,6 +52,19 @@ def process_widget_fields(widget_id, widget_fields_parameter):
                             files.append(tmp_file_path)
                     # replace the file field with the file paths
                     params[field["id"]] = files
+            elif field["type"] == "image":
+                if params.get(field["id"]) is not None:
+                    # read the file data
+                    file = params.get(field["id"])
+                    file_data_array = file.split(",")
+                    file_data_b64 = file_data_array[1]
+                    file_data = base64.b64decode(file_data_b64)
+                    # write the file data into a named temp file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix="."+file_data_array[0]) as tmp_file:
+                        tmp_file.write(file_data)
+                        tmp_file_path = tmp_file.name
+                        # replace the file field with the file paths
+                        params[field["id"]] = tmp_file_path
     return params
 
 # Function to download widget from the server
