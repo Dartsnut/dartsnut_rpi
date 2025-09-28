@@ -11,3 +11,4 @@ RPi.GPIO
 pydartsnut
 pygame
 asyncio
+evdev

@@ -459,47 +459,47 @@ def init_widgets():
     dartsnut.shm_buffer[0] = 1
     page_tick = time.time()
 
-try:
-    # display the loading image
-    dartsnut.update_frame_buffer(loading_image)
+# display the loading image
+dartsnut.update_frame_buffer(loading_image)
 
-    #check if apps folder and apps/conf.json exist
-    if not os.path.isdir("./apps"):
-        os.makedirs("./apps")
-    if not os.path.isfile("./apps/conf.json"):
-        with open("./apps/conf.json", "w") as config_file:
-            json.dump({
-                "user": "",
-                "date": "",
-                "pages": [
-                    {
-                        "uuid": "e7b8c2e2-4f3a-4b7e-9c1a-2d6e8f5a1b3c",
-                        "title": "factory_tool",
-                        "duration" : "60",
-                        "combination" : "0",
-                        "enabled" : True,
-                        "widgets" : [{
-                            "id": "factory_tool",
-                            "position": [0,0,127,159],
-                            "fields": {}
-                        }]
-                    }
-                ]
-            }, config_file)
+#check if apps folder and apps/conf.json exist
+if not os.path.isdir("./apps"):
+    os.makedirs("./apps")
+if not os.path.isfile("./apps/conf.json"):
+    with open("./apps/conf.json", "w") as config_file:
+        json.dump({
+            "user": "",
+            "date": "",
+            "pages": [
+                {
+                    "uuid": "e7b8c2e2-4f3a-4b7e-9c1a-2d6e8f5a1b3c",
+                    "title": "factory_tool",
+                    "duration" : "60",
+                    "combination" : "0",
+                    "enabled" : True,
+                    "widgets" : [{
+                        "id": "factory_tool",
+                        "position": [0,0,127,159],
+                        "fields": {}
+                    }]
+                }
+            ]
+        }, config_file)
 
-    # start ble server
-    ble_thread = threading.Thread(target=start_ble_server, daemon=True)
-    ble_thread.start()
+# start ble server
+ble_thread = threading.Thread(target=start_ble_server, daemon=True)
+ble_thread.start()
 
-    # start websocket server
-    websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game), daemon=True)
-    websocket_thread.start()
+# start websocket server
+websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game), daemon=True)
+websocket_thread.start()
 
-    # init the widgets
-    init_widgets()
-        
-    # start the loop
-    while True:
+# init the widgets
+init_widgets()
+    
+# start the loop
+while dartsnut.running:
+    try:
         time.sleep(1/30)
         # locate device
         if locate_device_intv:
@@ -636,26 +636,26 @@ try:
                     game_index = 0
                 game_preview_index = 0
                 page_tick = time.time()
-        elif (buttons["btn_up"]):
-            # button UP to increase brightness if not in game
-            if state != "in_game":
-                try:
-                    with open("./device.json", 'r') as file:
-                        device_info = json.load(file)
-                    brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
-                    set_brightness(brightness)
-                except Exception as e:
-                    print(f"Error reading or updating device brightness: {e}")
-        elif (buttons["btn_down"]):
-            # button DOWN to decrease brightness if not in game
-            if state != "in_game":
-                try:
-                    with open("./device.json", 'r') as file:
-                        device_info = json.load(file)
-                    brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
-                    set_brightness(brightness)
-                except Exception as e:
-                    print(f"Error reading or updating device brightness: {e}")
+        # elif (buttons["btn_up"]):
+        #     # button UP to increase brightness if not in game
+        #     if state != "in_game":
+        #         try:
+        #             with open("./device.json", 'r') as file:
+        #                 device_info = json.load(file)
+        #             brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
+        #             set_brightness(brightness)
+        #         except Exception as e:
+        #             print(f"Error reading or updating device brightness: {e}")
+        # elif (buttons["btn_down"]):
+        #     # button DOWN to decrease brightness if not in game
+        #     if state != "in_game":
+        #         try:
+        #             with open("./device.json", 'r') as file:
+        #                 device_info = json.load(file)
+        #             brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
+        #             set_brightness(brightness)
+        #         except Exception as e:
+        #             print(f"Error reading or updating device brightness: {e}")
         elif (buttons["btn_home"]):
             with open("./device.json", 'r') as file:
                 device_info = json.load(file)
@@ -686,8 +686,7 @@ try:
                     reload_conf = True
         elif (buttons["btn_reserved"]):
             pass
-except KeyboardInterrupt:
-    print("main exiting...")
-    term_widget_processes(pages)
+            
+    except Exception as e:
+        print(f"Error in main loop: {e}")
 
-# https://cdn.nba.com/logos/nba/{teamId}/primary/L/logo.svg
