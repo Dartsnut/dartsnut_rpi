@@ -46,7 +46,8 @@ sudo apt-get install xvfb -y
 sudo apt-get install libsdl2-dev -y
 
 # 7. Install the python modules
-sudo venv0/bin/pip install -r requirement.txt
+sudo venv0/bin/pip install --upgrade pip
+sudo venv0/bin/pip install --upgrade -r requirement.txt
 
 # 8. Set Swap Memory to 0
 sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=0/' /etc/dphys-swapfile

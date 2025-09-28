@@ -31,10 +31,25 @@ def check_update():
 
 def perform_update():
     try:
+        # Save current commit hash
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd='/home/rpi/dartsnut_rpi',
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True
+        )
+        old_commit = result.stdout.strip()
+
         subprocess.run(['git', 'reset', '--hard'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['git', 'fetch', 'origin'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['git', 'reset', '--hard', 'origin/release'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['sudo', './setup.sh'], cwd='/home/rpi/dartsnut_rpi', check=True)
         return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
-        return {"action": "perform_update", "error": f"Update failed: {str(e)}"}
+        # Rollback to old commit
+        try:
+            subprocess.run(['git', 'reset', '--hard', old_commit], cwd='/home/rpi/dartsnut_rpi', check=True)
+            return {"action": "perform_update", "error": f"Update failed: {str(e)}. Rolled back to previous version."}
+        except subprocess.CalledProcessError as rollback_error:
+            return {"action": "perform_update", "error": f"Update failed: {str(e)}. Rollback also failed: {str(rollback_error)}"}
