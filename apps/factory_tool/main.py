@@ -69,12 +69,11 @@ def barcode_listener():
                         with open("/home/rpi/dartsnut_rpi/device.json", "w") as f:
                             json.dump(device_config, f)
                         barcode = ""
-                    elif keycode.startswith('KEY_') and keycode != 'KEY_CAPSLOCK':
+                    elif keycode.startswith('KEY_'):
                         char = keycode[4:]
-                        if char.isdigit():
-                            barcode += char
-                        elif char.isalpha():
-                                barcode += char.upper()
+                        # Only allow single alphanumeric characters, ignore modifier keys including CAPSLOCK
+                        if char.isdigit() or (len(char) == 1 and char.isalpha()):
+                            barcode += char.upper()
         except Exception as e:
             print(f"Error reading barcode scanner: {e}")
             time.sleep(1)
@@ -85,6 +84,8 @@ barcode_thread.start()
 
 old_buttons = {}
 burning_intv = 0
+dart_color_table = [(0,0,255),(255,0,0),(0,255,0),(255,255,0),(0,0,255),(255,0,0),(0,255,0),(255,255,0),(0,0,255),(255,0,0),(0,255,0),(255,255,0)]
+dart_circle_table = [(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0)]
 
 while dartsnut.running:
     time.sleep(0.05)
@@ -141,11 +142,34 @@ while dartsnut.running:
 
     # draw the darts
     darts = dartsnut.get_darts()
-    dart_color = (255,255,255) if pattern_index == 6 else (0,0,0)
     for idx, dart in enumerate(darts):
         if (dart != [-1,-1]):
             _, _, w, h = draw.textbbox((0, 0), str(idx), font_size=12)
-            draw.text((dart[0]-w/2, dart[1]-h/2), str(idx), dart_color, font_size=12)
+            # Draw black outline for the text
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx != 0 or dy != 0:
+                        draw.text((dart[0]-w/2+dx, dart[1]-h/2+dy), str(idx), (0,0,0), font_size=12)
+            # Draw the colored text on top
+            draw.text((dart[0]-w/2, dart[1]-h/2), str(idx), dart_color_table[idx], font_size=12)
+            # Draw black outline first
+            draw.ellipse(
+                [
+                    (dart[0] - 10, dart[1] - 10),
+                    (dart[0] + 10, dart[1] + 10)
+                ],
+                outline=(0, 0, 0),
+                width=4
+            )
+            # Draw colored outline on top
+            draw.ellipse(
+                [
+                    (dart[0] - 10, dart[1] - 10),
+                    (dart[0] + 10, dart[1] + 10)
+                ],
+                outline=dart_circle_table[idx],
+                width=2
+            )
 
     if buttons["btn_reserved"] and not old_buttons.get("btn_reserved", False):
         import subprocess
