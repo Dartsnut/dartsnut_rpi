@@ -174,7 +174,7 @@ def start_page_process(page):
                     continue
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
-        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "loading": True, "framebuffer": bytearray(128 * 160 * 3), "enabled": page.get("enabled", True)}
+        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "framebuffer": bytearray(loading_image.tobytes()), "enabled": page.get("enabled", True)}
     else:
         return None
 
@@ -528,22 +528,19 @@ while dartsnut.running:
                         page_index = len(pages) - 1  # uuid "0" page is always last
                     page_tick = time.time()   
             for page in pages:
-                if all(widget["shm"].buf[0] == 0 for widget in page["widgets"]):
-                    page["loading"] = False
-                    for widget in page["widgets"]:
-                        shm_buf = widget["shm"].buf
-                        x0, y0, x1, y1 = widget["widget"]["position"]
-                        width = x1 - x0 + 1
-                        height = y1 - y0 + 1
-                        for y in range(height):
-                            for x in range(width):
-                                src_idx = (y * width + x) * 3 + 1
-                                dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
-                                page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
-                        shm_buf[0] = 1
-                elif page["loading"]:
-                    # if the current page is still loading, show the loading image
-                    page["framebuffer"] = loading_image.tobytes()    
+                for widget in page["widgets"]:
+                    if widget["shm"].buf[0] == 0:
+                        for widget in page["widgets"]:
+                            shm_buf = widget["shm"].buf
+                            x0, y0, x1, y1 = widget["widget"]["position"]
+                            width = x1 - x0 + 1
+                            height = y1 - y0 + 1
+                            for y in range(height):
+                                for x in range(width):
+                                    src_idx = (y * width + x) * 3 + 1
+                                    dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
+                                    page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
+                            shm_buf[0] = 1
             #render the current page to the screen
             dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
         # game selecting page
