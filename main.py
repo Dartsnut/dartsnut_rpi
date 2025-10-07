@@ -8,7 +8,7 @@ import threading
 import base64
 import tempfile
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
@@ -18,6 +18,12 @@ dartsnut = Dartsnut()
 
 # Load the loading image
 loading_image = Image.open("./loading.png")
+# Load the logo image
+logo_image = Image.open("./logo.png").resize((128,128))
+# Load the icons
+game_icon = Image.open("./game_icon.png")
+settings_icon = Image.open("./settings_icon.png")
+widget_icon = Image.open("./widget_icon.png")
 
 # Function to set PR_SET_PDEATHSIG
 def set_pdeathsig():
@@ -423,17 +429,6 @@ def start_game(game_id):
 
 # Function to init the widgets
 def init_widgets():
-    # Declare globals only if they have been defined previously
-    global_vars = [
-        "pages", "page_index", "page_freeze", "locate_device_intv", "reload_conf",
-        "game", "game_index", "game_list", "state", "page_tick"
-    ]
-    for var in global_vars:
-        if var in globals():
-            globals()[var]
-        else:
-            # Optionally, initialize to None or suitable default if not declared
-            globals()[var] = None
     global pages, page_index, page_freeze, locate_device_intv, reload_conf, game, game_index, game_list, state, page_tick
     # init the state machine
     state = "widget" # widget, game_select, in_game
@@ -461,6 +456,10 @@ def init_widgets():
 
 # display the loading image
 dartsnut.update_frame_buffer(loading_image)
+
+# read device.info
+with open("./device.json", 'r') as file:
+    device_info = json.load(file)
 
 #check if apps folder and apps/conf.json exist
 if not os.path.isdir("./apps"):
@@ -494,8 +493,21 @@ ble_thread.start()
 websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game), daemon=True)
 websocket_thread.start()
 
-# init the widgets
-init_widgets()
+# Declare globals only if they have been defined previously
+global_vars = [
+    "pages", "page_index", "page_freeze", "locate_device_intv", "reload_conf",
+    "game", "game_index", "game_list", "state", "page_tick"
+]
+for var in global_vars:
+    if var in globals():
+        globals()[var]
+    else:
+        # Optionally, initialize to None or suitable default if not declared
+        globals()[var] = None
+
+# power on state
+state = "menu"
+menu_select_index = 0
     
 # start the loop
 while dartsnut.running:
@@ -511,7 +523,42 @@ while dartsnut.running:
             reload_conf = False
             # call init widgets
             init_widgets()
-        # normal mode
+        # main menu
+        elif (state == "menu"):
+            # check the modal
+            if device_info["model"] == "PixelBoard":
+                # load widgets
+                init_widgets()
+            elif device_info["model"] == "PixelDart":
+                # load the main menu
+                menu_image = Image.new("RGB", (128, 160), (0, 0, 0))
+                # paste the logo
+                menu_image.paste(logo_image, (0,0))
+                # paste the icons
+                menu_image.paste(game_icon, (4, 132), game_icon.convert("RGBA"))
+                menu_image.paste(widget_icon, (24, 132), widget_icon.convert("RGBA"))
+                menu_image.paste(settings_icon, (44, 132), settings_icon.convert("RGBA"))
+                # draw the menu selection
+                draw = ImageDraw.Draw(menu_image)
+                # Draw a rounded rectangle for the menu selection (border radius 4)
+                draw.rounded_rectangle(
+                    (menu_select_index*20+2, 130, menu_select_index*20+21, 149),
+                    radius=4,
+                    outline="white",
+                    width=1
+                )
+                # draw the text at the bottom
+                if menu_select_index == 0:
+                    text = "Games"
+                elif menu_select_index == 1:
+                    text = "Widgets"
+                elif menu_select_index == 2:
+                    text = "Settings"
+                text_bbox = draw.textbbox((0, 0), text, font_size=10)
+                draw.text(((64 - text_bbox[2]) / 2, 150), text, fill="white", font_size=10)
+                # render the menu to the screen
+                dartsnut.update_frame_buffer(menu_image)
+        # widget mode
         elif (state == "widget"):
             if (len(pages) > 1) & (not page_freeze):
                 if (time.time() - page_tick > int(pages[page_index]["duration"])) or (not pages[page_index]["enabled"]):
@@ -571,8 +618,26 @@ while dartsnut.running:
         # read the buttons
         buttons = get_buttons_pressed()
         if (buttons["btn_a"]):
+            # button A to enter menu item
+            if state == "menu":
+                if menu_select_index == 0:
+                    # load the game list
+                    game_list = load_game_list()
+                    # if there is at least one game
+                    if (len(game_list) > 0) :
+                        state = "game_select"
+                        game_index = 0
+                        game_preview_index = 0
+                        page_tick = time.time()
+                elif menu_select_index == 1:
+                    # call init widgets
+                    init_widgets()
+                elif menu_select_index == 2:
+                    pass
+                    # go to settings menu
+                    # state = "settings"
             # button A to toggle widget freeze in widget mode
-            if state == "widget":
+            elif state == "widget":
                 page_freeze = ~page_freeze
                 page_tick = time.time()
             # button A to start game in game select
@@ -586,12 +651,17 @@ while dartsnut.running:
                     # start game failed, go back to widget
                     reload_conf = True
         elif (buttons["btn_b"]):
-            # if in game_select, go back to widget
+            # if in game_select, go back to menu
             if (state == "game_select"):
-                state = "widget"
+                state = "menu"
         elif (buttons["btn_left"]):
+            # select previous menu item
+            if state == "menu":
+                menu_select_index -= 1
+                if menu_select_index < 0:
+                    menu_select_index = 2
             # button LEFT to go to previous page in widget mode
-            if state == "widget":
+            elif state == "widget":
                 # Find the previous enabled page
                 prev_index = page_index
                 found_enabled = False
@@ -612,6 +682,11 @@ while dartsnut.running:
                 game_preview_index = 0
                 page_tick = time.time()
         elif (buttons["btn_right"]):
+            # select previous menu item
+            if state == "menu":
+                menu_select_index += 1
+                if menu_select_index > 2:
+                    menu_select_index = 0
             # button RIGHT to go to next page in widget mode
             if state == "widget":
                 # Find the next enabled page
@@ -664,23 +739,28 @@ while dartsnut.running:
                 # if in game, exit the game and go back to widget
                 if (state == "in_game"):
                     reload_conf = True
-            else:
-                # if in widget mode, show the game select
-                if (state == "widget"):
-                    # load the game list
-                    game_list = load_game_list()
-                    # if there is at least one game
-                    if (len(game_list) > 0) :
-                        state = "game_select"
-                        game_index = 0
-                        game_preview_index = 0
-                        page_tick = time.time()
-                # if in game select, go back to widget
-                elif (state == "game_select"):
-                    state = "widget"
-                # if in game, trigger reload
-                elif (state == "in_game"):
-                    reload_conf = True
+            elif device_info["model"] == "PixelDart":
+                # go to menu
+                term_game_process(game)
+                term_widget_processes(pages)
+                state = "menu"
+                # # if in widget mode, show the game select
+                # if (state == "widget"):
+                #     state = "menu"
+                #     # # load the game list
+                #     # game_list = load_game_list()
+                #     # # if there is at least one game
+                #     # if (len(game_list) > 0) :
+                #     #     state = "game_select"
+                #     #     game_index = 0
+                #     #     game_preview_index = 0
+                #     #     page_tick = time.time()
+                # # if in game select, go back to menu
+                # elif (state == "game_select"):
+                #     state = "menu"
+                # # if in game, trigger reload
+                # elif (state == "in_game"):
+                #     reload_conf = True
         elif (buttons["btn_reserved"]):
             pass
             
