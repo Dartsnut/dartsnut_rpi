@@ -367,6 +367,35 @@ def set_brightness(brightness):
     except Exception as e:
         print(f"An error occurred while updating device info: {e}")
 
+# Function to set volume
+def set_volume(volume):
+    # Map the volume from (0,100) to (50,100)
+    mapped_volume = int(50 + (volume / 100) * 50)
+    # Set the volume on the device
+    try:
+        subprocess.run(
+            ['amixer', '-c', '0', 'sset', 'PCM', f'{mapped_volume}%'],
+            check=True,
+            capture_output=True
+        )
+        try:
+            # Read the existing device info
+            with open("./device.json", 'r') as file:
+                device_info = json.load(file)
+            # Update the device volume
+            device_info['volume'] = str(volume)
+            # Write the updated info back to the file
+            with open("./device.json", 'w') as file:
+                json.dump(device_info, file)
+        except FileNotFoundError:
+            print(f"Device info file not found")
+        except json.JSONDecodeError:
+            print(f"Error decoding JSON from device info file")
+        except Exception as e:
+            print(f"An error occurred while updating device info: {e}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to set volume: {e.stderr.decode().strip()}")
+
 # Function to locate the device
 def locate_device():
     global locate_device_intv
@@ -430,8 +459,8 @@ def start_game(game_id):
 # Function to init the widgets
 def init_widgets():
     global pages, page_index, page_freeze, locate_device_intv, reload_conf, game, game_index, game_list, state, page_tick
-    # init the state machine
-    state = "widget" # widget, game_select, in_game
+    # # init the state machine
+    # state = "widget" # widget, game_select, in_game
     # Read configuration from conf.json
     if pages is None:
         pages = []
@@ -496,7 +525,7 @@ websocket_thread.start()
 # Declare globals only if they have been defined previously
 global_vars = [
     "pages", "page_index", "page_freeze", "locate_device_intv", "reload_conf",
-    "game", "game_index", "game_list", "state", "page_tick"
+    "game", "game_index", "game_list", "state", "page_tick", "setting_select_index"
 ]
 for var in global_vars:
     if var in globals():
@@ -505,9 +534,11 @@ for var in global_vars:
         # Optionally, initialize to None or suitable default if not declared
         globals()[var] = None
 
-# power on state
+# init
 state = "menu"
 menu_select_index = 0
+setting_select_index = 0
+init_widgets()
     
 # start the loop
 while dartsnut.running:
@@ -529,6 +560,7 @@ while dartsnut.running:
             if device_info["model"] == "PixelBoard":
                 # load widgets
                 init_widgets()
+                state = "widget"
             elif device_info["model"] == "PixelDart":
                 # load the main menu
                 menu_image = Image.new("RGB", (128, 160), (0, 0, 0))
@@ -573,21 +605,22 @@ while dartsnut.running:
                             break
                     if not found_enabled:
                         page_index = len(pages) - 1  # uuid "0" page is always last
-                    page_tick = time.time()   
-            for page in pages:
-                for widget in page["widgets"]:
-                    if widget["shm"].buf[0] == 0:
-                        for widget in page["widgets"]:
-                            shm_buf = widget["shm"].buf
-                            x0, y0, x1, y1 = widget["widget"]["position"]
-                            width = x1 - x0 + 1
-                            height = y1 - y0 + 1
-                            for y in range(height):
-                                for x in range(width):
-                                    src_idx = (y * width + x) * 3 + 1
-                                    dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
-                                    page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
-                            shm_buf[0] = 1
+                    page_tick = time.time()
+            # # render the framebuffer of all pages
+            # for page in pages:
+            #     for widget in page["widgets"]:
+            #         if widget["shm"].buf[0] == 0:
+            #             for widget in page["widgets"]:
+            #                 shm_buf = widget["shm"].buf
+            #                 x0, y0, x1, y1 = widget["widget"]["position"]
+            #                 width = x1 - x0 + 1
+            #                 height = y1 - y0 + 1
+            #                 for y in range(height):
+            #                     for x in range(width):
+            #                         src_idx = (y * width + x) * 3 + 1
+            #                         dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
+            #                         page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
+            #                 shm_buf[0] = 1
             #render the current page to the screen
             dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
         # game selecting page
@@ -614,7 +647,79 @@ while dartsnut.running:
                 if game["shm"].buf[0] == 0:
                     dartsnut.update_frame_buffer(game["shm"].buf[1:])
                     game["shm"].buf[0] = 1
+        # in settings
+        elif (state == "settings"):
+            # Draw the settings menu
+            settings_image = Image.new("RGB", (128, 160), (0, 0, 0))
+            draw = ImageDraw.Draw(settings_image)
+            # Define settings items
+            settings_items = [
+                {"name": "Brightness", "type": "value"},
+                {"name": "Volume", "type": "value"},
+                {"name": "Network", "type": "info"},
+                {"name": "Version", "type": "info"}
+            ]
 
+            # Get current values
+            try:
+                with open("./device.json", 'r') as file:
+                    device_info = json.load(file)
+                brightness = int(device_info.get('brightness', 50))
+                volume = int(device_info.get('volume', 50))
+                version = "v1.0.8"
+                # Get the IP address of the connected WiFi
+                ip_address = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=True).stdout.strip().split()[0]
+            except Exception:
+                brightness = 50
+                volume = 50
+                version = 'v1.0.0'
+                ip_address = "0.0.0.0"
+
+            # Draw settings items
+            item_height = 32
+            for idx, item in enumerate(settings_items):
+                y = idx * item_height
+                focused = (idx == setting_select_index)
+                # Draw background for focused item
+                if focused:
+                    draw.rectangle((0, y, 127, y + item_height - 1), fill=(40, 40, 40))
+                # Draw item name
+                draw.text((8, y + 8), item["name"], fill="white")
+                # Draw value/info
+                if item["name"] == "Brightness":
+                    value_str = f"{brightness}"
+                    # Fixed positions for arrows and value
+                    value_x = 80
+                    arrow_left_x = value_x - 13
+                    arrow_right_x = value_x + 23
+                    if focused:
+                        draw.text((arrow_left_x, y + 8), "<", fill="white")
+                        draw.text((arrow_right_x, y + 8), ">", fill="white")
+                        draw.text((value_x, y + 8), value_str, fill="white")
+                    else:
+                        draw.text((value_x, y + 8), value_str, fill="white")
+                elif item["name"] == "Volume":
+                    value_str = f"{volume}"
+                    value_x = 80
+                    arrow_left_x = value_x - 13
+                    arrow_right_x = value_x + 23
+                    if focused:
+                        draw.text((arrow_left_x, y + 8), "<", fill="white")
+                        draw.text((arrow_right_x, y + 8), ">", fill="white")
+                        draw.text((value_x, y + 8), value_str, fill="white")
+                    else:
+                        draw.text((value_x, y + 8), value_str, fill="white")
+                elif item["name"] == "Network":
+                    draw.text((64, y + 8), ip_address, fill="white")
+                elif item["name"] == "Version":
+                    draw.text((64, y + 8), version, fill="white")
+            # Draw the settings icon at the bottom
+            settings_image.paste(settings_icon, (24, 128), settings_icon.convert("RGBA"))
+            text_bbox = draw.textbbox((0, 0), "Settings", font_size=10)
+            draw.text(((64 - text_bbox[2]) / 2, 144), "Settings", fill="white", font_size=10)
+            # Render settings to screen
+            dartsnut.update_frame_buffer(settings_image)
+        
         # read the buttons
         buttons = get_buttons_pressed()
         if (buttons["btn_a"]):
@@ -632,10 +737,11 @@ while dartsnut.running:
                 elif menu_select_index == 1:
                     # call init widgets
                     init_widgets()
+                    state = "widget"
                 elif menu_select_index == 2:
-                    pass
                     # go to settings menu
-                    # state = "settings"
+                    state = "settings"
+
             # button A to toggle widget freeze in widget mode
             elif state == "widget":
                 page_freeze = ~page_freeze
@@ -653,6 +759,9 @@ while dartsnut.running:
         elif (buttons["btn_b"]):
             # if in game_select, go back to menu
             if (state == "game_select"):
+                state = "menu"
+            # if in settings, go back to menu
+            elif (state == "settings"):
                 state = "menu"
         elif (buttons["btn_left"]):
             # select previous menu item
@@ -681,6 +790,34 @@ while dartsnut.running:
                     game_index = len(game_list) - 1
                 game_preview_index = 0
                 page_tick = time.time()
+            # button LEFT to decrease value in settings
+            elif state == "settings":
+                if setting_select_index == 0:
+                    # decrease brightness
+                    try:
+                        with open("./device.json", 'r') as file:
+                            device_info = json.load(file)
+                        brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
+                        set_brightness(brightness)
+                        device_info['brightness'] = str(brightness)
+                        # Update the device brightness in device.json
+                        with open("./device.json", 'w') as file:
+                            json.dump(device_info, file)
+                    except Exception as e:
+                        print(f"Error reading or updating device brightness: {e}")
+                elif setting_select_index == 1:
+                    # decrease volume
+                    try:
+                        with open("./device.json", 'r') as file:
+                            device_info = json.load(file)
+                        volume = max(int(device_info.get('volume', "50")) - 10, 0)
+                        set_volume(volume)
+                        # Update the device volume in device.json
+                        device_info['volume'] = str(volume)
+                        with open("./device.json", 'w') as file:
+                            json.dump(device_info, file)
+                    except Exception as e:
+                        print(f"Error reading or updating device volume: {e}")
         elif (buttons["btn_right"]):
             # select previous menu item
             if state == "menu":
@@ -708,26 +845,46 @@ while dartsnut.running:
                     game_index = 0
                 game_preview_index = 0
                 page_tick = time.time()
-        # elif (buttons["btn_up"]):
-        #     # button UP to increase brightness if not in game
-        #     if state != "in_game":
-        #         try:
-        #             with open("./device.json", 'r') as file:
-        #                 device_info = json.load(file)
-        #             brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
-        #             set_brightness(brightness)
-        #         except Exception as e:
-        #             print(f"Error reading or updating device brightness: {e}")
-        # elif (buttons["btn_down"]):
-        #     # button DOWN to decrease brightness if not in game
-        #     if state != "in_game":
-        #         try:
-        #             with open("./device.json", 'r') as file:
-        #                 device_info = json.load(file)
-        #             brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
-        #             set_brightness(brightness)
-        #         except Exception as e:
-        #             print(f"Error reading or updating device brightness: {e}")
+            # button RIGHT to increase value in settings
+            elif state == "settings":
+                if setting_select_index == 0:
+                    # increase brightness
+                    try:
+                        with open("./device.json", 'r') as file:
+                            device_info = json.load(file)
+                        brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
+                        set_brightness(brightness)
+                        device_info['brightness'] = str(brightness)
+                        # Update the device brightness in device.json
+                        with open("./device.json", 'w') as file:
+                            json.dump(device_info, file)
+                    except Exception as e:
+                        print(f"Error reading or updating device brightness: {e}")
+                elif setting_select_index == 1:
+                    # increase volume
+                    try:
+                        with open("./device.json", 'r') as file:
+                            device_info = json.load(file)
+                        volume = min(int(device_info.get('volume', "50")) + 10, 100)
+                        set_volume(volume)
+                        # Update the device volume in device.json
+                        device_info['volume'] = str(volume)
+                        with open("./device.json", 'w') as file:
+                            json.dump(device_info, file)
+                    except Exception as e:
+                        print(f"Error reading or updating device volume: {e}")
+        elif (buttons["btn_up"]):
+            # select item in settings menu
+            if state == "settings":
+                setting_select_index -= 1
+                if setting_select_index < 0:
+                    setting_select_index = 0
+        elif (buttons["btn_down"]):
+            # select item in settings menu
+            if state == "settings":
+                setting_select_index += 1
+                if setting_select_index > 1:
+                    setting_select_index = 1
         elif (buttons["btn_home"]):
             with open("./device.json", 'r') as file:
                 device_info = json.load(file)
@@ -740,30 +897,36 @@ while dartsnut.running:
                 if (state == "in_game"):
                     reload_conf = True
             elif device_info["model"] == "PixelDart":
-                # go to menu
-                term_game_process(game)
-                term_widget_processes(pages)
-                state = "menu"
-                # # if in widget mode, show the game select
-                # if (state == "widget"):
-                #     state = "menu"
-                #     # # load the game list
-                #     # game_list = load_game_list()
-                #     # # if there is at least one game
-                #     # if (len(game_list) > 0) :
-                #     #     state = "game_select"
-                #     #     game_index = 0
-                #     #     game_preview_index = 0
-                #     #     page_tick = time.time()
-                # # if in game select, go back to menu
-                # elif (state == "game_select"):
-                #     state = "menu"
-                # # if in game, trigger reload
-                # elif (state == "in_game"):
-                #     reload_conf = True
+                # if already in menu, show widgets
+                if (state == "menu"):
+                    state = "widget"
+                # if in game, terminate the game and go back to menu and init widget
+                elif (state == "in_game"):
+                    term_game_process(game)
+                    init_widgets()
+                    state = "menu"
+                # otherwise go back to menu
+                else:
+                    state = "menu"
         elif (buttons["btn_reserved"]):
             pass
             
+        # render widgets
+        if pages is not None:
+            for page in pages:
+                for widget in page["widgets"]:
+                    if widget["shm"].buf[0] == 0:
+                        for widget in page["widgets"]:
+                            shm_buf = widget["shm"].buf
+                            x0, y0, x1, y1 = widget["widget"]["position"]
+                            width = x1 - x0 + 1
+                            height = y1 - y0 + 1
+                            for y in range(height):
+                                for x in range(width):
+                                    src_idx = (y * width + x) * 3 + 1
+                                    dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
+                                    page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
+                            shm_buf[0] = 1
     except Exception as e:
         print(f"Error in main loop: {e}")
 
