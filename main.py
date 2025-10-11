@@ -24,6 +24,8 @@ logo_image = Image.open("./logo.png").resize((128,128))
 game_icon = Image.open("./game_icon.png")
 settings_icon = Image.open("./settings_icon.png")
 widget_icon = Image.open("./widget_icon.png")
+# Load the game select image
+game_select_image = Image.open("./game_sel.png")
 
 # Function to set PR_SET_PDEATHSIG
 def set_pdeathsig():
@@ -625,13 +627,23 @@ while dartsnut.running:
             dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
         # game selecting page
         elif (state == "game_select"):
-            # draw the game preview to the screen
-            if time.time() - page_tick > 5:
-                game_preview_index += 1
-                if (game_preview_index >= len(game_list[game_index]["preview"])):
-                    game_preview_index = 0
-                page_tick = time.time()
-            dartsnut.update_frame_buffer(game_list[game_index]["preview"][game_preview_index])
+            if len(game_list) > 0:
+                # draw the game preview to the screen
+                if time.time() - page_tick > 5:
+                    game_preview_index += 1
+                    if (game_preview_index >= len(game_list[game_index]["preview"])):
+                        game_preview_index = 0
+                    page_tick = time.time()
+                # Create a new image for the game select screen
+                select_img = Image.new("RGB", (128, 160), (0, 0, 0))
+                # Paste the preview image (already 128x128) at the top
+                preview_img = Image.frombytes("RGB", (128, 128), bytes(game_list[game_index]["preview"][game_preview_index]))
+                select_img.paste(preview_img, (0, 0))
+                # Paste the game select image at the bottom (assume it's 128x32 or will be resized)
+                select_img.paste(game_select_image, (0, 128))
+                dartsnut.update_frame_buffer(select_img)
+            else:
+                state = "menu"
         # in game
         elif (state == "in_game"):
             # check if the game object is not None
