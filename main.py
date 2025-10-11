@@ -166,7 +166,7 @@ def start_page_process(page):
                 # start the process
                 try:
                     shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
-                    # if the uuid is "0", it is a default widget
+                    shm.buf[0] = 1
                     command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", widget["id"], "main.py")]
                     command.extend(["--params", json.dumps(process_widget_fields(widget["id"], widget["fields"]))])
                     command.extend(["--shm", shm_name])
@@ -463,11 +463,9 @@ def init_widgets():
     global pages, page_index, page_freeze, locate_device_intv, reload_conf, game, game_index, game_list, state, page_tick
     # # init the state machine
     # state = "widget" # widget, game_select, in_game
+    term_widget_processes(pages)
+    term_game_process(game)
     # Read configuration from conf.json
-    if pages is None:
-        pages = []
-    else:
-        term_widget_processes(pages)
     with open("./apps/conf.json", "r") as config_file:
         pages = init_pages(json.load(config_file))
     #init variables   
@@ -475,7 +473,6 @@ def init_widgets():
     page_freeze = False
     locate_device_intv = 0
     reload_conf = False
-    term_game_process(game)
     game_index = 0
     if game_list is None:
         game_list = []
@@ -561,7 +558,7 @@ while dartsnut.running:
             # check the modal
             if device_info["model"] == "PixelBoard":
                 # load widgets
-                init_widgets()
+                reload_conf = True
                 state = "widget"
             elif device_info["model"] == "PixelDart":
                 # load the main menu
@@ -747,8 +744,7 @@ while dartsnut.running:
                         game_preview_index = 0
                         page_tick = time.time()
                 elif menu_select_index == 1:
-                    # call init widgets
-                    init_widgets()
+                    # go to widgets
                     state = "widget"
                 elif menu_select_index == 2:
                     # go to settings menu
@@ -908,14 +904,14 @@ while dartsnut.running:
                 # if in game, exit the game and go back to widget
                 if (state == "in_game"):
                     reload_conf = True
+                    state = "widget"
             elif device_info["model"] == "PixelDart":
                 # if already in menu, show widgets
                 if (state == "menu"):
                     state = "widget"
-                # if in game, terminate the game and go back to menu and init widget
+                # if in game, reload config and go to menu
                 elif (state == "in_game"):
-                    term_game_process(game)
-                    init_widgets()
+                    reload_conf = True
                     state = "menu"
                 # otherwise go back to menu
                 else:
