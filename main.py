@@ -668,22 +668,28 @@ while dartsnut.running:
                 {"name": "Network", "type": "info"},
                 {"name": "Version", "type": "info"}
             ]
-
-            # Get current values
+            # Get brightness and volume values
             try:
                 with open("./device.json", 'r') as file:
                     device_info = json.load(file)
                 brightness = int(device_info.get('brightness', 50))
                 volume = int(device_info.get('volume', 50))
-                version = "v1.0.8"
-                # Get the IP address of the connected WiFi
-                ip_address = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=True).stdout.strip().split()[0]
             except Exception:
                 brightness = 50
                 volume = 50
-                version = 'v1.0.0'
+            # Get the IP address of the connected WiFi
+            try:
+                ip_address = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=True).stdout.strip().split()[0]
+            except Exception:
                 ip_address = "0.0.0.0"
-
+            # Read the git tag as the version
+            try:
+                version = subprocess.run(
+                    ['git', 'describe', '--tags', '--abbrev=0'],
+                    capture_output=True, text=True, check=True
+                ).stdout.strip()
+            except Exception:
+                version = 'v1.0.0'
             # Draw settings items
             item_height = 32
             for idx, item in enumerate(settings_items):
