@@ -8,7 +8,7 @@ import threading
 import base64
 import tempfile
 import requests
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
@@ -26,6 +26,9 @@ settings_icon = Image.open("./settings_icon.png")
 widget_icon = Image.open("./widget_icon.png")
 # Load the game select image
 game_select_image = Image.open("./game_sel.png")
+# Load the font
+font12 = ImageFont.truetype("./Micro5.ttf", size=12)
+font16 = ImageFont.truetype("./Micro5.ttf", size=16)
 
 # Function to set PR_SET_PDEATHSIG
 def set_pdeathsig():
@@ -488,6 +491,8 @@ dartsnut.update_frame_buffer(loading_image)
 # read device.info
 with open("./device.json", 'r') as file:
     device_info = json.load(file)
+# set the volume
+set_volume(int(device_info.get('volume', "50")) )
 
 #check if apps folder and apps/conf.json exist
 if not os.path.isdir("./apps"):
@@ -580,13 +585,13 @@ while dartsnut.running:
                 )
                 # draw the text at the bottom
                 if menu_select_index == 0:
-                    text = "Games"
+                    text = "GAMES"
                 elif menu_select_index == 1:
-                    text = "Widgets"
+                    text = "WIDGETS"
                 elif menu_select_index == 2:
-                    text = "Settings"
-                text_bbox = draw.textbbox((0, 0), text, font_size=10)
-                draw.text(((64 - text_bbox[2]) / 2, 150), text, fill="white", font_size=10)
+                    text = "SETTINGS"
+                text_bbox = draw.textbbox((0, 0), text, font=font12)
+                draw.text(((64 - text_bbox[2]) / 2, 150), text, fill="white", font=font12)
                 # render the menu to the screen
                 dartsnut.update_frame_buffer(menu_image)
         # widget mode
@@ -699,7 +704,7 @@ while dartsnut.running:
                 if focused:
                     draw.rectangle((0, y, 127, y + item_height - 1), fill=(40, 40, 40))
                 # Draw item name
-                draw.text((8, y + 8), item["name"], fill="white")
+                draw.text((8, y + 8), item["name"], fill="white", font=font16)
                 # Draw value/info
                 if item["name"] == "Brightness":
                     value_str = f"{brightness}"
@@ -708,30 +713,30 @@ while dartsnut.running:
                     arrow_left_x = value_x - 13
                     arrow_right_x = value_x + 23
                     if focused:
-                        draw.text((arrow_left_x, y + 8), "<", fill="white")
-                        draw.text((arrow_right_x, y + 8), ">", fill="white")
-                        draw.text((value_x, y + 8), value_str, fill="white")
+                        draw.text((arrow_left_x, y + 8), "<", fill="white", font=font16)
+                        draw.text((arrow_right_x, y + 8), ">", fill="white", font=font16)
+                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
                     else:
-                        draw.text((value_x, y + 8), value_str, fill="white")
+                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
                 elif item["name"] == "Volume":
                     value_str = f"{volume}"
                     value_x = 80
                     arrow_left_x = value_x - 13
                     arrow_right_x = value_x + 23
                     if focused:
-                        draw.text((arrow_left_x, y + 8), "<", fill="white")
-                        draw.text((arrow_right_x, y + 8), ">", fill="white")
-                        draw.text((value_x, y + 8), value_str, fill="white")
+                        draw.text((arrow_left_x, y + 8), "<", fill="white", font=font16)
+                        draw.text((arrow_right_x, y + 8), ">", fill="white", font=font16)
+                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
                     else:
-                        draw.text((value_x, y + 8), value_str, fill="white")
+                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
                 elif item["name"] == "Network":
                     draw.text((64, y + 8), ip_address, fill="white")
                 elif item["name"] == "Version":
-                    draw.text((64, y + 8), version, fill="white")
+                    draw.text((64, y + 8), version, fill="white", font=font16)
             # Draw the settings icon at the bottom
             settings_image.paste(settings_icon, (24, 128), settings_icon.convert("RGBA"))
-            text_bbox = draw.textbbox((0, 0), "Settings", font_size=10)
-            draw.text(((64 - text_bbox[2]) / 2, 144), "Settings", fill="white", font_size=10)
+            text_bbox = draw.textbbox((0, 0), "Settings", font=font12)
+            draw.text(((64 - text_bbox[2]) / 2, 144), "Settings", fill="white", font=font12)
             # Render settings to screen
             dartsnut.update_frame_buffer(settings_image)
         
