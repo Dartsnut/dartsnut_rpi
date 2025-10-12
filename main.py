@@ -35,7 +35,7 @@ def set_pdeathsig():
     import ctypes
     libc = ctypes.CDLL("libc.so.6")
     PR_SET_PDEATHSIG = 1
-    libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+    libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
 
 # Function to process the widget's fields
 def process_widget_fields(widget_id, widget_fields_parameter):
@@ -243,7 +243,7 @@ def term_game_process(g):
     if g is not None:
         try:
             os.kill(g["process"].pid, signal.SIGCONT)
-            os.kill(g["process"].pid, signal.SIGTERM)
+            os.kill(g["process"].pid, signal.SIGKILL)
             g["shm"].close()
             g["shm"].unlink()
             g.clear()
@@ -310,7 +310,7 @@ def term_widget_processes(pages):
             for widget in page["widgets"]:
                 try:
                     os.kill(widget["process"].pid, signal.SIGCONT)
-                    os.kill(widget["process"].pid, signal.SIGTERM)
+                    os.kill(widget["process"].pid, signal.SIGKILL)
                     widget["shm"].close()
                     widget["shm"].unlink()
                     widget.clear()
