@@ -20,8 +20,7 @@ In the `/home/rpi/` directory, run:
 
 ```bash
 cd /home/rpi/
-git clone https://github.com/sz1jrh/dartsnut_rpi_release.git
-mv dartsnut_rpi_release dartsnut_rpi
+git clone https://github.com/Dartsnut/dartsnut_rpi.git 
 ```
 
 ## 4. Run the Setup Script

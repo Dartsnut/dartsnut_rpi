@@ -138,6 +138,21 @@ def start_ble_server():
         UARTDevice.device_info = json.load(file)
 
     adapter_address = list(adapter.Adapter.available())[0].address
+    # Ensure Bluetooth is unblocked and powered on
+    try:
+        subprocess.run(['rfkill', 'unblock', 'bluetooth'], check=False, capture_output=True)
+    except Exception as e:
+        print(f"rfkill unblock failed: {e}")
+    try:
+        bt_adapter = adapter.Adapter(adapter_address)
+        if not bt_adapter.powered:
+            bt_adapter.powered = True
+        for _ in range(10):
+            if bt_adapter.powered:
+                break
+            time.sleep(0.2)
+    except Exception as e:
+        print(f"Failed to power Bluetooth adapter: {e}")
     ble_uart = peripheral.Peripheral(adapter_address, local_name=UARTDevice.device_info["model"])
     ble_uart.add_service(srv_id=1, uuid=UART_SERVICE, primary=True)
     ble_uart.add_characteristic(srv_id=1, chr_id=1, uuid=RX_CHARACTERISTIC,
