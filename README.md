@@ -4,7 +4,8 @@ This guide explains how to deploy the Dartsnut PixelDart and PixelBoard runtime 
 
 ## 1. Install Raspberry Pi OS
 
-Use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to install the operating system. It is recommended to choose **Raspberry Pi OS Lite (64-bit)**.
+Use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to install the operating system. It is recommended to choose **2025-10-01-raspios-trixie-arm64-lite**.
+Link: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2025-10-02/2025-10-01-raspios-trixie-arm64-lite.img.xz
 
 ## 2. Install Git
 
