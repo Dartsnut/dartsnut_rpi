@@ -464,8 +464,10 @@ def start_game(game_id):
 # Function to init the widgets
 def init_widgets():
     global pages, page_index, page_freeze, locate_device_intv, reload_conf, game, game_index, game_list, state, page_tick
-    # # init the state machine
-    # state = "widget" # widget, game_select, in_game
+    # go back to menu if in game
+    if state == "in_game":
+        state = "menu"
+    # terminate all existing widget and game processes
     term_widget_processes(pages)
     term_game_process(game)
     # Read configuration from conf.json
@@ -481,8 +483,6 @@ def init_widgets():
         game_list = []
     else:
         game_list.clear()
-    # reset the xvfb mode
-    dartsnut.shm_buffer[0] = 1
     page_tick = time.time()
 
 # display the loading image
@@ -596,37 +596,26 @@ while dartsnut.running:
                 dartsnut.update_frame_buffer(menu_image)
         # widget mode
         elif (state == "widget"):
-            if (len(pages) > 1) & (not page_freeze):
-                if (time.time() - page_tick > int(pages[page_index]["duration"])) or (not pages[page_index]["enabled"]):
-                    # Find the next enabled page
-                    next_index = page_index
-                    found_enabled = False
-                    for _ in range(len(pages)):
-                        next_index = (next_index + 1) % len(pages)
-                        if pages[next_index].get("enabled", True) and pages[next_index]["uuid"] != "0":
-                            page_index = next_index
-                            found_enabled = True
-                            break
-                    if not found_enabled:
-                        page_index = len(pages) - 1  # uuid "0" page is always last
-                    page_tick = time.time()
-            # # render the framebuffer of all pages
-            # for page in pages:
-            #     for widget in page["widgets"]:
-            #         if widget["shm"].buf[0] == 0:
-            #             for widget in page["widgets"]:
-            #                 shm_buf = widget["shm"].buf
-            #                 x0, y0, x1, y1 = widget["widget"]["position"]
-            #                 width = x1 - x0 + 1
-            #                 height = y1 - y0 + 1
-            #                 for y in range(height):
-            #                     for x in range(width):
-            #                         src_idx = (y * width + x) * 3 + 1
-            #                         dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
-            #                         page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
-            #                 shm_buf[0] = 1
-            #render the current page to the screen
-            dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
+            # check if the widgets process is running:
+            if pages is None or len(pages) == 0:
+                reload_conf = True
+            else:
+                if (len(pages) > 1) & (not page_freeze):
+                    if (time.time() - page_tick > int(pages[page_index]["duration"])) or (not pages[page_index]["enabled"]):
+                        # Find the next enabled page
+                        next_index = page_index
+                        found_enabled = False
+                        for _ in range(len(pages)):
+                            next_index = (next_index + 1) % len(pages)
+                            if pages[next_index].get("enabled", True) and pages[next_index]["uuid"] != "0":
+                                page_index = next_index
+                                found_enabled = True
+                                break
+                        if not found_enabled:
+                            page_index = len(pages) - 1  # uuid "0" page is always last
+                        page_tick = time.time()
+                #render the current page to the screen  
+                dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
         # game selecting page
         elif (state == "game_select"):
             if len(game_list) > 0:
@@ -649,10 +638,10 @@ while dartsnut.running:
         # in game
         elif (state == "in_game"):
             # check if the game object is not None
-            if game is None:
+            if game is None or game == {}:
                 # trigger reload
                 reload_conf = True
-            # Check if the game process is still running
+            # if the game process is not polling, trigger reload
             elif game["process"].poll() is not None:
                 # trigger reload
                 reload_conf = True
@@ -917,21 +906,21 @@ while dartsnut.running:
                     reload_conf = True
                     state = "widget"
             elif device_info["model"] == "PixelDart":
-                # if already in menu, show widgets
+                # if already in menu, return to game or widget if process exists
                 if (state == "menu"):
-                    state = "widget"
+                    # if there is a game process, return to game
+                    if game is not None and "process" in game and game["process"].poll() is None:
+                        state = "in_game"
+                    elif pages is not None and len(pages) > 0:
+                        state = "widget"
                 # if in game, reload config and go to menu
-                elif (state == "in_game"):
-                    reload_conf = True
-                    state = "menu"
-                # otherwise go back to menu
                 else:
                     state = "menu"
         elif (buttons["btn_reserved"]):
             pass
             
         # render widgets
-        if pages is not None:
+        if pages is not None and len(pages) > 0:
             for page in pages:
                 for widget in page["widgets"]:
                     if widget["shm"].buf[0] == 0:
