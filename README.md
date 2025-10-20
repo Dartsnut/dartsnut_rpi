@@ -16,11 +16,10 @@ sudo apt install git
 
 ## 3. Clone the Project Repository
 
-In the `/home/rpi/` directory, run:
-
 ```bash
+sudo mkdir /home/rpi
 cd /home/rpi/
-git clone https://github.com/Dartsnut/dartsnut_rpi.git 
+sudo git clone https://github.com/Dartsnut/dartsnut_rpi.git 
 ```
 
 ## 4. Run the Setup Script
