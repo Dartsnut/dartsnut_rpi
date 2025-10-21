@@ -24,11 +24,13 @@ logo_image = Image.open("./logo.png").resize((128,128))
 game_icon = Image.open("./game_icon.png")
 settings_icon = Image.open("./settings_icon.png")
 widget_icon = Image.open("./widget_icon.png")
+lock_widget_icon = Image.open("./lock_widget_icon.png")
 # Load the game select image
 game_select_image = Image.open("./game_sel.png")
 # Load the font
 font12 = ImageFont.truetype("./Micro5.ttf", size=12)
 font16 = ImageFont.truetype("./Micro5.ttf", size=16)
+font24 = ImageFont.truetype("./Micro5.ttf", size=24)
 
 # Function to set PR_SET_PDEATHSIG
 def set_pdeathsig():
@@ -568,8 +570,20 @@ while dartsnut.running:
             elif device_info["model"] == "PixelDart":
                 # load the main menu
                 menu_image = Image.new("RGB", (128, 160), (0, 0, 0))
-                # paste the logo
-                menu_image.paste(logo_image, (0,0))
+                # if game process is running, show the game screen and add a overlay
+                if game is not None and "process" in game and game["process"].poll() is None:
+                    game_buf = game["shm"].buf[1:]
+                    game_image = Image.frombytes("RGB", (128, 128), bytes(game_buf))
+                    menu_image.paste(game_image, (0,0))
+                    overlay = Image.new('RGBA', (128, 128), (0, 0, 0, 128))
+                    menu_image.paste(overlay, (0, 0), overlay)
+                    draw = ImageDraw.Draw(menu_image)
+                    text = "B: End the game"
+                    text_bbox = draw.textbbox((0, 0), text, font=font24)
+                    draw.text(((128 - text_bbox[2]) / 2, (128 - text_bbox[3]) / 2), text, fill="white", font=font24)
+                else:
+                    # paste the logo
+                    menu_image.paste(logo_image, (0,0))
                 # paste the icons
                 menu_image.paste(game_icon, (4, 132), game_icon.convert("RGBA"))
                 menu_image.paste(widget_icon, (24, 132), widget_icon.convert("RGBA"))
@@ -614,8 +628,13 @@ while dartsnut.running:
                         if not found_enabled:
                             page_index = len(pages) - 1  # uuid "0" page is always last
                         page_tick = time.time()
-                #render the current page to the screen  
-                dartsnut.update_frame_buffer(pages[page_index]["framebuffer"])
+                # load the widgets' frame buffer
+                widget_img = Image.frombytes("RGB", (128, 160), bytes(pages[page_index]["framebuffer"]))
+                # overlay the lock icon if the widget is freezing
+                if page_freeze:
+                    widget_img.paste(lock_widget_icon, (117, 117), lock_widget_icon.convert("RGBA"))
+                #render the current page to the screen
+                dartsnut.update_frame_buffer(widget_img)
         # game selecting page
         elif (state == "game_select"):
             if len(game_list) > 0:
@@ -771,6 +790,11 @@ while dartsnut.running:
             # if in settings, go back to menu
             elif (state == "settings"):
                 state = "menu"
+            # if in menu and game process is running, terminate it
+            elif (state == "menu"):
+                if game is not None:
+                    term_game_process(game)
+                    game = None
         elif (buttons["btn_left"]):
             # select previous menu item
             if state == "menu":
