@@ -934,11 +934,15 @@ while dartsnut.running:
                 if (state == "menu"):
                     # if there is a game process, return to game
                     if game is not None and "process" in game and game["process"].poll() is None:
+                        game["process"].send_signal(signal.SIGCONT)
                         state = "in_game"
                     elif pages is not None and len(pages) > 0:
                         state = "widget"
                 # if in game, reload config and go to menu
                 else:
+                    # if there is a game process, pause the game
+                    if game is not None and "process" in game and game["process"].poll() is None:
+                        game["process"].send_signal(signal.SIGSTOP)
                     state = "menu"
         elif (buttons["btn_reserved"]):
             pass
