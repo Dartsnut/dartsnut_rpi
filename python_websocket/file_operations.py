@@ -75,25 +75,8 @@ def remove_directory(websocket, dir_name):
     try:
         # Remove the directory and its contents
         shutil.rmtree(full_dir_path)
-        # check the conf.json if there is any page using this widget
-        conf_path = os.path.join(os.getcwd(), APPS_DIR, "conf.json")
-        with open(conf_path, "r") as conf_file:
-            config = json.load(conf_file)
-            config_changed = False
-            for page in config["pages"]:
-                original_count = len(page["widgets"])
-                page["widgets"] = [widget for widget in page["widgets"] if widget.get("name") != dir_name]
-                if len(page["widgets"]) != original_count:
-                    config_changed = True
-                # if there is no widget in the page, remove the page
-                if len(page["widgets"]) == 0:
-                    config["pages"].remove(page)
-            if config_changed:
-                # Write the updated configuration back to conf.json
-                with open(conf_path, "w") as conf_file:
-                    json.dump(config, conf_file)
-            # Return success message 
-            return {"action": "remove_directory", "directory": dir_name, "config_changed": config_changed, "message": "Success"}
+        # Return success message 
+        return {"action": "remove_directory", "directory": dir_name, "message": "Success"}
     except Exception as e:
         return {"action": "remove_directory", "directory": dir_name, "error": f"Failed to remove directory: {str(e)}"}
 
