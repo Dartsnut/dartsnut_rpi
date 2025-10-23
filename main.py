@@ -192,12 +192,12 @@ def start_page_process(page):
         return None
 
 # Function to start the game process, return with the game process and shared memory object
-def start_game_process(game_id):
-    game_path = os.path.join(os.getcwd(), "apps", game_id)
+def start_game_process(gameid):
+    game_path = os.path.join(os.getcwd(), "apps", gameid)
 
     if not os.path.isdir(game_path):
         try:
-            response = requests.get(f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}")
+            response = requests.get(f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}")
             if response.status_code == 200:
                 download_info = response.json().get("data")
                 if download_info is not None:
@@ -205,7 +205,7 @@ def start_game_process(game_id):
                     game_download_md5 = download_info.get("game_download_md5")
                     download_app(game_download_url, game_download_md5)
             else:
-                print(f"Failed to get download info for game {game_id}: {response.status_code}")
+                print(f"Failed to get download info for game {gameid}: {response.status_code}")
         except Exception as e:
             print(f"Error fetching widget download info: {e}")
 
@@ -228,11 +228,11 @@ def start_game_process(game_id):
             shm.buf[1:1+len(img_bytes)] = img_bytes
             shm.buf[0] = 0
             # if the uuid is "0", it is a default widget
-            command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", game_id, "main.py")]
+            command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", gameid, "main.py")]
             command.extend(["--shm", shm_name])
             process = subprocess.Popen(
                 command,
-                cwd=os.path.join("./apps/", game_id),
+                cwd=os.path.join("./apps/", gameid),
                 preexec_fn=set_pdeathsig
             )
             return {"process":process, "shm": shm}
@@ -448,20 +448,11 @@ def get_widgets_framebuffer():
     return framebuffers
 
 # Function to start game from websocket
-def start_game(game_id):
-    global game
-    term_game_process(game)
-    game = start_game_process(game_id)
-    if game is not None:
-        global pages, state
-        term_widget_processes(pages)
-        state = "in_game"
-        return True
-    else:
-        # start game failed, go back to widget
-        global reload_conf
-        reload_conf = True
-        return False
+def start_game(gameid):
+    global start_game, game_id
+    start_game = True
+    game_id = gameid
+    return True
 
 # Function to init the widgets
 def init_widgets():
@@ -472,6 +463,12 @@ def init_widgets():
     # terminate all existing widget and game processes
     term_widget_processes(pages)
     term_game_process(game)
+    #check if apps folder and apps/conf.json exist
+    if not os.path.isdir("./apps"):
+        os.makedirs("./apps")
+    if not os.path.isfile("./apps/conf.json"):
+        with open("./apps/conf.json", "w") as config_file:
+            json.dump({"user": "","date": "","pages": [{"uuid": "e7b8c2e2-4f3a-4b7e-9c1a-2d6e8f5a1b3c","title": "factory_tool","duration" : "60","combination" : "0","enabled" : True,"widgets" : [{"id": "factory_tool","position": [0,0,127,159],"fields": {}}]}]}, config_file)
     # Read configuration from conf.json
     with open("./apps/conf.json", "r") as config_file:
         pages = init_pages(json.load(config_file))
@@ -496,30 +493,6 @@ with open("./device.json", 'r') as file:
 # set the volume
 set_volume(int(device_info.get('volume', "50")) )
 
-#check if apps folder and apps/conf.json exist
-if not os.path.isdir("./apps"):
-    os.makedirs("./apps")
-if not os.path.isfile("./apps/conf.json"):
-    with open("./apps/conf.json", "w") as config_file:
-        json.dump({
-            "user": "",
-            "date": "",
-            "pages": [
-                {
-                    "uuid": "e7b8c2e2-4f3a-4b7e-9c1a-2d6e8f5a1b3c",
-                    "title": "factory_tool",
-                    "duration" : "60",
-                    "combination" : "0",
-                    "enabled" : True,
-                    "widgets" : [{
-                        "id": "factory_tool",
-                        "position": [0,0,127,159],
-                        "fields": {}
-                    }]
-                }
-            ]
-        }, config_file)
-
 # start ble server
 ble_thread = threading.Thread(target=start_ble_server, daemon=True)
 ble_thread.start()
@@ -531,7 +504,8 @@ websocket_thread.start()
 # Declare globals only if they have been defined previously
 global_vars = [
     "pages", "page_index", "page_freeze", "locate_device_intv", "reload_conf",
-    "game", "game_index", "game_list", "state", "page_tick", "setting_select_index"
+    "game", "game_index", "game_list", "state", "page_tick", "setting_select_index",
+    "start_game", "game_id"
 ]
 for var in global_vars:
     if var in globals():
@@ -542,6 +516,8 @@ for var in global_vars:
 
 # init
 state = "menu"
+reload_conf = False
+start_game = False
 menu_select_index = 0
 setting_select_index = 0
 init_widgets()
@@ -560,6 +536,14 @@ while dartsnut.running:
             reload_conf = False
             # call init widgets
             init_widgets()
+        # start game from websocket
+        elif start_game:
+            start_game = False
+            term_game_process(game)
+            game = start_game_process(game_id)
+            if game is not None:
+                term_widget_processes(pages)
+                state = "in_game"
         # main menu
         elif (state == "menu"):
             # check the modal
