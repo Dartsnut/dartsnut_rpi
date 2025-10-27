@@ -376,15 +376,30 @@ def set_brightness(brightness):
 
 # Function to set volume
 def set_volume(volume):
-    # Map the volume from (0,100) to (50,100)
-    mapped_volume = int(50 + (volume / 100) * 50)
-    # Set the volume on the device
     try:
-        subprocess.run(
-            ['amixer', '-c', '0', 'sset', 'PCM', f'{mapped_volume}%'],
-            check=True,
-            capture_output=True
-        )
+        if volume == 0:
+            # Mute audio when volume is 0
+            subprocess.run(
+                ['amixer', '-c', '0', 'sset', 'PCM', 'mute'],
+                check=True,
+                capture_output=True
+            )
+        else:
+            # Unmute and set volume when volume > 0
+            # Map the volume from (0,100) to (50,100)
+            mapped_volume = int(50 + (volume / 100) * 50)
+            # First unmute, then set volume
+            subprocess.run(
+                ['amixer', '-c', '0', 'sset', 'PCM', 'unmute'],
+                check=True,
+                capture_output=True
+            )
+            subprocess.run(
+                ['amixer', '-c', '0', 'sset', 'PCM', f'{mapped_volume}%'],
+                check=True,
+                capture_output=True
+            )
+        
         try:
             # Read the existing device info
             with open("./device.json", 'r') as file:
