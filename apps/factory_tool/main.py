@@ -8,6 +8,9 @@ import json
 import threading
 import os
 from evdev import InputDevice, categorize, ecodes
+import fcntl
+import struct
+import array
 
 dartsnut = Dartsnut()
 
@@ -16,6 +19,7 @@ with open("/home/rpi/dartsnut_rpi/device.json", "r") as f:
 
 dart_mode = False
 currentImage = Image.new("RGB",(128,160))
+traceOverlay = Image.new("RGBA",(128,160))
 draw = ImageDraw.Draw(currentImage)
 colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
 for i in range(128):
@@ -62,6 +66,7 @@ def barcode_listener():
                 if event.type == ecodes.EV_KEY and event.value == 1:  # Key down
                     key_event = categorize(event)
                     keycode = key_event.keycode
+                    print(keycode)
                     if isinstance(keycode, list):
                         keycode = keycode[0]
                     if keycode == 'KEY_ENTER':
@@ -69,18 +74,69 @@ def barcode_listener():
                         with open("/home/rpi/dartsnut_rpi/device.json", "w") as f:
                             json.dump(device_config, f)
                         barcode = ""
-                    elif keycode.startswith('KEY_'):
+                    elif keycode.startswith('KEY_') and keycode != 'KEY_CAPSLOCK':
                         char = keycode[4:]
-                        # Only allow single alphanumeric characters, ignore modifier keys including CAPSLOCK
-                        if char.isdigit() or (len(char) == 1 and char.isalpha()):
-                            barcode += char.upper()
+                        if char.isdigit():
+                            barcode += char
+                        elif char.isalpha():
+                                barcode += char.upper()
         except Exception as e:
             print(f"Error reading barcode scanner: {e}")
             time.sleep(1)
 
+def get_emr_version():
+    try:
+        # Open the hidraw device
+        device_path = '/dev/hidraw1'
+        fd = open(device_path, 'rb+', buffering=0)
+
+        # HIDIOCGFEATURE ioctl - construct it properly for your architecture
+        # _IOC_READ = 2, _IOC_WRITE = 1
+        # For HIDIOCGFEATURE: _IOR('H', 0x07, struct)
+        # On 64-bit systems: 0xC0404807, on 32-bit: 0xC0204807
+        # Let's calculate it dynamically
+        _IOC_NRBITS = 8
+        _IOC_TYPEBITS = 8
+        _IOC_SIZEBITS = 14
+        _IOC_DIRBITS = 2
+
+        _IOC_NRSHIFT = 0
+        _IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
+        _IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
+        _IOC_DIRSHIFT = _IOC_SIZESHIFT + _IOC_SIZEBITS
+
+        _IOC_READ = 2
+
+        def _IOC(dir, type_char, nr, size):
+            return (dir << _IOC_DIRSHIFT) | (ord(type_char) << _IOC_TYPESHIFT) | \
+                (nr << _IOC_NRSHIFT) | (size << _IOC_SIZESHIFT)
+
+        def _IOR(type_char, nr, size):
+            return _IOC(_IOC_READ, type_char, nr, size)
+
+        report_id = 0x04
+        length = 8
+
+        # Prepare buffer - use array instead of bytearray
+        buf = array.array('B', [report_id] + [0] * (length - 1))
+
+        # Construct HIDIOCGFEATURE with the correct size
+        HIDIOCGFEATURE = _IOR('H', 0x07, len(buf))
+
+        result = fcntl.ioctl(fd, HIDIOCGFEATURE, buf, True)  # True = mutate buffer
+        ascii_string = ''.join(chr(b) for b in buf if 32 <= b < 127)
+        return ascii_string
+    except Exception as e:
+        print(f"Error getting feature report: {e}")
+        return None
+
+
 # Start the barcode listener thread
 barcode_thread = threading.Thread(target=barcode_listener, args=(), daemon=False)
 barcode_thread.start()
+
+# Read emr version
+emr_version = get_emr_version()
 
 old_buttons = {}
 burning_intv = 0
@@ -112,7 +168,8 @@ while dartsnut.running:
             pattern_index = 3
         elif buttons["btn_home"]:
             pattern_index = 6
-            
+            traceOverlay.paste((0,0,0,0), (0,0,128,160))
+
     if pattern_index == 0:
         draw.rectangle([(0, 0), currentImage.size], fill="#ffffff")
         _, _, w, h = draw.textbbox((0, 0), device_config["serial"], font_size=20)
@@ -139,19 +196,44 @@ while dartsnut.running:
             for j in range(160):
                 color = colors[(i + j) % 3]
                 draw.point((i, j), fill=color)
+    elif pattern_index == 6:
+        # draw the emr version
+        if emr_version:
+            # Define the box for the "emr_version" text
+            box = (0, 144, 63, 159)
+            # Get the bounding box of the text to center it
+            _, _, w, h = draw.textbbox((0, 0), emr_version, font_size=12)
+            # Calculate position to center the text in the box
+            x = box[0] + (box[2] - box[0] - w) / 2
+            y = box[1] + (box[3] - box[1] - h) / 2
+            # Draw the text
+            draw.text((x, y), emr_version, fill=(255, 255, 255), font_size=12)
+
+        # check if all 12 darts are present
+        all_present = all(dart != [-1, -1] for dart in darts)
+        if all_present:
+            # Define the box for the "OK" text
+            box = (0, 128, 63, 143)
+            # Get the bounding box of the text to center it
+            _, _, w, h = draw.textbbox((0, 0), "OK", font_size=16)
+            # Calculate position to center the text in the box
+            x = box[0] + (box[2] - box[0] - w) / 2
+            y = box[1] + (box[3] - box[1] - h) / 2
+            # Draw the text
+            draw.text((x, y), "OK", fill=(255, 255, 255), font_size=16)
 
     # draw the darts
     darts = dartsnut.get_darts()
     for idx, dart in enumerate(darts):
         if (dart != [-1,-1]):
-            _, _, w, h = draw.textbbox((0, 0), str(idx), font_size=12)
+            _, _, w, h = draw.textbbox((0, 0), str(idx), font_size=16)
             # Draw black outline for the text
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
                     if dx != 0 or dy != 0:
-                        draw.text((dart[0]-w/2+dx, dart[1]-h/2+dy), str(idx), (0,0,0), font_size=12)
+                        draw.text((dart[0]-w/2+dx, dart[1]-h/2+dy), str(idx), (0,0,0), font_size=16)
             # Draw the colored text on top
-            draw.text((dart[0]-w/2, dart[1]-h/2), str(idx), dart_color_table[idx], font_size=12)
+            draw.text((dart[0]-w/2, dart[1]-h/2), str(idx), dart_color_table[idx], font_size=16)
             # Draw black outline first
             draw.ellipse(
                 [
@@ -170,6 +252,18 @@ while dartsnut.running:
                 outline=dart_circle_table[idx],
                 width=2
             )
+            # draw the trace
+            trace_draw = ImageDraw.Draw(traceOverlay)
+            trace_draw.rectangle(
+                [
+                    (dart[0] - 1, dart[1] - 1),
+                    (dart[0] + 1, dart[1] + 1)
+                ],
+                fill=dart_color_table[idx]
+            )
+
+    # draw the trace overlay
+    currentImage.paste(traceOverlay, (0, 0), traceOverlay)
 
     if buttons["btn_reserved"] and not old_buttons.get("btn_reserved", False):
         import subprocess
