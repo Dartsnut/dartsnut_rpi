@@ -97,6 +97,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
                 else:
                     await send_response(req_id, {"action": "get_widgets_screen", "error": "Function not available"})
+            elif action == "get_wifi_rssi":
+                try:
+                    # Run the command to get signal level
+                    result = subprocess.check_output("iwconfig wlan0 | grep -i --color=never 'Signal level'", shell=True).decode('utf-8')
+                    # Extract the signal level value (e.g., -56)
+                    rssi = result.split("Signal level=")[1].split(" ")[0]
+                    await send_response(req_id, {"action": "get_wifi_rssi", "rssi": rssi})
+                except Exception as e:
+                    await send_response(req_id, {"action": "get_wifi_rssi", "error": str(e)})
             elif action == "forget_wifi":
                 subprocess.run("nmcli -t -f NAME,TYPE connection show | grep 802-11-wireless | cut -d: -f1 | xargs -r -n1 nmcli connection delete", shell=True)
                 subprocess.run("nmcli radio wifi off && nmcli radio wifi on", shell=True)

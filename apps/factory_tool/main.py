@@ -74,12 +74,12 @@ def barcode_listener():
                         with open("/home/rpi/dartsnut_rpi/device.json", "w") as f:
                             json.dump(device_config, f)
                         barcode = ""
-                    elif keycode.startswith('KEY_') and keycode != 'KEY_CAPSLOCK':
+                    elif keycode.startswith('KEY_'):
                         char = keycode[4:]
                         if char.isdigit():
                             barcode += char
-                        elif char.isalpha():
-                                barcode += char.upper()
+                        elif len(char) == 1 and char.isalpha():
+                            barcode += char.upper()
         except Exception as e:
             print(f"Error reading barcode scanner: {e}")
             time.sleep(1)
@@ -141,7 +141,6 @@ emr_version = get_emr_version()
 old_buttons = {}
 burning_intv = 0
 dart_color_table = [(0,0,255),(255,0,0),(0,255,0),(255,255,0),(0,0,255),(255,0,0),(0,255,0),(255,255,0),(0,0,255),(255,0,0),(0,255,0),(255,255,0)]
-dart_circle_table = [(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0),(0,0,255),(255,0,0)]
 
 while dartsnut.running:
     time.sleep(0.05)
@@ -209,19 +208,6 @@ while dartsnut.running:
             # Draw the text
             draw.text((x, y), emr_version, fill=(255, 255, 255), font_size=12)
 
-        # check if all 12 darts are present
-        all_present = all(dart != [-1, -1] for dart in darts)
-        if all_present:
-            # Define the box for the "OK" text
-            box = (0, 128, 63, 143)
-            # Get the bounding box of the text to center it
-            _, _, w, h = draw.textbbox((0, 0), "OK", font_size=16)
-            # Calculate position to center the text in the box
-            x = box[0] + (box[2] - box[0] - w) / 2
-            y = box[1] + (box[3] - box[1] - h) / 2
-            # Draw the text
-            draw.text((x, y), "OK", fill=(255, 255, 255), font_size=16)
-
     # draw the darts
     darts = dartsnut.get_darts()
     for idx, dart in enumerate(darts):
@@ -237,8 +223,8 @@ while dartsnut.running:
             # Draw black outline first
             draw.ellipse(
                 [
-                    (dart[0] - 10, dart[1] - 10),
-                    (dart[0] + 10, dart[1] + 10)
+                    (dart[0] - 12, dart[1] - 12),
+                    (dart[0] + 12, dart[1] + 12)
                 ],
                 outline=(0, 0, 0),
                 width=4
@@ -246,10 +232,10 @@ while dartsnut.running:
             # Draw colored outline on top
             draw.ellipse(
                 [
-                    (dart[0] - 10, dart[1] - 10),
-                    (dart[0] + 10, dart[1] + 10)
+                    (dart[0] - 12, dart[1] - 12),
+                    (dart[0] + 12, dart[1] + 12)
                 ],
-                outline=dart_circle_table[idx],
+                outline=dart_color_table[idx],
                 width=2
             )
             # draw the trace
@@ -261,6 +247,48 @@ while dartsnut.running:
                 ],
                 fill=dart_color_table[idx]
             )
+    
+    # check if all 12 darts are present
+    all_present = all(dart != [-1, -1] for dart in darts)
+    if all_present:
+        # Define the box for the "OK" text
+        box = (0, 128, 63, 143)
+        # Get the bounding box of the text to center it
+        _, _, w, h = draw.textbbox((0, 0), "12OK", font_size=16)
+        # Calculate position to center the text in the box
+        x = box[0] + (box[2] - box[0] - w) / 2
+        y = box[1] + (box[3] - box[1] - h) / 2
+        # Draw black border by drawing the text at the surrounding offsets
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((x + dx, y + dy), "12OK", fill=(0, 0, 0), font_size=16)
+        # Draw the white text on top
+        draw.text((x, y), "12OK", fill=(255, 255, 255), font_size=16)
+    #check if only 014589 darts are present
+    target_indices = {0, 1, 4, 5, 8, 9}
+    only_targets_present = all(
+        (dart != [-1, -1]) if i in target_indices else (dart == [-1, -1])
+        for i, dart in enumerate(darts)
+    )
+
+    if only_targets_present:
+        # Define the box for the "6OK" text
+        box = (0, 128, 63, 143)
+        # Get the bounding box of the text to center it
+        _, _, w, h = draw.textbbox((0, 0), "6OK", font_size=16)
+        # Calculate position to center the text in the box
+        x = box[0] + (box[2] - box[0] - w) / 2
+        y = box[1] + (box[3] - box[1] - h) / 2
+        # Draw black border by drawing the text at the surrounding offsets
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((x + dx, y + dy), "6OK", fill=(0, 0, 0), font_size=16)
+        # Draw the white text on top
+        draw.text((x, y), "6OK", fill=(255, 255, 255), font_size=16)
 
     # draw the trace overlay
     currentImage.paste(traceOverlay, (0, 0), traceOverlay)

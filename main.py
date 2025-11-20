@@ -737,9 +737,13 @@ while dartsnut.running:
                     else:
                         draw.text((value_x, y + 8), value_str, fill="white", font=font16)
                 elif item["name"] == "Network":
-                    draw.text((64, y + 8), ip_address, fill="white")
+                    text_bbox = draw.textbbox((0, 0), ip_address, font=font16)
+                    text_width = text_bbox[2] - text_bbox[0]
+                    draw.text((48 + (80 - text_width) / 2, y + 8), ip_address, fill="white", font=font16)
                 elif item["name"] == "Version":
-                    draw.text((64, y + 8), version, fill="white", font=font16)
+                    text_bbox = draw.textbbox((0, 0), version, font=font16)
+                    text_width = text_bbox[2] - text_bbox[0]
+                    draw.text((48 + (80 - text_width) / 2, y + 8), version, fill="white", font=font16)
             # Draw the settings icon at the bottom
             settings_image.paste(settings_icon, (24, 128), settings_icon.convert("RGBA"))
             text_bbox = draw.textbbox((0, 0), "Settings", font=font12)
@@ -770,7 +774,7 @@ while dartsnut.running:
 
             # button A to toggle widget freeze in widget mode
             elif state == "widget":
-                page_freeze = ~page_freeze
+                page_freeze = not page_freeze
                 page_tick = time.time()
             # button A to start game in game select
             elif state == "game_select":
@@ -922,7 +926,7 @@ while dartsnut.running:
             if device_info["model"] == "PixelBoard":
                 # to toggle widget freeze in widget mode
                 if state == "widget":
-                    page_freeze = ~page_freeze
+                    page_freeze = not page_freeze
                     page_tick = time.time()
                 # if in game, exit the game and go back to widget
                 if (state == "in_game"):
