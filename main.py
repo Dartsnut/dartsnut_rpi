@@ -187,6 +187,12 @@ def start_page_process(page):
                     continue
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
+        # pause all widgets process
+        for widget in widgets:
+            try:
+                os.kill(widget["process"].pid, signal.SIGSTOP)
+            except Exception as e:
+                print(f"Error pausing widget process: {e}")
         return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "framebuffer": bytearray(loading_image.tobytes()), "enabled": page.get("enabled", True)}
     else:
         return None
@@ -471,7 +477,7 @@ def start_game(gameid):
 
 # Function to init the widgets
 def init_widgets():
-    global pages, page_index, page_freeze, locate_device_intv, reload_conf, game, game_index, game_list, state, page_tick
+    global pages, page_index, page_freeze, locate_device_intv, reload_conf, game, game_index, game_list, state, page_tick, last_page_index, next_page_prepared_index
     # go back to menu if in game
     if state == "in_game":
         state = "menu"
@@ -489,6 +495,8 @@ def init_widgets():
         pages = init_pages(json.load(config_file))
     #init variables   
     page_index = 0
+    last_page_index = -1
+    next_page_prepared_index = -1
     page_freeze = False
     locate_device_intv = 0
     reload_conf = False
@@ -613,20 +621,50 @@ while dartsnut.running:
             if pages is None or len(pages) == 0:
                 reload_conf = True
             else:
-                if (len(pages) > 1) & (not page_freeze):
+                if (len(pages) > 1) and (not page_freeze):
+                    # Calculate the next page index
+                    next_index = page_index
+                    found_enabled = False
+                    for _ in range(len(pages)):
+                        next_index = (next_index + 1) % len(pages)
+                        if pages[next_index].get("enabled", True) and pages[next_index]["uuid"] != "0":
+                            found_enabled = True
+                            break
+                    if not found_enabled:
+                        next_index = len(pages) - 1  # uuid "0" page is always last
+
+                    # Check if we should prepare the next page (1s before duration)
+                    if (time.time() - page_tick > int(pages[page_index]["duration"]) - 3) and (next_page_prepared_index != next_index):
+                        print("prepare next page:", next_index, time.time())
+                        for widget in pages[next_index]["widgets"]:
+                            try:
+                                os.kill(widget["process"].pid, signal.SIGCONT)
+                            except Exception as e:
+                                print(f"Error resuming next widget process: {e}")
+                        next_page_prepared_index = next_index
+
                     if (time.time() - page_tick > int(pages[page_index]["duration"])) or (not pages[page_index]["enabled"]):
-                        # Find the next enabled page
-                        next_index = page_index
-                        found_enabled = False
-                        for _ in range(len(pages)):
-                            next_index = (next_index + 1) % len(pages)
-                            if pages[next_index].get("enabled", True) and pages[next_index]["uuid"] != "0":
-                                page_index = next_index
-                                found_enabled = True
-                                break
-                        if not found_enabled:
-                            page_index = len(pages) - 1  # uuid "0" page is always last
+                        print("switch to next page:", next_index, time.time())
+                        page_index = next_index
                         page_tick = time.time()
+                        next_page_prepared_index = -1
+
+                # resume the current page's process and pause other page's process
+                if page_index != last_page_index:
+                    for i in range(len(pages)):
+                        if i == page_index:
+                            for widget in pages[i]["widgets"]:
+                                try:
+                                    os.kill(widget["process"].pid, signal.SIGCONT)
+                                except Exception as e:
+                                    print(f"Error resuming widget process: {e}")
+                        else:
+                            for widget in pages[i]["widgets"]:
+                                try:
+                                    os.kill(widget["process"].pid, signal.SIGSTOP)
+                                except Exception as e:
+                                    print(f"Error pausing widget process: {e}")
+                    last_page_index = page_index
                 # load the widgets' frame buffer
                 widget_img = Image.frombytes("RGB", (128, 160), bytes(pages[page_index]["framebuffer"]))
                 # overlay the lock icon if the widget is freezing
