@@ -2,6 +2,7 @@ from python_websocket.file_operations import receive_file, send_file, remove_dir
 from python_websocket.json_operations import read_json_file, write_json_file, get_device_info, set_device_name
 from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
 from python_websocket.git_operations import check_update, perform_update, get_version
+from python_websocket.udp_broadcast import udp_broadcast
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -11,6 +12,8 @@ from PIL import Image
 from io import BytesIO
 import subprocess
 import uvicorn
+import socket
+import threading
 
 app = FastAPI()
 
@@ -137,6 +140,10 @@ async def websocket_endpoint(websocket: WebSocket):
             # await websocket.close()
 
 def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None, start_game_process=None):
+    # Start UDP broadcast thread
+    udp_thread = threading.Thread(target=udp_broadcast, daemon=True)
+    udp_thread.start()
+    # Start WebSocket server
     websocket_endpoint.set_brightness = set_brightness if set_brightness else None
     websocket_endpoint.locate_device = locate_device if locate_device else None
     websocket_endpoint.reload_config = reload_config if reload_config else None

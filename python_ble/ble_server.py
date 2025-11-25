@@ -51,18 +51,25 @@ class UARTDevice:
             elif (command == "scan_wifi"):
                 # Use a system command to scan for WiFi networks
                 try:
-                    subprocess.run(['nmcli', 'dev', 'wifi', 'rescan'], capture_output=True)
-                    result = subprocess.run(['iwlist', 'wlan0', 'scan'], capture_output=True, text=True, check=True)
+                    subprocess.run(['sudo', 'nmcli', 'dev', 'wifi', 'rescan'], capture_output=True, text=True, check=True)
+                    # Use nmcli for scanning instead of iwlist (more reliable and easier to parse)
+                    result = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list'], capture_output=True, text=True, check=True)
                     networks = []
+                    seen_ssids = set()
+                    
                     for line in result.stdout.splitlines():
-                        if "ESSID" in line:
-                            essid = line.split(':')[1].strip('"')
-                            if essid:
-                                networks.append(essid)
+                        parts = line.split(':')
+                        if len(parts) >= 1:
+                            ssid = parts[0].replace(r'\:', ':')
+                            if ssid and ssid not in seen_ssids:
+                                networks.append(ssid)
+                                seen_ssids.add(ssid)
+                                
                                 total_bytes = sum(len(n.encode('utf-8')) for n in networks)
                                 if total_bytes > 64:
                                     cls.send_data({"command": "scan_wifi", "networks": networks})
                                     networks = []
+                                    
                     # After the loop, send any remaining SSIDs
                     if networks:
                         cls.send_data({"command": "scan_wifi", "networks": networks, "end": True})
@@ -109,13 +116,50 @@ class UARTDevice:
                 if ssid and password:
                     try:
                         # Use nmcli to connect to the WiFi network
-                        result = subprocess.run(['nmcli', 'dev', 'wifi', 'connect', ssid, 'password', password], capture_output=True, text=True, check=True)
-                        cls.send_data({"command": "connect_wifi", "status": "success"})
+                        # Try connecting with WPA-PSK first (most common)
+                        try:
+                            result = subprocess.run(['nmcli', 'dev', 'wifi', 'connect', ssid, 'password', password], capture_output=True, text=True, check=True)
+                            # Get IP address
+                            ip_res = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=False)
+                            ip_address = ip_res.stdout.strip().split()[0] if ip_res.stdout.strip() else ""
+                            cls.send_data({"command": "connect_wifi", "status": "success", "ip_address": ip_address})
+                        except subprocess.CalledProcessError:
+                            # If that fails, try specifying WPA-PSK explicitly (sometimes needed for nmcli)
+                            # Or try without specifying security if it's open (though password implies security)
+                            # This fallback attempts to delete any existing connection profile first to avoid conflicts
+                            # Delete existing connection if any (ignore errors if it doesn't exist)
+                            subprocess.run(['nmcli', 'connection', 'delete', ssid], capture_output=True, check=False)
+                            # Create new connection profile manually
+                            subprocess.run(['nmcli', 'con', 'add', 'type', 'wifi', 'ifname', 'wlan0', 'con-name', ssid, 'ssid', ssid], capture_output=True, check=False)
+                            subprocess.run(['nmcli', 'con', 'modify', ssid, 'wifi-sec.key-mgmt', 'wpa-psk'], capture_output=True, check=False)
+                            subprocess.run(['nmcli', 'con', 'modify', ssid, 'wifi-sec.psk', password], capture_output=True, check=False)
+                            # Bring up the connection
+                            result = subprocess.run(['nmcli', 'con', 'up', ssid], capture_output=True, text=True, check=True)
+                            # Get IP address
+                            ip_res = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=False)
+                            ip_address = ip_res.stdout.strip().split()[0] if ip_res.stdout.strip() else ""
+                            cls.send_data({"command": "connect_wifi", "ip_address": ip_address, "status": "success"})
                     except subprocess.CalledProcessError as e:
                         print("Failed to connect to WiFi:", e)
                         cls.send_data({"command": "connect_wifi", "status": "error", "message": str(e)})
                 else:
                     cls.send_data({"command": "connect_wifi", "status": "error", "message": "SSID or password missing"})
+            elif (command == "reconnect_wifi"):
+                # Disconnect and reconnect WiFi
+                try:
+                    # Disconnect
+                    subprocess.run(['nmcli', 'dev', 'disconnect', 'wlan0'], capture_output=True, check=False)
+                    time.sleep(2)
+                    # Reconnect (bring up the device, nmcli usually auto-connects to known networks)
+                    subprocess.run(['nmcli', 'dev', 'connect', 'wlan0'], capture_output=True, text=True, check=True)
+                    time.sleep(2)
+                    # Get IP address
+                    ip_res = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=False)
+                    ip_address = ip_res.stdout.strip().split()[0] if ip_res.stdout.strip() else ""
+                    cls.send_data({"command": "reconnect_wifi", "ip_address": ip_address, "status": "success"})
+                except subprocess.CalledProcessError as e:
+                    print("Failed to reconnect WiFi:", e)
+                    cls.send_data({"command": "reconnect_wifi", "status": "error", "message": str(e)})
             elif (command == "device_info"):
                 try:
                     # Get the MAC address of the device

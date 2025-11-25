@@ -25,6 +25,8 @@ game_icon = Image.open("./game_icon.png")
 settings_icon = Image.open("./settings_icon.png")
 widget_icon = Image.open("./widget_icon.png")
 lock_widget_icon = Image.open("./lock_widget_icon.png")
+wifi_disconnect_icon = Image.open("./wifi_disconnect_icon.png")
+internet_disconnect_icon = Image.open("./internet_disconnect_icon.png")
 # Load the game select image
 game_select_image = Image.open("./game_sel.png")
 # Load the font
@@ -507,6 +509,43 @@ def init_widgets():
         game_list.clear()
     page_tick = time.time()
 
+# Function to check WiFi and Internet connection in a loop
+def check_connection_loop():
+    global wifi_connected, internet_connected
+    while True:
+        try:
+            # Check WiFi connection
+            # iwgetid returns 0 if connected to an AP, non-zero otherwise
+            wifi_check = subprocess.run(['iwgetid'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wifi_connected = (wifi_check.returncode == 0)
+
+            # Check Internet connection (ping github.com)
+            if wifi_connected:
+                # -c 1: count 1, -W 2: timeout 2 seconds
+                internet_check = subprocess.run(['ping', '-c', '1', '-W', '2', 'github.com'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                internet_connected = (internet_check.returncode == 0)
+            else:
+                internet_connected = False
+        except Exception as e:
+            print(f"Error checking connection: {e}")
+            wifi_connected = False
+            internet_connected = False
+        time.sleep(10)
+
+# Declare globals only if they have been defined previously
+global_vars = [
+    "pages", "page_index", "page_freeze", "locate_device_intv", "reload_conf",
+    "game", "game_index", "game_list", "state", "page_tick", "setting_select_index",
+    "start_game", "game_id", "wifi_connected", "internet_connected", "last_page_index",
+    "next_page_prepared_index"
+]
+for var in global_vars:
+    if var in globals():
+        globals()[var]
+    else:
+        # Optionally, initialize to None or suitable default if not declared
+        globals()[var] = None
+
 # display the loading image
 dartsnut.update_frame_buffer(loading_image)
 
@@ -524,18 +563,9 @@ ble_thread.start()
 websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game), daemon=True)
 websocket_thread.start()
 
-# Declare globals only if they have been defined previously
-global_vars = [
-    "pages", "page_index", "page_freeze", "locate_device_intv", "reload_conf",
-    "game", "game_index", "game_list", "state", "page_tick", "setting_select_index",
-    "start_game", "game_id"
-]
-for var in global_vars:
-    if var in globals():
-        globals()[var]
-    else:
-        # Optionally, initialize to None or suitable default if not declared
-        globals()[var] = None
+# Start the connection check thread
+connection_thread = threading.Thread(target=check_connection_loop, daemon=True)
+connection_thread.start()
 
 # init
 state = "menu"
@@ -632,23 +662,19 @@ while dartsnut.running:
                             break
                     if not found_enabled:
                         next_index = len(pages) - 1  # uuid "0" page is always last
-
-                    # Check if we should prepare the next page (1s before duration)
+                    # Check if we should prepare the next page (3s before duration)
                     if (time.time() - page_tick > int(pages[page_index]["duration"]) - 3) and (next_page_prepared_index != next_index):
-                        print("prepare next page:", next_index, time.time())
                         for widget in pages[next_index]["widgets"]:
                             try:
                                 os.kill(widget["process"].pid, signal.SIGCONT)
                             except Exception as e:
                                 print(f"Error resuming next widget process: {e}")
                         next_page_prepared_index = next_index
-
+                    # Check if we should switch to the next page
                     if (time.time() - page_tick > int(pages[page_index]["duration"])) or (not pages[page_index]["enabled"]):
-                        print("switch to next page:", next_index, time.time())
                         page_index = next_index
                         page_tick = time.time()
                         next_page_prepared_index = -1
-
                 # resume the current page's process and pause other page's process
                 if page_index != last_page_index:
                     for i in range(len(pages)):
@@ -670,6 +696,15 @@ while dartsnut.running:
                 # overlay the lock icon if the widget is freezing
                 if page_freeze:
                     widget_img.paste(lock_widget_icon, (117, 117), lock_widget_icon.convert("RGBA"))
+                # check the connection status and overlay the icon
+                if not wifi_connected:
+                    # overlay the wifi disconnected icon at top right corner
+                    if (time.time() % 2) < 1:  # blink every second
+                        widget_img.paste(wifi_disconnect_icon, (117, 0), wifi_disconnect_icon.convert("RGBA"))
+                elif not internet_connected:
+                    # overlay the internet disconnected icon at top right corner
+                    if (time.time() % 2) < 1:  # blink every second
+                        widget_img.paste(internet_disconnect_icon, (117, 0), internet_disconnect_icon.convert("RGBA"))
                 #render the current page to the screen
                 dartsnut.update_frame_buffer(widget_img)
         # game selecting page
