@@ -20,6 +20,8 @@ dartsnut = Dartsnut()
 loading_image = Image.open("./loading.png")
 # Load the logo image
 logo_image = Image.open("./logo.png").resize((128,128))
+# Load the identify image
+identify_image = Image.open("./identify.png")
 # Load the icons
 game_icon = Image.open("./game_icon.png")
 settings_icon = Image.open("./settings_icon.png")
@@ -581,8 +583,7 @@ while dartsnut.running:
         time.sleep(1/30)
         # locate device
         if locate_device_intv:
-            buffer = bytearray([255] * (128 * 160 * 3))
-            dartsnut.update_frame_buffer(buffer)
+            dartsnut.update_frame_buffer(identify_image)
             locate_device_intv -= 1
         # reload configuration
         elif reload_conf:
