@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import base64
+import subprocess
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 HOME_DIR = ""
@@ -46,6 +47,20 @@ def get_device_info():
         with open('/sys/class/net/wlan0/address', 'r') as file:
             mac_address = file.read().strip()
             device_info["mac_address"] = mac_address
+
+        # Get the wifi ssid of the current connection
+        ssid = ""
+        try:
+            # Check connection status
+            result = subprocess.run(['nmcli', '-t', '-f', 'active,ssid', 'dev', 'wifi'], capture_output=True, text=True, check=True)
+            connected_info = [line for line in result.stdout.splitlines() if line.startswith("yes:")]
+            if connected_info:
+                _, ssid = connected_info[0].split(':')
+            else:
+                ssid = ""
+        except Exception as e:
+            ssid = ""
+        device_info["ssid"] = ssid
         
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:

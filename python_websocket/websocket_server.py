@@ -3,6 +3,7 @@ from python_websocket.json_operations import read_json_file, write_json_file, ge
 from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
 from python_websocket.git_operations import check_update, perform_update, get_version
 from python_websocket.udp_broadcast import udp_broadcast
+from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -94,30 +95,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 await send_response(req_id, pair_and_connect_device(message.get("address")))
             elif action == "download_app":
                 await send_response(req_id, download_app(message.get("url"), message.get("md5")))
-            elif action == "get_widgets_screen":
-                if websocket_endpoint.get_widgets_framebuffer:
-                    framebuffers = websocket_endpoint.get_widgets_framebuffer()
-                    await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
-                else:
-                    await send_response(req_id, {"action": "get_widgets_screen", "error": "Function not available"})
-            elif action == "get_wifi_rssi":
-                try:
-                    # Run the command to get signal level
-                    result = subprocess.check_output("iwconfig wlan0 | grep -i --color=never 'Signal level'", shell=True).decode('utf-8')
-                    # Extract the signal level value (e.g., -56)
-                    rssi = result.split("Signal level=")[1].split(" ")[0]
-                    await send_response(req_id, {"action": "get_wifi_rssi", "rssi": rssi})
-                except Exception as e:
-                    await send_response(req_id, {"action": "get_wifi_rssi", "error": str(e)})
-            elif action == "forget_wifi":
-                subprocess.run("nmcli -t -f NAME,TYPE connection show | grep 802-11-wireless | cut -d: -f1 | xargs -r -n1 nmcli connection delete", shell=True)
-                subprocess.run("nmcli radio wifi off && nmcli radio wifi on", shell=True)
-            elif action == "get_version":
-                await send_response(req_id, get_version())
-            elif action == "check_update":
-                await send_response(req_id, check_update())
-            elif action == "perform_update":
-                await send_response(req_id, perform_update())
             elif action == "start_game":
                 if websocket_endpoint.start_game_process:
                     if websocket_endpoint.start_game_process(message.get("game_id")):
@@ -126,8 +103,30 @@ async def websocket_endpoint(websocket: WebSocket):
                         await send_response(req_id, {"action": "start_game", "error": "Game start failed"})
                 else:
                     await send_response(req_id, {"action": "start_game", "error": "Function not available"})
+            elif action == "get_widgets_screen":
+                if websocket_endpoint.get_widgets_framebuffer:
+                    framebuffers = websocket_endpoint.get_widgets_framebuffer()
+                    await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
+                else:
+                    await send_response(req_id, {"action": "get_widgets_screen", "error": "Function not available"})
+            elif action == "get_wifi_rssi":
+               await send_response(req_id, get_wifi_rssi())
+            elif action == "forget_wifi":
+                forget_wifi()
+            elif action == "get_version":
+                await send_response(req_id, get_version())
+            elif action == "check_update":
+                await send_response(req_id, check_update())
+            elif action == "perform_update":
+                await send_response(req_id, perform_update())
             elif action == "reboot":
-                os.system("sudo reboot")
+                reboot()
+            elif action == "get_ssh_status":
+                await send_response(req_id, get_ssh_status())
+            elif action == "start_ssh":
+                await send_response(req_id, start_ssh())
+            elif action == "stop_ssh":
+                await send_response(req_id, stop_ssh())
             else:
                 await send_response(req_id, {"action": action, "error": "Unknown action"})
 

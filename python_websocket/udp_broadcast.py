@@ -17,19 +17,31 @@ def get_mac_address():
         return "00:00:00:00:00:00"
 
 def get_device_info():
-    with open(os.path.join(os.getcwd(), "device.json"), 'r') as file:
-        return json.load(file)
+    # Caching mechanism
+    if not hasattr(get_device_info, "_last_mtime"):
+        get_device_info._last_mtime = 0
+        get_device_info._cached_device_info = None
+    # Read device.json file
+    file_path = os.path.join(os.getcwd(), "device.json")
+    try:
+        current_mtime = os.path.getmtime(file_path)
+        if current_mtime != get_device_info._last_mtime or get_device_info._cached_device_info is None:
+            with open(file_path, 'r') as file:
+                get_device_info._cached_device_info = json.load(file)
+            get_device_info._last_mtime = current_mtime
+        return get_device_info._cached_device_info
+    except Exception:
+        return {}
 
 def udp_broadcast():
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-    device_info = get_device_info()
-    
     while True:
         try:
             ip = get_ip_address()
             mac = get_mac_address()
+            device_info = get_device_info()
             message = json.dumps({"ip": ip, "mac": mac, "device_info": device_info})
             udp_socket.sendto(message.encode(), ('<broadcast>', 9252))
             time.sleep(3)

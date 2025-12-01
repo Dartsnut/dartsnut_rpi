@@ -20,6 +20,8 @@ dartsnut = Dartsnut()
 loading_image = Image.open("./loading.png")
 # Load the logo image
 logo_image = Image.open("./logo.png").resize((128,128))
+# Load the identify image
+identify_image = Image.open("./identify.png")
 # Load the icons
 game_icon = Image.open("./game_icon.png")
 settings_icon = Image.open("./settings_icon.png")
@@ -362,14 +364,31 @@ def get_buttons_pressed():
                 button_pressed[key] = True
     return button_pressed
 
+# Function to read device.json file
+def get_device_info():
+    # Caching mechanism
+    if not hasattr(get_device_info, "_last_mtime"):
+        get_device_info._last_mtime = 0
+        get_device_info._cached_device_info = None
+    # Read device.json file
+    file_path = os.path.join(os.getcwd(), "device.json")
+    try:
+        current_mtime = os.path.getmtime(file_path)
+        if current_mtime != get_device_info._last_mtime or get_device_info._cached_device_info is None:
+            with open(file_path, 'r') as file:
+                get_device_info._cached_device_info = json.load(file)
+            get_device_info._last_mtime = current_mtime
+        return get_device_info._cached_device_info
+    except Exception:
+        return {}
+
 # Function to set brightness
 def set_brightness(brightness):
     # Set the brightness on the device
     dartsnut.set_brightness(brightness)
     try:
         # Read the existing device info
-        with open("./device.json", 'r') as file:
-            device_info = json.load(file)
+        device_info = get_device_info()
         # Update the device brightness
         device_info['brightness'] = str(brightness)
         # Write the updated info back to the file
@@ -410,8 +429,7 @@ def set_volume(volume):
         
         try:
             # Read the existing device info
-            with open("./device.json", 'r') as file:
-                device_info = json.load(file)
+            device_info = get_device_info()
             # Update the device volume
             device_info['volume'] = str(volume)
             # Write the updated info back to the file
@@ -550,8 +568,7 @@ for var in global_vars:
 dartsnut.update_frame_buffer(loading_image)
 
 # read device.info
-with open("./device.json", 'r') as file:
-    device_info = json.load(file)
+device_info = get_device_info()
 # set the volume
 set_volume(int(device_info.get('volume', "50")) )
 
@@ -581,8 +598,7 @@ while dartsnut.running:
         time.sleep(1/30)
         # locate device
         if locate_device_intv:
-            buffer = bytearray([255] * (128 * 160 * 3))
-            dartsnut.update_frame_buffer(buffer)
+            dartsnut.update_frame_buffer(identify_image)
             locate_device_intv -= 1
         # reload configuration
         elif reload_conf:
@@ -755,8 +771,7 @@ while dartsnut.running:
             ]
             # Get brightness and volume values
             try:
-                with open("./device.json", 'r') as file:
-                    device_info = json.load(file)
+                device_info = get_device_info()
                 brightness = int(device_info.get('brightness', 50))
                 volume = int(device_info.get('volume', 50))
             except Exception:
@@ -902,30 +917,14 @@ while dartsnut.running:
             elif state == "settings":
                 if setting_select_index == 0:
                     # decrease brightness
-                    try:
-                        with open("./device.json", 'r') as file:
-                            device_info = json.load(file)
-                        brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
-                        set_brightness(brightness)
-                        device_info['brightness'] = str(brightness)
-                        # Update the device brightness in device.json
-                        with open("./device.json", 'w') as file:
-                            json.dump(device_info, file)
-                    except Exception as e:
-                        print(f"Error reading or updating device brightness: {e}")
+                    device_info = device_info = get_device_info()
+                    brightness = max(int(device_info.get('brightness', "50")) - 10, 10)
+                    set_brightness(brightness)
                 elif setting_select_index == 1:
                     # decrease volume
-                    try:
-                        with open("./device.json", 'r') as file:
-                            device_info = json.load(file)
-                        volume = max(int(device_info.get('volume', "50")) - 10, 0)
-                        set_volume(volume)
-                        # Update the device volume in device.json
-                        device_info['volume'] = str(volume)
-                        with open("./device.json", 'w') as file:
-                            json.dump(device_info, file)
-                    except Exception as e:
-                        print(f"Error reading or updating device volume: {e}")
+                    device_info = get_device_info()
+                    volume = max(int(device_info.get('volume', "50")) - 10, 0)
+                    set_volume(volume)
         elif (buttons["btn_right"]):
             # select previous menu item
             if state == "menu":
@@ -957,30 +956,14 @@ while dartsnut.running:
             elif state == "settings":
                 if setting_select_index == 0:
                     # increase brightness
-                    try:
-                        with open("./device.json", 'r') as file:
-                            device_info = json.load(file)
-                        brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
-                        set_brightness(brightness)
-                        device_info['brightness'] = str(brightness)
-                        # Update the device brightness in device.json
-                        with open("./device.json", 'w') as file:
-                            json.dump(device_info, file)
-                    except Exception as e:
-                        print(f"Error reading or updating device brightness: {e}")
+                    device_info = get_device_info()
+                    brightness = min(int(device_info.get('brightness', "50")) + 10, 100)
+                    set_brightness(brightness)
                 elif setting_select_index == 1:
                     # increase volume
-                    try:
-                        with open("./device.json", 'r') as file:
-                            device_info = json.load(file)
-                        volume = min(int(device_info.get('volume', "50")) + 10, 100)
-                        set_volume(volume)
-                        # Update the device volume in device.json
-                        device_info['volume'] = str(volume)
-                        with open("./device.json", 'w') as file:
-                            json.dump(device_info, file)
-                    except Exception as e:
-                        print(f"Error reading or updating device volume: {e}")
+                    device_info = get_device_info()
+                    volume = min(int(device_info.get('volume', "50")) + 10, 100)
+                    set_volume(volume)
         elif (buttons["btn_up"]):
             # select item in settings menu
             if state == "settings":
@@ -994,8 +977,7 @@ while dartsnut.running:
                 if setting_select_index > 1:
                     setting_select_index = 1
         elif (buttons["btn_home"]):
-            with open("./device.json", 'r') as file:
-                device_info = json.load(file)
+            device_info = get_device_info()
             if device_info["model"] == "PixelBoard":
                 # to toggle widget freeze in widget mode
                 if state == "widget":
