@@ -13,6 +13,8 @@ import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from pydartsnut import Dartsnut
+import struct
+import glob
 
 dartsnut = Dartsnut()
 
@@ -78,25 +80,37 @@ def download_app(url, md5):
         download_path = os.path.join("downloads", file_name)
 
         # Download the file using system console (wget)
-        os.system(f"wget -O '{download_path}' '{url}'")
+        try:
+            # -T/--timeout sets all timeouts (DNS, connect, read)
+            # --read-timeout sets the read (idle) timeout specifically
+            subprocess.run(["wget", "--read-timeout=30", "-O", download_path, url], check=True)
+        except subprocess.CalledProcessError:
+            return False
 
         # Check if file exists after download
         if not os.path.isfile(download_path):
             return False
 
         # Check MD5 using system console
-        md5_check_cmd = f"md5sum '{download_path}' | awk '{{print $1}}'"
-        downloaded_md5_console = os.popen(md5_check_cmd).read().strip()
+        try:
+            result = subprocess.run(["md5sum", download_path], capture_output=True, text=True, check=True)
+            downloaded_md5_console = result.stdout.split()[0]
+        except subprocess.CalledProcessError:
+            os.remove(download_path)
+            return False
+            
         if downloaded_md5_console != md5:
             os.remove(download_path)
             return False
 
         # Extract tar.gz using system console
         apps_path = os.path.join(os.getcwd(), "apps")
-        extract_cmd = f"tar -xzf '{download_path}' -C '{apps_path}'"
-        extract_result = os.system(extract_cmd)
-        if extract_result != 0:
+        try:
+            subprocess.run(["tar", "-xzf", download_path, "-C", apps_path], check=True)
+        except subprocess.CalledProcessError:
             return False
+            
+        return True
 
         if os.path.isfile(download_path):
             os.remove(download_path)
@@ -153,7 +167,11 @@ def start_page_process(page):
                         if download_info is not None:
                             widget_download_url = download_info.get("widget_download_url")
                             widget_download_md5 = download_info.get("widget_download_md5")
-                            download_app(widget_download_url, widget_download_md5)
+                            # Retry 3 times
+                            for i in range(3):
+                                if download_app(widget_download_url, widget_download_md5):
+                                    break
+                                time.sleep(1)
                     else:
                         print(f"Failed to get download info for widget {widget['id']}: {response.status_code}")
                 except Exception as e:
@@ -357,11 +375,66 @@ def get_buttons_pressed():
         "btn_home" : False,
         "btn_reserved" : False
     }
+    # GPIO Buttons (Rising Edge)
     for i, key in enumerate(button_states):
         if (button_states[key] != get_buttons_pressed.old_buttons[key]):
             get_buttons_pressed.old_buttons[key] = button_states[key]
             if (button_states[key]):
                 button_pressed[key] = True
+
+    # Initialize joystick readers if not already done
+    if not hasattr(get_buttons_pressed, "js_files"):
+        get_buttons_pressed.js_files = {}
+
+    # Scan for new joystick devices
+    for js_path in glob.glob("/dev/input/js*"):
+        if js_path not in get_buttons_pressed.js_files:
+            try:
+                f = open(js_path, "rb")
+                os.set_blocking(f.fileno(), False)
+                get_buttons_pressed.js_files[js_path] = f
+            except Exception:
+                pass
+    # Controller Buttons (Events)
+    if get_buttons_pressed.js_files and not state == "in_game":
+        # Iterate over a copy of keys to allow modification during iteration
+        for js_path in list(get_buttons_pressed.js_files.keys()):
+            js_file = get_buttons_pressed.js_files[js_path]
+            while True:
+                try:
+                    event_data = js_file.read(8)
+                    if not event_data:
+                        break
+                    
+                    time_ms, value, type_, number = struct.unpack("Ihbb", event_data)
+                    
+                    # JS_EVENT_BUTTON = 0x01
+                    if type_ & 0x01:
+                        if value == 1: # Button press
+                            if number == 0: button_pressed["btn_a"] = True       # A / Cross
+                            elif number == 1: button_pressed["btn_b"] = True     # B / Circle
+                            elif number == 8: button_pressed["btn_home"] = True  # Select / Back
+                            elif number == 9: button_pressed["btn_home"] = True  # Start
+                    
+                    # JS_EVENT_AXIS = 0x02
+                    elif type_ & 0x02:
+                        if number == 6: # X axis
+                            if value < -16000: button_pressed["btn_left"] = True
+                            elif value > 16000: button_pressed["btn_right"] = True
+                        elif number == 7: # Y axis
+                            if value < -16000: button_pressed["btn_up"] = True
+                            elif value > 16000: button_pressed["btn_down"] = True
+                except IOError:
+                    break
+                except Exception:
+                    # If reading fails (e.g. device disconnected), close and remove
+                    try:
+                        js_file.close()
+                    except:
+                        pass
+                    del get_buttons_pressed.js_files[js_path]
+                    break
+
     return button_pressed
 
 # Function to read device.json file
@@ -534,13 +607,13 @@ def check_connection_loop():
         try:
             # Check WiFi connection
             # iwgetid returns 0 if connected to an AP, non-zero otherwise
-            wifi_check = subprocess.run(['iwgetid'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wifi_check = subprocess.run(['iwgetid'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             wifi_connected = (wifi_check.returncode == 0)
 
             # Check Internet connection (ping github.com)
             if wifi_connected:
                 # -c 1: count 1, -W 2: timeout 2 seconds
-                internet_check = subprocess.run(['ping', '-c', '1', '-W', '2', 'github.com'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                internet_check = subprocess.run(['ping', '-c', '1', '-W', '2', 'github.com'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 internet_connected = (internet_check.returncode == 0)
             else:
                 internet_connected = False
@@ -1004,7 +1077,7 @@ while dartsnut.running:
                     state = "menu"
         elif (buttons["btn_reserved"]):
             pass
-            
+
         # render widgets
         if pages is not None and len(pages) > 0:
             for page in pages:
