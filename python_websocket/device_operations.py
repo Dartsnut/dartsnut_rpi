@@ -1,21 +1,35 @@
 import subprocess
+import re
 
 def get_wifi_rssi():
     try:
         # Run the command to get signal level
-        result = subprocess.check_output("iwconfig wlan0 | grep -i --color=never 'Signal level'", shell=True).decode('utf-8')
+        result = subprocess.check_output(["iwconfig", "wlan0"]).decode('utf-8')
         # Extract the signal level value (e.g., -56)
-        rssi = result.split("Signal level=")[1].split(" ")[0]
-        return {"action": "get_wifi_rssi", "rssi": rssi}
+        match = re.search(r'Signal level=(-\d+)', result)
+        if match:
+            rssi = match.group(1)
+            return {"action": "get_wifi_rssi", "rssi": rssi}
+        return {"action": "get_wifi_rssi", "error": "Signal level not found"}
     except Exception as e:
         return {"action": "get_wifi_rssi", "error": str(e)}
 
 def forget_wifi():
-    subprocess.run("nmcli -t -f NAME,TYPE connection show | grep 802-11-wireless | cut -d: -f1 | xargs -r -n1 nmcli connection delete", shell=True)
-    subprocess.run("nmcli radio wifi off && nmcli radio wifi on", shell=True)
+    try:
+        # Get list of connections
+        result = subprocess.check_output(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], text=True)
+        for line in result.splitlines():
+            if "802-11-wireless" in line:
+                name = line.split(":")[0]
+                subprocess.run(["nmcli", "connection", "delete", name])
+        
+        subprocess.run(["nmcli", "radio", "wifi", "off"])
+        subprocess.run(["nmcli", "radio", "wifi", "on"])
+    except Exception as e:
+        print(f"Error forgetting wifi: {e}")
 
 def reboot():
-    os.system("sudo reboot")
+    subprocess.run(["sudo", "reboot"])
 
 def get_ssh_status():
     try:

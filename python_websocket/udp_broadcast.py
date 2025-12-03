@@ -6,13 +6,14 @@ import os
 
 def get_ip_address():
     try:
-        return subprocess.check_output("hostname -I", shell=True).decode('utf-8').strip()
+        return subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip()
     except Exception:
         return "0.0.0.0"
 
 def get_mac_address():
     try:
-        return subprocess.check_output("cat /sys/class/net/wlan0/address", shell=True).decode('utf-8').strip()
+        with open("/sys/class/net/wlan0/address", "r") as f:
+            return f.read().strip().lower()
     except Exception:
         return "00:00:00:00:00:00"
 
@@ -33,16 +34,33 @@ def get_device_info():
     except Exception:
         return {}
 
+def get_ble_mac():
+    if hasattr(get_ble_mac, "_cached_mac"):
+        return get_ble_mac._cached_mac
+        
+    try:
+        output = subprocess.check_output(["hcitool", "dev"]).decode('utf-8')
+        for line in output.split('\n'):
+            if "hci0" in line:
+                mac = line.split()[1].lower()
+                get_ble_mac._cached_mac = mac
+                return mac
+        return "00:00:00:00:00:00"
+    except Exception:
+        return "00:00:00:00:00:00"
+
 def udp_broadcast():
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
+    wlan_mac = get_mac_address()
+    ble_mac = get_ble_mac()
+
     while True:
         try:
             ip = get_ip_address()
-            mac = get_mac_address()
             device_info = get_device_info()
-            message = json.dumps({"ip": ip, "mac": mac, "device_info": device_info})
+            message = json.dumps({"ip": ip, "mac": wlan_mac, "ble_mac": ble_mac, "device_info": device_info})
             udp_socket.sendto(message.encode(), ('<broadcast>', 9252))
             time.sleep(3)
         except Exception as e:
