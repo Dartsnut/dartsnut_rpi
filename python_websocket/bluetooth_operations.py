@@ -27,33 +27,28 @@ def list_paired_devices():
     Lists all Bluetooth devices that are already paired (bonded) with the system.
     Returns a list of dictionaries with 'address' and 'name'.
     """
-
     paired_devices = []
-    # This path is typical for BlueZ on Linux
-    base_path = "/var/lib/bluetooth"
-    if not os.path.exists(base_path):
-        return {"action": "bluetooth_list", "error": "Bluetooth device not found"}
+    try:
+        # Use bluetoothctl to get the authoritative list of paired devices
+        result = subprocess.run(
+            ['bluetoothctl', 'devices', 'Paired'],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if result.returncode == 0:
+            # Output format: Device XX:XX:XX:XX:XX:XX Name
+            for line in result.stdout.splitlines():
+                parts = line.split(" ", 2)
+                if len(parts) >= 3 and parts[0] == "Device":
+                    paired_devices.append({'address': parts[1], 'name': parts[2]})
+        else:
+             return {"action": "bluetooth_list", "error": "Failed to run bluetoothctl"}
 
-    for adapter in os.listdir(base_path):
-        adapter_path = os.path.join(base_path, adapter)
-        if not os.path.isdir(adapter_path):
-            continue
-        for device in os.listdir(adapter_path):
-            device_path = os.path.join(adapter_path, device)
-            info_file = os.path.join(device_path, "info")
-            if os.path.isfile(info_file):
-                try:
-                    with open(info_file, "r") as f:
-                        lines = f.readlines()
-                        name = None
-                        for line in lines:
-                            if line.startswith("Name"):
-                                name = line.strip().split("=", 1)[1]
-                                break
-                        if name:
-                            paired_devices.append({'address': device, 'name': name})
-                except Exception as e:
-                    continue
+    except Exception as e:
+        return {"action": "bluetooth_list", "error": f"Failed to list devices: {str(e)}"}
+
     return {"action": "bluetooth_list", "devices": paired_devices}
 
 def disconnect_and_unpair_device(address):

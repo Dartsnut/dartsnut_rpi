@@ -6,7 +6,8 @@ import os
 
 def get_ip_address():
     try:
-        return subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip()
+        ips = subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip().split()
+        return ips[0] if ips else "0.0.0.0"
     except Exception:
         return "0.0.0.0"
 
@@ -49,20 +50,64 @@ def get_ble_mac():
     except Exception:
         return "00:00:00:00:00:00"
 
-def udp_broadcast():
-    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+def get_broadcast_addresses():
+    addresses = set()
+    try:
+        output = subprocess.check_output(["ip", "-4", "addr"]).decode('utf-8')
+        for line in output.split('\n'):
+            if "inet" in line and "brd" in line:
+                parts = line.split()
+                try:
+                    brd_idx = parts.index("brd")
+                    addresses.add(parts[brd_idx + 1])
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    
+    # Only use generic broadcast if no specific subnet broadcast was found
+    if not addresses:
+        addresses.add("255.255.255.255")
+        
+    return list(addresses)
 
+def udp_broadcast():
     wlan_mac = get_mac_address()
     ble_mac = get_ble_mac()
+    
+    print("UDP Broadcast started on port 9252")
 
     while True:
+        udp_socket = None
         try:
+            # Create a new socket for each broadcast to ensure it uses the current network state
+            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            
+            # Bind to 0.0.0.0 to ensure we use the network stack properly
+            try:
+                udp_socket.bind(('', 0))
+            except Exception:
+                pass
+
             ip = get_ip_address()
             device_info = get_device_info()
             message = json.dumps({"ip": ip, "mac": wlan_mac, "ble_mac": ble_mac, "device_info": device_info})
-            udp_socket.sendto(message.encode(), ('<broadcast>', 9252))
-            time.sleep(3)
+            
+            # Send to all broadcast addresses
+            for addr in get_broadcast_addresses():
+                try:
+                    udp_socket.sendto(message.encode(), (addr, 9252))
+                except Exception:
+                    pass
+            
         except Exception as e:
             print(f"UDP broadcast error: {e}")
-            time.sleep(3)
+        finally:
+            if udp_socket:
+                try:
+                    udp_socket.close()
+                except Exception:
+                    pass
+        
+        time.sleep(3)

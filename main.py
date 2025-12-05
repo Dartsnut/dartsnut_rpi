@@ -83,7 +83,7 @@ def download_app(url, md5):
         try:
             # -T/--timeout sets all timeouts (DNS, connect, read)
             # --read-timeout sets the read (idle) timeout specifically
-            subprocess.run(["wget", "--read-timeout=30", "-O", download_path, url], check=True)
+            subprocess.run(["wget", "--read-timeout=10", "-O", download_path, url], check=True)
         except subprocess.CalledProcessError:
             return False
 
@@ -167,11 +167,7 @@ def start_page_process(page):
                         if download_info is not None:
                             widget_download_url = download_info.get("widget_download_url")
                             widget_download_md5 = download_info.get("widget_download_md5")
-                            # Retry 3 times
-                            for i in range(3):
-                                if download_app(widget_download_url, widget_download_md5):
-                                    break
-                                time.sleep(1)
+                            download_app(widget_download_url, widget_download_md5)
                     else:
                         print(f"Failed to get download info for widget {widget['id']}: {response.status_code}")
                 except Exception as e:
@@ -209,13 +205,18 @@ def start_page_process(page):
                     continue
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
-        # pause all widgets process
+        img = Image.new("RGB", (128, 160), (0, 0, 0))
         for widget in widgets:
+            pos = widget["widget"]["position"]
+            img_part = loading_image.crop((pos[0], pos[1], pos[2] + 1, pos[3] + 1))
+            img.paste(img_part, (pos[0], pos[1]))
             try:
+                # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
             except Exception as e:
                 print(f"Error pausing widget process: {e}")
-        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "framebuffer": bytearray(loading_image.tobytes()), "enabled": page.get("enabled", True)}
+        
+        return {"widgets" : widgets, "duration" : page["duration"], "uuid" : page["uuid"], "framebuffer": bytearray(img.tobytes()), "enabled": page.get("enabled", True)}
     else:
         return None
 
@@ -385,7 +386,6 @@ def get_buttons_pressed():
     # Initialize joystick readers if not already done
     if not hasattr(get_buttons_pressed, "js_files"):
         get_buttons_pressed.js_files = {}
-
     # Scan for new joystick devices
     for js_path in glob.glob("/dev/input/js*"):
         if js_path not in get_buttons_pressed.js_files:
@@ -403,11 +403,13 @@ def get_buttons_pressed():
             while True:
                 try:
                     event_data = js_file.read(8)
-                    if not event_data:
+                    if event_data is None:
                         break
-                    
+                    if not event_data:
+                        # EOF, device disconnected
+                        raise OSError("Device disconnected")
+
                     time_ms, value, type_, number = struct.unpack("Ihbb", event_data)
-                    
                     # JS_EVENT_BUTTON = 0x01
                     if type_ & 0x01:
                         if value == 1: # Button press
@@ -424,7 +426,7 @@ def get_buttons_pressed():
                         elif number == 7: # Y axis
                             if value < -16000: button_pressed["btn_up"] = True
                             elif value > 16000: button_pressed["btn_down"] = True
-                except IOError:
+                except (BlockingIOError, InterruptedError):
                     break
                 except Exception:
                     # If reading fails (e.g. device disconnected), close and remove
@@ -432,7 +434,8 @@ def get_buttons_pressed():
                         js_file.close()
                     except:
                         pass
-                    del get_buttons_pressed.js_files[js_path]
+                    if js_path in get_buttons_pressed.js_files:
+                        del get_buttons_pressed.js_files[js_path]
                     break
 
     return button_pressed
@@ -562,7 +565,7 @@ def get_widgets_framebuffer():
     return framebuffers
 
 # Function to start game from websocket
-def start_game(gameid):
+def start_game_from_websocket(gameid):
     global start_game, game_id
     start_game = True
     game_id = gameid
@@ -650,7 +653,7 @@ ble_thread = threading.Thread(target=start_ble_server, daemon=True)
 ble_thread.start()
 
 # start websocket server
-websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game), daemon=True)
+websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game_from_websocket), daemon=True)
 websocket_thread.start()
 
 # Start the connection check thread
