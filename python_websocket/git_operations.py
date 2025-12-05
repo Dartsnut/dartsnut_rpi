@@ -44,8 +44,20 @@ def perform_update():
         subprocess.run(['git', 'reset', '--hard'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['git', 'fetch', 'origin'], cwd='/home/rpi/dartsnut_rpi', check=True)
         subprocess.run(['git', 'reset', '--hard', 'origin/release'], cwd='/home/rpi/dartsnut_rpi', check=True)
-        subprocess.run(['sudo', './setup.sh'], cwd='/home/rpi/dartsnut_rpi', check=True)
-        return {"action": "perform_update", "message": "Update successful"}
+
+        # Check if setup.sh has changed
+        diff_result = subprocess.run(
+            ['git', 'diff', '--name-only', old_commit, 'HEAD', '--', 'setup.sh'],
+            cwd='/home/rpi/dartsnut_rpi',
+            stdout=subprocess.PIPE,
+            text=True
+        )
+        
+        if 'setup.sh' not in diff_result.stdout:
+            return {"action": "perform_update", "message": "Update successful"}
+        else:
+            subprocess.run(['sudo', './setup.sh'], cwd='/home/rpi/dartsnut_rpi', check=True)
+            return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
         # Rollback to old commit
         try:
