@@ -44,7 +44,7 @@ internet_disconnect_icon = Image.open("./internet_disconnect_icon.png")
 # Load the game select image
 game_select_image = Image.open("./game_sel.png")
 # Load the font
-font12 = ImageFont.truetype("./Micro5.ttf", size=12)
+font12 = ImageFont.load("./dartsnut-6X8.pil")
 font16 = ImageFont.truetype("./Micro5.ttf", size=16)
 font24 = ImageFont.truetype("./Micro5.ttf", size=24)
 
@@ -64,6 +64,23 @@ def get_current_loading_frame():
         loading_frame_index = (loading_frame_index + 1) % 7
         loading_frame_last_update = current_time
     return loading_frames[loading_frame_index]
+
+# Function to create a 128x160 loading image with sprites positioned correctly
+def create_loading_image():
+    """Create a 128x160 image with loading sprite centered in upper 128x128 area and bottom 64x32 area."""
+    current_loading_frame = get_current_loading_frame()
+    # Ensure it's in RGB mode
+    if current_loading_frame.mode != "RGB":
+        current_loading_frame = current_loading_frame.convert("RGB")
+    # Create a 128x160 black image
+    loading_image = Image.new("RGB", (128, 160), (0, 0, 0))
+    # Paste the loading sprite centered in the upper 128x128 area
+    # Upper area: center at x=(128-64)/2=32, y=(128-32)/2=48
+    loading_image.paste(current_loading_frame, (32, 48))
+    # Paste the loading sprite centered in the bottom 64x32 area
+    # Bottom area is 64x32 (x=0-63, y=128-159), sprite is 64x32, so it fits perfectly at (0, 128)
+    loading_image.paste(current_loading_frame, (0, 128))
+    return loading_image
 
 # Function to process the widget's fields
 def process_widget_fields(widget_id, widget_fields_parameter):
@@ -227,10 +244,18 @@ def start_page_process(page):
     if len(widgets) > 0:
         img = Image.new("RGB", (128, 160), (0, 0, 0))
         current_loading_frame = get_current_loading_frame()
+        # Ensure it's in RGB mode
+        if current_loading_frame.mode != "RGB":
+            current_loading_frame = current_loading_frame.convert("RGB")
         for widget in widgets:
             pos = widget["widget"]["position"]
-            img_part = current_loading_frame.crop((pos[0], pos[1], pos[2] + 1, pos[3] + 1))
-            img.paste(img_part, (pos[0], pos[1]))
+            x0, y0, x1, y1 = pos
+            widget_width = x1 - x0 + 1
+            widget_height = y1 - y0 + 1
+            # Center the 64x32 loading sprite in the widget area
+            sprite_x = x0 + (widget_width - 64) // 2
+            sprite_y = y0 + (widget_height - 32) // 2
+            img.paste(current_loading_frame, (sprite_x, sprite_y))
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
@@ -274,8 +299,8 @@ def start_game_process(gameid):
         try:
             shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
             # Initialize shared memory with the current loading frame
-            current_loading_frame = get_current_loading_frame()
-            img_bytes = current_loading_frame.tobytes()
+            loading_image = create_loading_image()
+            img_bytes = loading_image.tobytes()
             shm.buf[1:1+len(img_bytes)] = img_bytes
             shm.buf[0] = 0
             # if the uuid is "0", it is a default widget
@@ -663,7 +688,8 @@ for var in global_vars:
         globals()[var] = None
 
 # display the loading image (animated)
-dartsnut.update_frame_buffer(get_current_loading_frame())
+# display the loading image (animated)
+dartsnut.update_frame_buffer(create_loading_image())
 
 # read device.info
 device_info = get_device_info()
@@ -757,8 +783,11 @@ while dartsnut.running:
                     text = "WIDGETS"
                 elif menu_select_index == 2:
                     text = "SETTINGS"
-                text_bbox = draw.textbbox((0, 0), text, font=font12)
-                draw.text(((64 - text_bbox[2]) / 2, 150), text, fill="white", font=font12)
+                # get the text width, 6 pixels per character for 6x8 font
+                text_width = len(text) * 6
+                # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
+                text_x = int((64 - text_width) / 2)
+                draw.text((text_x, 152), text, fill=(255, 255, 255), font=font12)
                 # render the menu to the screen
                 dartsnut.update_frame_buffer(menu_image)
         # widget mode
@@ -855,8 +884,15 @@ while dartsnut.running:
             # render the game frame buffer
             elif game is not None:
                 if game["shm"].buf[0] == 0:
-                    dartsnut.update_frame_buffer(game["shm"].buf[1:])
-                    game["shm"].buf[0] = 1
+                    # Game has rendered a new frame (buf[0] == 0 means new frame ready)
+                    # Read the frame and mark it as read
+                    game_image = Image.frombytes("RGB", (128, 160), bytes(game["shm"].buf[1:1+128*160*3]))
+                    dartsnut.update_frame_buffer(game_image)
+                    game["shm"].buf[0] = 1  # Mark frame as read
+                else:
+                    # Game hasn't rendered a new frame yet (buf[0] == 1), show loading animation
+                    # Display the loading animation (don't update shared memory to avoid overwriting game's frame)
+                    dartsnut.update_frame_buffer(create_loading_image())
         # in settings
         elif (state == "settings"):
             # Draw the settings menu
@@ -934,8 +970,13 @@ while dartsnut.running:
                     draw.text((48 + (80 - text_width) / 2, y + 8), version, fill="white", font=font16)
             # Draw the settings icon at the bottom
             settings_image.paste(settings_icon, (24, 128), settings_icon.convert("RGBA"))
-            text_bbox = draw.textbbox((0, 0), "Settings", font=font12)
-            draw.text(((64 - text_bbox[2]) / 2, 144), "Settings", fill="white", font=font12)
+            # Draw the settings label text
+            settings_text = "SETTINGS"
+            # Get the text width, 6 pixels per character for 6x8 font
+            settings_text_width = len(settings_text) * 6
+            # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
+            settings_text_x = int((64 - settings_text_width) / 2)
+            draw.text((settings_text_x, 152), settings_text, fill=(255, 255, 255), font=font12)
             # Render settings to screen
             dartsnut.update_frame_buffer(settings_image)
         
