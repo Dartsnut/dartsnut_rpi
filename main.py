@@ -264,8 +264,11 @@ def start_page_process(page):
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
         img = Image.new("RGB", (128, 160), (0, 0, 0))
+        current_loading_frame_big = get_current_loading_frame_big()
         current_loading_frame = get_current_loading_frame()
-        # Ensure it's in RGB mode
+        # Ensure they're in RGB mode
+        if current_loading_frame_big.mode != "RGB":
+            current_loading_frame_big = current_loading_frame_big.convert("RGB")
         if current_loading_frame.mode != "RGB":
             current_loading_frame = current_loading_frame.convert("RGB")
         for widget in widgets:
@@ -273,10 +276,18 @@ def start_page_process(page):
             x0, y0, x1, y1 = pos
             widget_width = x1 - x0 + 1
             widget_height = y1 - y0 + 1
-            # Center the 64x32 loading sprite in the widget area
-            sprite_x = x0 + (widget_width - 64) // 2
-            sprite_y = y0 + (widget_height - 32) // 2
-            img.paste(current_loading_frame, (sprite_x, sprite_y))
+            # Check if widget is in the top 128x128 area (y1 < 128)
+            if y1 < 128:
+                # Use big sprite (128x64) for widgets in top area
+                # Center the big sprite in the widget area
+                sprite_x = x0 + (widget_width - 128) // 2
+                sprite_y = y0 + (widget_height - 64) // 2
+                img.paste(current_loading_frame_big, (sprite_x, sprite_y))
+            else:
+                # Use regular sprite (64x32) for widgets in bottom area
+                sprite_x = x0 + (widget_width - 64) // 2
+                sprite_y = y0 + (widget_height - 32) // 2
+                img.paste(current_loading_frame, (sprite_x, sprite_y))
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
