@@ -18,8 +18,18 @@ import glob
 
 dartsnut = Dartsnut()
 
-# Load the loading image
-loading_image = Image.open("./loading.png")
+# Load the loading sprite sheet and extract frames
+loading_sprite_sheet = Image.open("./loading_sprite.png")
+loading_sprite_width = loading_sprite_sheet.size[0] // 7  # 7 frames horizontally
+loading_sprite_height = loading_sprite_sheet.size[1]
+loading_frames = []
+for i in range(7):
+    frame = loading_sprite_sheet.crop((i * loading_sprite_width, 0, (i + 1) * loading_sprite_width, loading_sprite_height))
+    loading_frames.append(frame)
+# Animation state
+loading_frame_index = 0
+loading_frame_last_update = time.time()
+loading_frame_duration = 0.4  # ~2.5 fps (0.4 seconds per frame)
 # Load the logo image
 logo_image = Image.open("./logo.png").resize((128,128))
 # Load the identify image
@@ -44,6 +54,16 @@ def set_pdeathsig():
     libc = ctypes.CDLL("libc.so.6")
     PR_SET_PDEATHSIG = 1
     libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+
+# Function to get the current loading frame based on animation timing
+def get_current_loading_frame():
+    global loading_frame_index, loading_frame_last_update
+    current_time = time.time()
+    # Update frame if enough time has passed
+    if current_time - loading_frame_last_update >= loading_frame_duration:
+        loading_frame_index = (loading_frame_index + 1) % 7
+        loading_frame_last_update = current_time
+    return loading_frames[loading_frame_index]
 
 # Function to process the widget's fields
 def process_widget_fields(widget_id, widget_fields_parameter):
@@ -206,9 +226,10 @@ def start_page_process(page):
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
         img = Image.new("RGB", (128, 160), (0, 0, 0))
+        current_loading_frame = get_current_loading_frame()
         for widget in widgets:
             pos = widget["widget"]["position"]
-            img_part = loading_image.crop((pos[0], pos[1], pos[2] + 1, pos[3] + 1))
+            img_part = current_loading_frame.crop((pos[0], pos[1], pos[2] + 1, pos[3] + 1))
             img.paste(img_part, (pos[0], pos[1]))
             try:
                 # pause all widgets process
@@ -252,8 +273,9 @@ def start_game_process(gameid):
         # start the process
         try:
             shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
-            # Initialize shared memory with the loading image
-            img_bytes = loading_image.tobytes()
+            # Initialize shared memory with the current loading frame
+            current_loading_frame = get_current_loading_frame()
+            img_bytes = current_loading_frame.tobytes()
             shm.buf[1:1+len(img_bytes)] = img_bytes
             shm.buf[0] = 0
             # if the uuid is "0", it is a default widget
@@ -640,8 +662,8 @@ for var in global_vars:
         # Optionally, initialize to None or suitable default if not declared
         globals()[var] = None
 
-# display the loading image
-dartsnut.update_frame_buffer(loading_image)
+# display the loading image (animated)
+dartsnut.update_frame_buffer(get_current_loading_frame())
 
 # read device.info
 device_info = get_device_info()
@@ -672,6 +694,8 @@ init_widgets()
 while dartsnut.running:
     try:
         time.sleep(1/30)
+        # Update loading animation frame
+        get_current_loading_frame()
         # locate device
         if locate_device_intv:
             dartsnut.update_frame_buffer(identify_image)
