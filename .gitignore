@@ -20,3 +20,5 @@ downloads/
 
 # Ignore device.json file
 device.json
+
+.DS_Store
