@@ -44,7 +44,7 @@ internet_disconnect_icon = Image.open("./internet_disconnect_icon.png")
 # Load the game select image
 game_select_image = Image.open("./game_sel.png")
 # Load the font
-font12 = ImageFont.load("./dartsnut-6X8.pil")
+font8 = ImageFont.load("./dartsnut-6X8.pil")
 font16 = ImageFont.truetype("./Micro5.ttf", size=16)
 font24 = ImageFont.truetype("./Micro5.ttf", size=24)
 
@@ -787,7 +787,7 @@ while dartsnut.running:
                 text_width = len(text) * 6
                 # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
                 text_x = int((64 - text_width) / 2)
-                draw.text((text_x, 152), text, fill=(255, 255, 255), font=font12)
+                draw.text((text_x, 152), text, fill=(255, 255, 255), font=font8)
                 # render the menu to the screen
                 dartsnut.update_frame_buffer(menu_image)
         # widget mode
@@ -976,7 +976,7 @@ while dartsnut.running:
             settings_text_width = len(settings_text) * 6
             # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
             settings_text_x = int((64 - settings_text_width) / 2)
-            draw.text((settings_text_x, 152), settings_text, fill=(255, 255, 255), font=font12)
+            draw.text((settings_text_x, 152), settings_text, fill=(255, 255, 255), font=font8)
             # Render settings to screen
             dartsnut.update_frame_buffer(settings_image)
         
