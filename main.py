@@ -26,10 +26,18 @@ loading_frames = []
 for i in range(7):
     frame = loading_sprite_sheet.crop((i * loading_sprite_width, 0, (i + 1) * loading_sprite_width, loading_sprite_height))
     loading_frames.append(frame)
+# Load the big loading sprite sheet and extract frames (for top 128x128 area)
+loading_sprite_big_sheet = Image.open("./loading_sprite_big.png")
+loading_sprite_big_width = loading_sprite_big_sheet.size[0] // 7  # 7 frames horizontally
+loading_sprite_big_height = loading_sprite_big_sheet.size[1]  # 64px tall
+loading_frames_big = []
+for i in range(7):
+    frame = loading_sprite_big_sheet.crop((i * loading_sprite_big_width, 0, (i + 1) * loading_sprite_big_width, loading_sprite_big_height))
+    loading_frames_big.append(frame)
 # Animation state
 loading_frame_index = 0
 loading_frame_last_update = time.time()
-loading_frame_duration = 0.4  # ~2.5 fps (0.4 seconds per frame)
+loading_frame_duration = 0.1  # 10 fps (0.1 seconds per frame)
 # Load the logo image
 logo_image = Image.open("./logo.png").resize((128,128))
 # Load the identify image
@@ -65,19 +73,32 @@ def get_current_loading_frame():
         loading_frame_last_update = current_time
     return loading_frames[loading_frame_index]
 
+# Function to get the current big loading frame based on animation timing
+def get_current_loading_frame_big():
+    global loading_frame_index, loading_frame_last_update
+    current_time = time.time()
+    # Update frame if enough time has passed (uses same timing as regular frame)
+    if current_time - loading_frame_last_update >= loading_frame_duration:
+        loading_frame_index = (loading_frame_index + 1) % 7
+        loading_frame_last_update = current_time
+    return loading_frames_big[loading_frame_index]
+
 # Function to create a 128x160 loading image with sprites positioned correctly
 def create_loading_image():
-    """Create a 128x160 image with loading sprite centered in upper 128x128 area and bottom 64x32 area."""
+    """Create a 128x160 image with big loading sprite centered in upper 128x128 area and regular sprite in bottom 64x32 area."""
+    current_loading_frame_big = get_current_loading_frame_big()
     current_loading_frame = get_current_loading_frame()
-    # Ensure it's in RGB mode
+    # Ensure they're in RGB mode
+    if current_loading_frame_big.mode != "RGB":
+        current_loading_frame_big = current_loading_frame_big.convert("RGB")
     if current_loading_frame.mode != "RGB":
         current_loading_frame = current_loading_frame.convert("RGB")
     # Create a 128x160 black image
     loading_image = Image.new("RGB", (128, 160), (0, 0, 0))
-    # Paste the loading sprite centered in the upper 128x128 area
-    # Upper area: center at x=(128-64)/2=32, y=(128-32)/2=48
-    loading_image.paste(current_loading_frame, (32, 48))
-    # Paste the loading sprite centered in the bottom 64x32 area
+    # Paste the big loading sprite in the upper 128x128 area
+    # Big sprite is 128x64, upper area is 128x128, so position at x=0, y=(128-64)/2=32
+    loading_image.paste(current_loading_frame_big, (0, 32))
+    # Paste the regular loading sprite centered in the bottom 64x32 area
     # Bottom area is 64x32 (x=0-63, y=128-159), sprite is 64x32, so it fits perfectly at (0, 128)
     loading_image.paste(current_loading_frame, (0, 128))
     return loading_image
