@@ -902,7 +902,7 @@ while dartsnut.running:
             settings_items = [
                 {"name": "Brightness", "type": "value"},
                 {"name": "Volume", "type": "value"},
-                {"name": "Network", "type": "info"},
+                {"name": "IP", "type": "info"},
                 {"name": "Version", "type": "info"}
             ]
             # Get brightness and volume values
@@ -935,7 +935,7 @@ while dartsnut.running:
                 if focused:
                     draw.rectangle((0, y, 127, y + item_height - 1), fill=(40, 40, 40))
                 # Draw item name
-                draw.text((8, y + 8), item["name"], fill="white", font=font16)
+                draw.text((2, y + 12), item["name"].upper(), fill="white", font=font8)
                 # Draw value/info
                 if item["name"] == "Brightness":
                     value_str = f"{brightness}"
@@ -944,30 +944,28 @@ while dartsnut.running:
                     arrow_left_x = value_x - 13
                     arrow_right_x = value_x + 23
                     if focused:
-                        draw.text((arrow_left_x, y + 8), "<", fill="white", font=font16)
-                        draw.text((arrow_right_x, y + 8), ">", fill="white", font=font16)
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
+                        draw.text((arrow_left_x, y + 12), "<", fill="white", font=font8)
+                        draw.text((arrow_right_x, y + 12), ">", fill="white", font=font8)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
                     else:
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
                 elif item["name"] == "Volume":
                     value_str = f"{volume}"
                     value_x = 80
                     arrow_left_x = value_x - 13
                     arrow_right_x = value_x + 23
                     if focused:
-                        draw.text((arrow_left_x, y + 8), "<", fill="white", font=font16)
-                        draw.text((arrow_right_x, y + 8), ">", fill="white", font=font16)
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
+                        draw.text((arrow_left_x, y + 12), "<", fill="white", font=font8)
+                        draw.text((arrow_right_x, y + 12), ">", fill="white", font=font8)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
                     else:
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
-                elif item["name"] == "Network":
-                    text_bbox = draw.textbbox((0, 0), ip_address, font=font16)
-                    text_width = text_bbox[2] - text_bbox[0]
-                    draw.text((48 + (80 - text_width) / 2, y + 8), ip_address, fill="white", font=font16)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
+                elif item["name"] == "IP":
+                    text_width = len(ip_address) * 6
+                    draw.text((48 + (80 - text_width) / 2, y + 12), ip_address, fill="white", font=font8)
                 elif item["name"] == "Version":
-                    text_bbox = draw.textbbox((0, 0), version, font=font16)
-                    text_width = text_bbox[2] - text_bbox[0]
-                    draw.text((48 + (80 - text_width) / 2, y + 8), version, fill="white", font=font16)
+                    text_width = len(version) * 6
+                    draw.text((48 + (80 - text_width) / 2, y + 12), version, fill="white", font=font8)
             # Draw the settings icon at the bottom
             settings_image.paste(settings_icon, (24, 128), settings_icon.convert("RGBA"))
             # Draw the settings label text
