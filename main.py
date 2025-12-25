@@ -276,18 +276,17 @@ def start_page_process(page):
             x0, y0, x1, y1 = pos
             widget_width = x1 - x0 + 1
             widget_height = y1 - y0 + 1
-            # Check if widget is in the top 128x128 area (y1 < 128)
-            if y1 < 128:
-                # Use big sprite (128x64) for widgets in top area
-                # Center the big sprite in the widget area
-                sprite_x = x0 + (widget_width - 128) // 2
-                sprite_y = y0 + (widget_height - 64) // 2
-                img.paste(current_loading_frame_big, (sprite_x, sprite_y))
-            else:
-                # Use regular sprite (64x32) for widgets in bottom area
-                sprite_x = x0 + (widget_width - 64) // 2
-                sprite_y = y0 + (widget_height - 32) // 2
-                img.paste(current_loading_frame, (sprite_x, sprite_y))
+            # Show loading sprites based on widget height
+            if widget_height == 160:
+                # Show both sprites matching game's loading sprite coordinates
+                img.paste(current_loading_frame_big, (x0, y0 + 32))
+                img.paste(current_loading_frame, (x0, y0 + 128))
+            elif widget_height == 128:
+                # Show only big sprite matching game's big sprite offset
+                img.paste(current_loading_frame_big, (x0, y0 + 32))
+            elif widget_height == 32:
+                # Show only regular sprite at widget's top-left
+                img.paste(current_loading_frame, (x0, y0))
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
