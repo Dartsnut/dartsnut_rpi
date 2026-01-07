@@ -1,4 +1,15 @@
-from python_websocket.file_operations import receive_file, send_file, remove_directory, get_file_md5, get_file_list, create_directory, download_app, get_app_list
+from python_websocket.file_operations import (
+    receive_file,
+    send_file,
+    remove_directory,
+    get_file_md5,
+    get_file_list,
+    create_directory,
+    download_app,
+    get_app_list,
+    start_game_download_async,
+    get_download_progress as get_download_progress_status,
+)
 from python_websocket.json_operations import read_json_file, write_json_file, get_device_info, set_device_name
 from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
 from python_websocket.git_operations import check_update, perform_update, get_version
@@ -7,13 +18,7 @@ from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboo
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import json
-import os
-import base64
-from PIL import Image
-from io import BytesIO
-import subprocess
 import uvicorn
-import socket
 import threading
 
 app = FastAPI()
@@ -94,7 +99,13 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "bluetooth_connect":
                 await send_response(req_id, pair_and_connect_device(message.get("address")))
             elif action == "download_app":
-                await send_response(req_id, download_app(message.get("url"), message.get("md5")))
+                game_id = message.get("game_id")
+                if game_id:
+                    # v2 behavior: async download by game_id with progress tracking
+                    await send_response(req_id, start_game_download_async(game_id))
+                else:
+                    # Legacy behavior: direct URL + MD5 download
+                    await send_response(req_id, download_app(message.get("url"), message.get("md5")))
             elif action == "start_game":
                 if websocket_endpoint.start_game_process:
                     if websocket_endpoint.start_game_process(message.get("game_id")):
@@ -119,6 +130,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 await send_response(req_id, check_update())
             elif action == "perform_update":
                 await send_response(req_id, perform_update())
+            elif action == "get_download_progress":
+                await send_response(req_id, get_download_progress_status(message.get("game_id")))
             elif action == "reboot":
                 reboot()
             elif action == "get_ssh_status":
