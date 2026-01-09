@@ -16,6 +16,11 @@ from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_p
 from python_websocket.git_operations import check_update, perform_update, get_version
 from python_websocket.udp_broadcast import udp_broadcast
 from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh
+from python_websocket.error_handler import (
+    ErrorCode,
+    handle_exception,
+    create_error_response
+)
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -69,14 +74,23 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "list_apps":
                 await send_response(req_id, get_app_list())
             elif action == "get_file_md5":
-                await  send_response(req_id, json.dumps(get_file_md5(websocket, message.get("file_name"))))
+                await send_response(req_id, get_file_md5(websocket, message.get("file_name")))
             elif action == "set_brightness":
-                brightness = int(message.get("brightness", "0"))
-                if 10 <= brightness <= 100:
-                    websocket_endpoint.set_brightness(brightness) if websocket_endpoint.set_brightness else None
-                    await send_response(req_id, {"action": "set_brightness", "message": "Success"})
-                else:
-                    await send_response(req_id, {"action": "set_brightness", "error": "Brightness must be between 10 and 100"})
+                try:
+                    brightness = int(message.get("brightness", "0"))
+                    if 10 <= brightness <= 100:
+                        websocket_endpoint.set_brightness(brightness) if websocket_endpoint.set_brightness else None
+                        await send_response(req_id, {"action": "set_brightness", "message": "Success"})
+                    else:
+                        await send_response(req_id, create_error_response(
+                            "set_brightness",
+                            ErrorCode.INVALID_BRIGHTNESS,
+                            "Brightness must be between 10 and 100"
+                        ))
+                except ValueError as e:
+                    await send_response(req_id, handle_exception("set_brightness", e, "Invalid brightness value"))
+                except Exception as e:
+                    await send_response(req_id, handle_exception("set_brightness", e, "Failed to set brightness"))
             elif action == "set_time_zone":
                 time_zone = message.get("time_zone", "UTC")
                 websocket_endpoint.set_time_zone(time_zone) if websocket_endpoint.set_time_zone else None
@@ -105,7 +119,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 game_id = message.get("game_id")
                 
                 if not url or not md5:
-                    await send_response(req_id, {"action": "download_app", "error": "url and md5 are required"})
+                    await send_response(req_id, create_error_response(
+                        "download_app",
+                        ErrorCode.MISSING_PARAMETER,
+                        "Required information is missing"
+                    ))
                 elif game_id:
                     # Async download with progress tracking by game_id
                     await send_response(req_id, start_game_download_async_with_url(game_id, url, md5))
@@ -114,18 +132,36 @@ async def websocket_endpoint(websocket: WebSocket):
                     await send_response(req_id, download_app(url, md5))
             elif action == "start_game":
                 if websocket_endpoint.start_game_process:
-                    if websocket_endpoint.start_game_process(message.get("game_id")):
-                        await send_response(req_id, {"action": "start_game", "message": "Game started"})
-                    else:
-                        await send_response(req_id, {"action": "start_game", "error": "Game start failed"})
+                    try:
+                        if websocket_endpoint.start_game_process(message.get("game_id")):
+                            await send_response(req_id, {"action": "start_game", "message": "Game started"})
+                        else:
+                            await send_response(req_id, create_error_response(
+                                "start_game",
+                                ErrorCode.COMMAND_FAILED,
+                                "Unable to start the game"
+                            ))
+                    except Exception as e:
+                        await send_response(req_id, handle_exception("start_game", e, "Failed to start game"))
                 else:
-                    await send_response(req_id, {"action": "start_game", "error": "Function not available"})
+                    await send_response(req_id, create_error_response(
+                        "start_game",
+                        ErrorCode.FUNCTION_NOT_AVAILABLE,
+                        "This feature is not available"
+                    ))
             elif action == "get_widgets_screen":
                 if websocket_endpoint.get_widgets_framebuffer:
-                    framebuffers = websocket_endpoint.get_widgets_framebuffer()
-                    await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
+                    try:
+                        framebuffers = websocket_endpoint.get_widgets_framebuffer()
+                        await send_response(req_id, {"action": "get_widgets_screen", "framebuffers": framebuffers})
+                    except Exception as e:
+                        await send_response(req_id, handle_exception("get_widgets_screen", e, "Failed to get widgets screen"))
                 else:
-                    await send_response(req_id, {"action": "get_widgets_screen", "error": "Function not available"})
+                    await send_response(req_id, create_error_response(
+                        "get_widgets_screen",
+                        ErrorCode.FUNCTION_NOT_AVAILABLE,
+                        "This feature is not available"
+                    ))
             elif action == "get_wifi_rssi":
                await send_response(req_id, get_wifi_rssi())
             elif action == "forget_wifi":
@@ -147,10 +183,30 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "stop_ssh":
                 await send_response(req_id, stop_ssh())
             else:
-                await send_response(req_id, {"action": action, "error": "Unknown action"})
+                await send_response(req_id, create_error_response(
+                    action or "unknown",
+                    ErrorCode.UNKNOWN_ACTION,
+                    "The requested action is not recognized"
+                ))
 
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {e}")
+            try:
+                error_response = handle_exception(action or "unknown", e, "Invalid JSON in request")
+                error_response["req_id"] = message.get("req_id") if 'message' in locals() else None
+                await websocket.send_text(json.dumps(error_response))
+            except:
+                pass
+            if websocket.client_state.name == "DISCONNECTED":
+                break
         except Exception as e:
             print(f"error: {e}")
+            try:
+                error_response = handle_exception(action or "unknown", e, "An unexpected error occurred")
+                error_response["req_id"] = message.get("req_id") if 'message' in locals() else None
+                await websocket.send_text(json.dumps(error_response))
+            except:
+                pass
             if websocket.client_state.name == "DISCONNECTED":
                 break
         finally:
