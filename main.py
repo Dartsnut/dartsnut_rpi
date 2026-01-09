@@ -743,7 +743,7 @@ ble_thread = threading.Thread(target=start_ble_server, daemon=True)
 ble_thread.start()
 
 # start websocket server
-websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game_from_websocket), daemon=True)
+websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game_from_websocket,set_volume), daemon=True)
 websocket_thread.start()
 
 # Start the connection check thread

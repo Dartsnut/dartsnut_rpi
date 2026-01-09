@@ -96,6 +96,22 @@ async def websocket_endpoint(websocket: WebSocket):
                     await send_response(req_id, handle_exception("set_brightness", e, "Invalid brightness value"))
                 except Exception as e:
                     await send_response(req_id, handle_exception("set_brightness", e, "Failed to set brightness"))
+            elif action == "set_volume":
+                try:
+                    volume = int(message.get("volume", "0"))
+                    if 0 <= volume <= 100:
+                        websocket_endpoint.set_volume(volume) if websocket_endpoint.set_volume else None
+                        await send_response(req_id, {"action": "set_volume", "message": "Success"})
+                    else:
+                        await send_response(req_id, create_error_response(
+                            "set_volume",
+                            ErrorCode.INVALID_INPUT,
+                            "Volume must be between 0 and 100"
+                        ))
+                except ValueError as e:
+                    await send_response(req_id, handle_exception("set_volume", e, "Invalid volume value"))
+                except Exception as e:
+                    await send_response(req_id, handle_exception("set_volume", e, "Failed to set volume"))
             elif action == "set_time_zone":
                 time_zone = message.get("time_zone", "UTC")
                 websocket_endpoint.set_time_zone(time_zone) if websocket_endpoint.set_time_zone else None
@@ -228,7 +244,7 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
             # await websocket.close()
 
-def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None, start_game_process=None):
+def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None, start_game_process=None, set_volume=None):
     # Start UDP broadcast thread
     udp_thread = threading.Thread(target=udp_broadcast, daemon=True)
     udp_thread.start()
@@ -239,4 +255,5 @@ def start_websocket_server(set_brightness=None, locate_device=None, reload_confi
     websocket_endpoint.set_time_zone = set_time_zone if set_time_zone else None
     websocket_endpoint.get_widgets_framebuffer = get_widgets_framebuffer if get_widgets_framebuffer else None
     websocket_endpoint.start_game_process = start_game_process if start_game_process else None
+    websocket_endpoint.set_volume = set_volume if set_volume else None
     uvicorn.run(app, host="0.0.0.0", port=9251)
