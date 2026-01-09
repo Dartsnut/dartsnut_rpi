@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
+from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking
 from pydartsnut import Dartsnut
 import struct
 import glob
@@ -342,15 +343,25 @@ def start_game_process(gameid):
                 cwd=os.path.join("./apps/", gameid),
                 preexec_fn=set_pdeathsig
             )
-            return {"process":process, "shm": shm}
+            # Start tracking game playtime
+            try:
+                start_game_tracking(gameid)
+            except Exception as e:
+                print(f"Warning: Failed to start game tracking: {e}")
+            return {"process":process, "shm": shm, "game_id": gameid}
         except Exception as e:
-            print(f"Error starting game {game['id']}: {e}")
+            print(f"Error starting game {gameid}: {e}")
     return None
 
 # Function to terminate the game process and clean up
 def term_game_process(g):
     if g is not None:
         try:
+            # Stop tracking game playtime before terminating
+            try:
+                stop_game_tracking()
+            except Exception as e:
+                print(f"Warning: Failed to stop game tracking: {e}")
             os.kill(g["process"].pid, signal.SIGCONT)
             os.kill(g["process"].pid, signal.SIGKILL)
             g["shm"].close()
@@ -910,6 +921,11 @@ while dartsnut.running:
                 reload_conf = True
             # if the game process is not polling, trigger reload
             elif game["process"].poll() is not None:
+                # Stop tracking game playtime when game ends
+                try:
+                    stop_game_tracking()
+                except Exception as e:
+                    print(f"Warning: Failed to stop game tracking: {e}")
                 # trigger reload
                 reload_conf = True
             # render the game frame buffer
