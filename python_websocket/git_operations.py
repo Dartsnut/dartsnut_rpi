@@ -1,4 +1,10 @@
 import subprocess
+from python_websocket.error_handler import (
+    ErrorCode,
+    handle_exception,
+    handle_command_error,
+    create_error_response
+)
 
 def get_version():
     try:
@@ -12,7 +18,9 @@ def get_version():
         version_tag = result.stdout.strip()
         return {"action": "get_version", "version": version_tag}
     except subprocess.CalledProcessError as e:
-        return {"action": "get_version", "error": f"Failed to get version: {str(e)}"}
+        return handle_command_error("get_version", "git describe", e.returncode, e.stderr)
+    except Exception as e:
+        return handle_exception("get_version", e, "Failed to get version")
 
 def check_update():
     try:
@@ -27,7 +35,9 @@ def check_update():
         latest_tag = result.stdout.strip()
         return {"action": "check_update", "latest_version": latest_tag}
     except subprocess.CalledProcessError as e:
-        return {"action": "check_update", "error": f"Failed to check for updates: {str(e)}"}
+        return handle_command_error("check_update", "git fetch/describe", e.returncode, e.stderr)
+    except Exception as e:
+        return handle_exception("check_update", e, "Failed to check for updates")
 
 def perform_update():
     try:
@@ -62,6 +72,45 @@ def perform_update():
         # Rollback to old commit
         try:
             subprocess.run(['git', 'reset', '--hard', old_commit], cwd='/home/rpi/dartsnut_rpi', check=True)
-            return {"action": "perform_update", "error": f"Update failed: {str(e)}. Rolled back to previous version."}
+            # Extract error message
+            error_msg = "Update failed"
+            if e.stderr:
+                try:
+                    error_text = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else e.stderr
+                    if error_text.strip():
+                        error_line = error_text.strip().split('\n')[0][:100]
+                        error_msg = f"Update failed: {error_line}"
+                except:
+                    pass
+            return create_error_response(
+                "perform_update",
+                ErrorCode.GIT_UPDATE_FAILED,
+                "Unable to update the system. The system has been restored to the previous version"
+            )
         except subprocess.CalledProcessError as rollback_error:
-            return {"action": "perform_update", "error": f"Update failed: {str(e)}. Rollback also failed: {str(rollback_error)}"}
+            # Extract error message
+            error_msg = "Update failed"
+            if e.stderr:
+                try:
+                    error_text = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else e.stderr
+                    if error_text.strip():
+                        error_line = error_text.strip().split('\n')[0][:100]
+                        error_msg = f"Update failed: {error_line}"
+                except:
+                    pass
+            rollback_msg = "Rollback failed"
+            if rollback_error.stderr:
+                try:
+                    rollback_text = rollback_error.stderr.decode('utf-8') if isinstance(rollback_error.stderr, bytes) else rollback_error.stderr
+                    if rollback_text.strip():
+                        rollback_line = rollback_text.strip().split('\n')[0][:100]
+                        rollback_msg = f"Rollback failed: {rollback_line}"
+                except:
+                    pass
+            return create_error_response(
+                "perform_update",
+                ErrorCode.GIT_ROLLBACK_FAILED,
+                "Unable to update the system. Unable to restore the previous version"
+            )
+    except Exception as e:
+        return handle_exception("perform_update", e, "Update failed")
