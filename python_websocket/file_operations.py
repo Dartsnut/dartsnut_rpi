@@ -324,6 +324,114 @@ def _download_game_worker(game_id):
         )
 
 
+def _download_game_worker_with_url(game_id, url, md5):
+    """
+    Background worker to download and extract a game using provided url and md5 with progress updates.
+    """
+    download_path = None
+    try:
+        _set_download_progress(game_id, progress=0, status="initializing", error=None)
+
+        if not url or not md5:
+            _set_download_progress(
+                game_id,
+                status="error",
+                error="Download URL or MD5 missing",
+            )
+            return
+
+        if not url.endswith(".tar.gz"):
+            _set_download_progress(
+                game_id,
+                status="error",
+                error="File type not support",
+            )
+            return
+
+        # Ensure the download directory exists
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        file_name = url.split("/")[-1]
+        download_path = os.path.join(DOWNLOAD_DIR, file_name)
+
+        # Stream download with progress and MD5 calculation
+        _set_download_progress(game_id, progress=0, status="downloading")
+        with requests.get(url, stream=True) as r:
+            if r.status_code != 200:
+                _set_download_progress(
+                    game_id,
+                    status="error",
+                    error=f"Download failed with status {r.status_code}",
+                )
+                return
+
+            total_length = r.headers.get("Content-Length")
+            total_length = int(total_length) if total_length is not None else None
+
+            hash_md5 = hashlib.md5()
+            downloaded = 0
+            chunk_size = 8192
+
+            with open(download_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    hash_md5.update(chunk)
+                    downloaded += len(chunk)
+
+                    if total_length:
+                        progress = int(downloaded * 100 / total_length)
+                        # Avoid prematurely reporting 100% until post-processing is done
+                        if progress >= 100:
+                            progress = 99
+                        _set_download_progress(
+                            game_id, progress=progress, status="downloading"
+                        )
+
+        # Verify MD5
+        downloaded_md5 = hash_md5.hexdigest()
+        if downloaded_md5 != md5:
+            if download_path and os.path.isfile(download_path):
+                os.remove(download_path)
+            _set_download_progress(
+                game_id,
+                status="error",
+                error="MD5 mismatch",
+            )
+            return
+
+        # Extract tar.gz using tarfile (Python stdlib)
+        apps_dir = os.path.join(os.getcwd(), APPS_DIR)
+        try:
+            with tarfile.open(download_path, "r:gz") as tar:
+                tar.extractall(apps_dir)
+        except Exception as e:
+            _set_download_progress(
+                game_id,
+                status="error",
+                error=f"Extraction failed: {str(e)}",
+            )
+            return
+        finally:
+            if download_path and os.path.isfile(download_path):
+                os.remove(download_path)
+
+        _set_download_progress(game_id, progress=100, status="completed", error=None)
+    except Exception as e:
+        # Best-effort cleanup
+        try:
+            if download_path and os.path.isfile(download_path):
+                os.remove(download_path)
+        except Exception:
+            pass
+
+        _set_download_progress(
+            game_id,
+            status="error",
+            error=str(e),
+        )
+
+
 def start_game_download_async(game_id):
     """
     Start an asynchronous game download identified by game_id.
@@ -342,6 +450,41 @@ def start_game_download_async(game_id):
     worker = threading.Thread(
         target=_download_game_worker,
         args=(game_id,),
+        daemon=True,
+    )
+    worker.start()
+
+    return {
+        "action": "download_app",
+        "game_id": game_id,
+        "message": "Success",
+    }
+
+
+def start_game_download_async_with_url(game_id, url, md5):
+    """
+    Start an asynchronous game download using provided url and md5, tracking progress by game_id.
+    """
+    if not game_id:
+        return {
+            "action": "download_app",
+            "game_id": game_id,
+            "error": "game_id is required",
+        }
+
+    if not url or not md5:
+        return {
+            "action": "download_app",
+            "game_id": game_id,
+            "error": "url and md5 are required",
+        }
+
+    # Initialize / reset progress entry
+    _set_download_progress(game_id, progress=0, status="pending", error=None)
+
+    worker = threading.Thread(
+        target=_download_game_worker_with_url,
+        args=(game_id, url, md5),
         daemon=True,
     )
     worker.start()

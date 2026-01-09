@@ -8,6 +8,7 @@ from python_websocket.file_operations import (
     download_app,
     get_app_list,
     start_game_download_async,
+    start_game_download_async_with_url,
     get_download_progress as get_download_progress_status,
 )
 from python_websocket.json_operations import read_json_file, write_json_file, get_device_info, set_device_name
@@ -99,13 +100,18 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "bluetooth_connect":
                 await send_response(req_id, pair_and_connect_device(message.get("address")))
             elif action == "download_app":
+                url = message.get("url")
+                md5 = message.get("md5")
                 game_id = message.get("game_id")
-                if game_id:
-                    # v2 behavior: async download by game_id with progress tracking
-                    await send_response(req_id, start_game_download_async(game_id))
+                
+                if not url or not md5:
+                    await send_response(req_id, {"action": "download_app", "error": "url and md5 are required"})
+                elif game_id:
+                    # Async download with progress tracking by game_id
+                    await send_response(req_id, start_game_download_async_with_url(game_id, url, md5))
                 else:
-                    # Legacy behavior: direct URL + MD5 download
-                    await send_response(req_id, download_app(message.get("url"), message.get("md5")))
+                    # Sync download when game_id not provided
+                    await send_response(req_id, download_app(url, md5))
             elif action == "start_game":
                 if websocket_endpoint.start_game_process:
                     if websocket_endpoint.start_game_process(message.get("game_id")):
