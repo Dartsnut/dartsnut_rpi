@@ -16,6 +16,11 @@ from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_p
 from python_websocket.git_operations import check_update, perform_update, get_version
 from python_websocket.udp_broadcast import udp_broadcast
 from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh
+from python_websocket.user_data_operations import (
+    get_user_data,
+    update_user_info,
+    get_game_playtime
+)
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -182,6 +187,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 await send_response(req_id, start_ssh())
             elif action == "stop_ssh":
                 await send_response(req_id, stop_ssh())
+            elif action == "get_user_data":
+                await send_response(req_id, get_user_data())
+            elif action == "update_user_info":
+                await send_response(req_id, update_user_info(
+                    user_id=message.get("user_id"),
+                    jwt_token=message.get("jwt_token"),
+                    refresh_token=message.get("refresh_token")
+                ))
+            elif action == "get_game_playtime":
+                await send_response(req_id, get_game_playtime(message.get("game_id")))
             else:
                 await send_response(req_id, create_error_response(
                     action or "unknown",
