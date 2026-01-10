@@ -18,8 +18,26 @@ import glob
 
 dartsnut = Dartsnut()
 
-# Load the loading image
-loading_image = Image.open("./loading.png")
+# Load the loading sprite sheet and extract frames
+loading_sprite_sheet = Image.open("./loading_sprite.png")
+loading_sprite_width = loading_sprite_sheet.size[0] // 7  # 7 frames horizontally
+loading_sprite_height = loading_sprite_sheet.size[1]
+loading_frames = []
+for i in range(7):
+    frame = loading_sprite_sheet.crop((i * loading_sprite_width, 0, (i + 1) * loading_sprite_width, loading_sprite_height))
+    loading_frames.append(frame)
+# Load the big loading sprite sheet and extract frames (for top 128x128 area)
+loading_sprite_big_sheet = Image.open("./loading_sprite_big.png")
+loading_sprite_big_width = loading_sprite_big_sheet.size[0] // 7  # 7 frames horizontally
+loading_sprite_big_height = loading_sprite_big_sheet.size[1]  # 64px tall
+loading_frames_big = []
+for i in range(7):
+    frame = loading_sprite_big_sheet.crop((i * loading_sprite_big_width, 0, (i + 1) * loading_sprite_big_width, loading_sprite_big_height))
+    loading_frames_big.append(frame)
+# Animation state
+loading_frame_index = 0
+loading_frame_last_update = time.time()
+loading_frame_duration = 0.1  # 10 fps (0.1 seconds per frame)
 # Load the logo image
 logo_image = Image.open("./logo.png").resize((128,128))
 # Load the identify image
@@ -34,7 +52,7 @@ internet_disconnect_icon = Image.open("./internet_disconnect_icon.png")
 # Load the game select image
 game_select_image = Image.open("./game_sel.png")
 # Load the font
-font12 = ImageFont.truetype("./Micro5.ttf", size=12)
+font8 = ImageFont.load("./dartsnut-6X8.pil")
 font16 = ImageFont.truetype("./Micro5.ttf", size=16)
 font24 = ImageFont.truetype("./Micro5.ttf", size=24)
 
@@ -44,6 +62,46 @@ def set_pdeathsig():
     libc = ctypes.CDLL("libc.so.6")
     PR_SET_PDEATHSIG = 1
     libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+
+# Function to get the current loading frame based on animation timing
+def get_current_loading_frame():
+    global loading_frame_index, loading_frame_last_update
+    current_time = time.time()
+    # Update frame if enough time has passed
+    if current_time - loading_frame_last_update >= loading_frame_duration:
+        loading_frame_index = (loading_frame_index + 1) % 7
+        loading_frame_last_update = current_time
+    return loading_frames[loading_frame_index]
+
+# Function to get the current big loading frame based on animation timing
+def get_current_loading_frame_big():
+    global loading_frame_index, loading_frame_last_update
+    current_time = time.time()
+    # Update frame if enough time has passed (uses same timing as regular frame)
+    if current_time - loading_frame_last_update >= loading_frame_duration:
+        loading_frame_index = (loading_frame_index + 1) % 7
+        loading_frame_last_update = current_time
+    return loading_frames_big[loading_frame_index]
+
+# Function to create a 128x160 loading image with sprites positioned correctly
+def create_loading_image():
+    """Create a 128x160 image with big loading sprite centered in upper 128x128 area and regular sprite in bottom 64x32 area."""
+    current_loading_frame_big = get_current_loading_frame_big()
+    current_loading_frame = get_current_loading_frame()
+    # Ensure they're in RGB mode
+    if current_loading_frame_big.mode != "RGB":
+        current_loading_frame_big = current_loading_frame_big.convert("RGB")
+    if current_loading_frame.mode != "RGB":
+        current_loading_frame = current_loading_frame.convert("RGB")
+    # Create a 128x160 black image
+    loading_image = Image.new("RGB", (128, 160), (0, 0, 0))
+    # Paste the big loading sprite in the upper 128x128 area
+    # Big sprite is 128x64, upper area is 128x128, so position at x=0, y=(128-64)/2=32
+    loading_image.paste(current_loading_frame_big, (0, 32))
+    # Paste the regular loading sprite centered in the bottom 64x32 area
+    # Bottom area is 64x32 (x=0-63, y=128-159), sprite is 64x32, so it fits perfectly at (0, 128)
+    loading_image.paste(current_loading_frame, (0, 128))
+    return loading_image
 
 # Function to process the widget's fields
 def process_widget_fields(widget_id, widget_fields_parameter):
@@ -206,10 +264,30 @@ def start_page_process(page):
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
         img = Image.new("RGB", (128, 160), (0, 0, 0))
+        current_loading_frame_big = get_current_loading_frame_big()
+        current_loading_frame = get_current_loading_frame()
+        # Ensure they're in RGB mode
+        if current_loading_frame_big.mode != "RGB":
+            current_loading_frame_big = current_loading_frame_big.convert("RGB")
+        if current_loading_frame.mode != "RGB":
+            current_loading_frame = current_loading_frame.convert("RGB")
         for widget in widgets:
             pos = widget["widget"]["position"]
-            img_part = loading_image.crop((pos[0], pos[1], pos[2] + 1, pos[3] + 1))
-            img.paste(img_part, (pos[0], pos[1]))
+            x0, y0, x1, y1 = pos
+            widget_width = x1 - x0 + 1
+            widget_height = y1 - y0 + 1
+            # Check if widget is in the top 128x128 area (y1 < 128)
+            if y1 < 128:
+                # Use big sprite (128x64) for widgets in top area
+                # Center the big sprite in the widget area
+                sprite_x = x0 + (widget_width - 128) // 2
+                sprite_y = y0 + (widget_height - 64) // 2
+                img.paste(current_loading_frame_big, (sprite_x, sprite_y))
+            else:
+                # Use regular sprite (64x32) for widgets in bottom area
+                sprite_x = x0 + (widget_width - 64) // 2
+                sprite_y = y0 + (widget_height - 32) // 2
+                img.paste(current_loading_frame, (sprite_x, sprite_y))
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
@@ -252,7 +330,8 @@ def start_game_process(gameid):
         # start the process
         try:
             shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
-            # Initialize shared memory with the loading image
+            # Initialize shared memory with the current loading frame
+            loading_image = create_loading_image()
             img_bytes = loading_image.tobytes()
             shm.buf[1:1+len(img_bytes)] = img_bytes
             shm.buf[0] = 0
@@ -640,8 +719,9 @@ for var in global_vars:
         # Optionally, initialize to None or suitable default if not declared
         globals()[var] = None
 
-# display the loading image
-dartsnut.update_frame_buffer(loading_image)
+# display the loading image (animated)
+# display the loading image (animated)
+dartsnut.update_frame_buffer(create_loading_image())
 
 # read device.info
 device_info = get_device_info()
@@ -672,6 +752,8 @@ init_widgets()
 while dartsnut.running:
     try:
         time.sleep(1/30)
+        # Update loading animation frame
+        get_current_loading_frame()
         # locate device
         if locate_device_intv:
             dartsnut.update_frame_buffer(identify_image)
@@ -733,8 +815,11 @@ while dartsnut.running:
                     text = "WIDGETS"
                 elif menu_select_index == 2:
                     text = "SETTINGS"
-                text_bbox = draw.textbbox((0, 0), text, font=font12)
-                draw.text(((64 - text_bbox[2]) / 2, 150), text, fill="white", font=font12)
+                # get the text width, 6 pixels per character for 6x8 font
+                text_width = len(text) * 6
+                # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
+                text_x = int((64 - text_width) / 2)
+                draw.text((text_x, 152), text, fill=(255, 255, 255), font=font8)
                 # render the menu to the screen
                 dartsnut.update_frame_buffer(menu_image)
         # widget mode
@@ -831,8 +916,15 @@ while dartsnut.running:
             # render the game frame buffer
             elif game is not None:
                 if game["shm"].buf[0] == 0:
-                    dartsnut.update_frame_buffer(game["shm"].buf[1:])
-                    game["shm"].buf[0] = 1
+                    # Game has rendered a new frame (buf[0] == 0 means new frame ready)
+                    # Read the frame and mark it as read
+                    game_image = Image.frombytes("RGB", (128, 160), bytes(game["shm"].buf[1:1+128*160*3]))
+                    dartsnut.update_frame_buffer(game_image)
+                    game["shm"].buf[0] = 1  # Mark frame as read
+                else:
+                    # Game hasn't rendered a new frame yet (buf[0] == 1), show loading animation
+                    # Display the loading animation (don't update shared memory to avoid overwriting game's frame)
+                    dartsnut.update_frame_buffer(create_loading_image())
         # in settings
         elif (state == "settings"):
             # Draw the settings menu
@@ -842,7 +934,7 @@ while dartsnut.running:
             settings_items = [
                 {"name": "Brightness", "type": "value"},
                 {"name": "Volume", "type": "value"},
-                {"name": "Network", "type": "info"},
+                {"name": "IP", "type": "info"},
                 {"name": "Version", "type": "info"}
             ]
             # Get brightness and volume values
@@ -875,7 +967,7 @@ while dartsnut.running:
                 if focused:
                     draw.rectangle((0, y, 127, y + item_height - 1), fill=(40, 40, 40))
                 # Draw item name
-                draw.text((8, y + 8), item["name"], fill="white", font=font16)
+                draw.text((2, y + 12), item["name"].upper(), fill="white", font=font8)
                 # Draw value/info
                 if item["name"] == "Brightness":
                     value_str = f"{brightness}"
@@ -884,34 +976,37 @@ while dartsnut.running:
                     arrow_left_x = value_x - 13
                     arrow_right_x = value_x + 23
                     if focused:
-                        draw.text((arrow_left_x, y + 8), "<", fill="white", font=font16)
-                        draw.text((arrow_right_x, y + 8), ">", fill="white", font=font16)
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
+                        draw.text((arrow_left_x, y + 12), "<", fill="white", font=font8)
+                        draw.text((arrow_right_x, y + 12), ">", fill="white", font=font8)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
                     else:
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
                 elif item["name"] == "Volume":
                     value_str = f"{volume}"
                     value_x = 80
                     arrow_left_x = value_x - 13
                     arrow_right_x = value_x + 23
                     if focused:
-                        draw.text((arrow_left_x, y + 8), "<", fill="white", font=font16)
-                        draw.text((arrow_right_x, y + 8), ">", fill="white", font=font16)
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
+                        draw.text((arrow_left_x, y + 12), "<", fill="white", font=font8)
+                        draw.text((arrow_right_x, y + 12), ">", fill="white", font=font8)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
                     else:
-                        draw.text((value_x, y + 8), value_str, fill="white", font=font16)
-                elif item["name"] == "Network":
-                    text_bbox = draw.textbbox((0, 0), ip_address, font=font16)
-                    text_width = text_bbox[2] - text_bbox[0]
-                    draw.text((48 + (80 - text_width) / 2, y + 8), ip_address, fill="white", font=font16)
+                        draw.text((value_x, y + 12), value_str, fill="white", font=font8)
+                elif item["name"] == "IP":
+                    text_width = len(ip_address) * 6
+                    draw.text((48 + (80 - text_width) / 2, y + 12), ip_address, fill="white", font=font8)
                 elif item["name"] == "Version":
-                    text_bbox = draw.textbbox((0, 0), version, font=font16)
-                    text_width = text_bbox[2] - text_bbox[0]
-                    draw.text((48 + (80 - text_width) / 2, y + 8), version, fill="white", font=font16)
+                    text_width = len(version) * 6
+                    draw.text((48 + (80 - text_width) / 2, y + 12), version, fill="white", font=font8)
             # Draw the settings icon at the bottom
             settings_image.paste(settings_icon, (24, 128), settings_icon.convert("RGBA"))
-            text_bbox = draw.textbbox((0, 0), "Settings", font=font12)
-            draw.text(((64 - text_bbox[2]) / 2, 144), "Settings", fill="white", font=font12)
+            # Draw the settings label text
+            settings_text = "SETTINGS"
+            # Get the text width, 6 pixels per character for 6x8 font
+            settings_text_width = len(settings_text) * 6
+            # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
+            settings_text_x = int((64 - settings_text_width) / 2)
+            draw.text((settings_text_x, 152), settings_text, fill=(255, 255, 255), font=font8)
             # Render settings to screen
             dartsnut.update_frame_buffer(settings_image)
         
@@ -1080,6 +1175,7 @@ while dartsnut.running:
                     state = "menu"
         elif (buttons["btn_reserved"]):
             pass
+
         # render widgets
         if pages is not None and len(pages) > 0:
             for page in pages:

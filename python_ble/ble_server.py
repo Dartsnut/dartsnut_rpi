@@ -207,6 +207,7 @@ def start_ble_server():
         bt_adapter = adapter.Adapter(adapter_address)
         if not bt_adapter.powered:
             bt_adapter.powered = True
+
         for _ in range(10):
             if bt_adapter.powered:
                 break
