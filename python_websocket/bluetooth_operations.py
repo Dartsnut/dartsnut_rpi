@@ -2,25 +2,33 @@ import bluetooth
 import os
 import subprocess
 import time
+from python_websocket.error_handler import (
+    ErrorCode,
+    handle_exception,
+    handle_bluetooth_error
+)
 
 def scan_bluetooth_devices():
     """
     Scans for nearby Bluetooth devices and returns a list of devices
     that are likely controllers, headphones, or Bluetooth speakers.
     """
-    # Common keywords for audio devices and controllers
-    audio_keywords = ['headphone', 'speaker', 'audio', 'controller']
+    try:
+        # Common keywords for audio devices and controllers
+        audio_keywords = ['headphone', 'speaker', 'audio', 'controller']
 
-    nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
-    
-    filtered_devices = []
+        nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
+        
+        filtered_devices = []
 
-    for addr, name in nearby_devices:
-        lower_name = name.lower() if name else ""
-        if any(keyword in lower_name for keyword in audio_keywords):
-            filtered_devices.append({'address': addr, 'name': name})
+        for addr, name in nearby_devices:
+            lower_name = name.lower() if name else ""
+            if any(keyword in lower_name for keyword in audio_keywords):
+                filtered_devices.append({'address': addr, 'name': name})
 
-    return {"action" : "bluetooth_scan", "devices": filtered_devices}
+        return {"action": "bluetooth_scan", "devices": filtered_devices}
+    except Exception as e:
+        return handle_exception("bluetooth_scan", e, "Bluetooth scan failed")
 
 def list_paired_devices():
     """
@@ -44,10 +52,14 @@ def list_paired_devices():
                 if len(parts) >= 3 and parts[0] == "Device":
                     paired_devices.append({'address': parts[1], 'name': parts[2]})
         else:
-             return {"action": "bluetooth_list", "error": "Failed to run bluetoothctl"}
+            return handle_bluetooth_error(
+                "bluetooth_list",
+                ErrorCode.BLUETOOTH_LIST_FAILED,
+                "Unable to list paired Bluetooth devices"
+            )
 
     except Exception as e:
-        return {"action": "bluetooth_list", "error": f"Failed to list devices: {str(e)}"}
+        return handle_exception("bluetooth_list", e, "Failed to list paired devices")
 
     return {"action": "bluetooth_list", "devices": paired_devices}
 
@@ -75,15 +87,8 @@ def disconnect_and_unpair_device(address):
 
         process.communicate()
         return {"action": "bluetooth_remove", "address": address, "message": "Success"}
-        # stdout, stderr = process.communicate(timeout=10)
-        # if "Device has been removed" in stdout or "Device has been removed" in stderr:
-        #     print(f"Successfully disconnected and removed {address}")
-        #     return True
-        # else:
-        #     print(f"Failed to remove {address}. Output: {stdout} {stderr}")
-        #     return False
     except Exception as e:
-        return {"action": "bluetooth_remove", "address": address, "error": f"Failed to remove device: {str(e)}"}
+        return handle_exception("bluetooth_remove", e, "Failed to remove Bluetooth device", address=address)
 
 def pair_and_connect_device(address):
     """
@@ -120,7 +125,12 @@ def pair_and_connect_device(address):
             process.stdin.write('exit\n')
             process.stdin.flush()
             process.terminate()
-            return {"action": "bluetooth_connect", "address": address, "error": "Device not found during scan"}
+            return handle_bluetooth_error(
+                "bluetooth_connect",
+                ErrorCode.BLUETOOTH_DEVICE_NOT_FOUND,
+                "Bluetooth device not found during scan",
+                address=address
+            )
             
         # Execute pair, trust, connect one by one
         process.stdin.write(f'pair {address}\n')
@@ -140,7 +150,12 @@ def pair_and_connect_device(address):
             process.stdin.write('exit\n')
             process.stdin.flush()
             process.terminate()
-            return {"action": "bluetooth_connect", "address": address, "error": "Pairing failed"}
+            return handle_bluetooth_error(
+                "bluetooth_connect",
+                ErrorCode.BLUETOOTH_PAIRING_FAILED,
+                "Unable to pair with Bluetooth device",
+                address=address
+            )
 
         process.stdin.write(f'trust {address}\n')
         process.stdin.flush()
@@ -157,7 +172,12 @@ def pair_and_connect_device(address):
             process.stdin.write('exit\n')
             process.stdin.flush()
             process.terminate()
-            return {"action": "bluetooth_connect", "address": address, "error": "Trusting failed"}
+            return handle_bluetooth_error(
+                "bluetooth_connect",
+                ErrorCode.BLUETOOTH_TRUST_FAILED,
+                "Unable to trust Bluetooth device",
+                address=address
+            )
 
         process.stdin.write(f'connect {address}\n')
         process.stdin.flush()
@@ -169,14 +189,19 @@ def pair_and_connect_device(address):
             if "Connection successful" in line or f"Device {address} connected" in line:
                 break
             if "Failed to connect" in line or "AuthenticationFailed" in line:
-                return {"action": "bluetooth_connect", "address": address, "error": "Connecting failed"}
+                return handle_bluetooth_error(
+                    "bluetooth_connect",
+                    ErrorCode.BLUETOOTH_CONNECTION_FAILED,
+                    "Unable to connect to Bluetooth device",
+                    address=address
+                )
 
         process.stdin.write('exit\n')
         process.stdin.flush()
         return {"action": "bluetooth_connect", "address": address, "message": "Success"}
 
     except Exception as e:
-        return {"action": "bluetooth_connect", "address": address, "error": f"Failed to connect device: {str(e)}"}
+        return handle_exception("bluetooth_connect", e, "Failed to connect Bluetooth device", address=address)
 
 # Example usage:
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
+from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking
 from pydartsnut import Dartsnut
 import struct
 import glob
@@ -276,18 +277,17 @@ def start_page_process(page):
             x0, y0, x1, y1 = pos
             widget_width = x1 - x0 + 1
             widget_height = y1 - y0 + 1
-            # Check if widget is in the top 128x128 area (y1 < 128)
-            if y1 < 128:
-                # Use big sprite (128x64) for widgets in top area
-                # Center the big sprite in the widget area
-                sprite_x = x0 + (widget_width - 128) // 2
-                sprite_y = y0 + (widget_height - 64) // 2
-                img.paste(current_loading_frame_big, (sprite_x, sprite_y))
-            else:
-                # Use regular sprite (64x32) for widgets in bottom area
-                sprite_x = x0 + (widget_width - 64) // 2
-                sprite_y = y0 + (widget_height - 32) // 2
-                img.paste(current_loading_frame, (sprite_x, sprite_y))
+            # Show loading sprites based on widget height
+            if widget_height == 160:
+                # Show both sprites matching game's loading sprite coordinates
+                img.paste(current_loading_frame_big, (x0, y0 + 32))
+                img.paste(current_loading_frame, (x0, y0 + 128))
+            elif widget_height == 128:
+                # Show only big sprite matching game's big sprite offset
+                img.paste(current_loading_frame_big, (x0, y0 + 32))
+            elif widget_height == 32:
+                # Show only regular sprite at widget's top-left
+                img.paste(current_loading_frame, (x0, y0))
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
@@ -343,15 +343,25 @@ def start_game_process(gameid):
                 cwd=os.path.join("./apps/", gameid),
                 preexec_fn=set_pdeathsig
             )
-            return {"process":process, "shm": shm}
+            # Start tracking game playtime
+            try:
+                start_game_tracking(gameid)
+            except Exception as e:
+                print(f"Warning: Failed to start game tracking: {e}")
+            return {"process":process, "shm": shm, "game_id": gameid}
         except Exception as e:
-            print(f"Error starting game {game['id']}: {e}")
+            print(f"Error starting game {gameid}: {e}")
     return None
 
 # Function to terminate the game process and clean up
 def term_game_process(g):
     if g is not None:
         try:
+            # Stop tracking game playtime before terminating
+            try:
+                stop_game_tracking()
+            except Exception as e:
+                print(f"Warning: Failed to stop game tracking: {e}")
             os.kill(g["process"].pid, signal.SIGCONT)
             os.kill(g["process"].pid, signal.SIGKILL)
             g["shm"].close()
@@ -733,7 +743,7 @@ ble_thread = threading.Thread(target=start_ble_server, daemon=True)
 ble_thread.start()
 
 # start websocket server
-websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game_from_websocket), daemon=True)
+websocket_thread = threading.Thread(target=start_websocket_server, args=(set_brightness,locate_device,reload_config,set_time_zone,get_widgets_framebuffer,start_game_from_websocket,set_volume), daemon=True)
 websocket_thread.start()
 
 # Start the connection check thread
@@ -911,6 +921,11 @@ while dartsnut.running:
                 reload_conf = True
             # if the game process is not polling, trigger reload
             elif game["process"].poll() is not None:
+                # Stop tracking game playtime when game ends
+                try:
+                    stop_game_tracking()
+                except Exception as e:
+                    print(f"Warning: Failed to stop game tracking: {e}")
                 # trigger reload
                 reload_conf = True
             # render the game frame buffer
