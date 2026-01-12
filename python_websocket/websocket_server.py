@@ -15,7 +15,7 @@ from python_websocket.json_operations import read_json_file, write_json_file, ge
 from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
 from python_websocket.git_operations import check_update, perform_update, get_version
 from python_websocket.udp_broadcast import udp_broadcast
-from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh
+from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh, get_brightness, get_volume
 from python_websocket.user_data_operations import (
     get_user_data,
     update_user_info,
@@ -185,6 +185,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     ))
             elif action == "get_wifi_rssi":
                await send_response(req_id, get_wifi_rssi())
+            elif action == "get_brightness":
+                await send_response(req_id, get_brightness())
+            elif action == "get_volume":
+                await send_response(req_id, get_volume())
             elif action == "forget_wifi":
                 forget_wifi()
             elif action == "get_version":

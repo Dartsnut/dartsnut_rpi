@@ -1,5 +1,7 @@
 import subprocess
 import re
+import json
+import os
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -68,3 +70,37 @@ def stop_ssh():
         return handle_command_error("stop_ssh", "systemctl stop ssh", e.returncode, e.stderr)
     except Exception as e:
         return handle_exception("stop_ssh", e, "Failed to stop SSH service")
+
+def get_brightness():
+    try:
+        # Read the device.json file
+        device_info_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_info_path, 'r') as file:
+            device_info = json.load(file)
+        
+        # Extract brightness value, default to 50 if missing
+        brightness = int(device_info.get('brightness', '50'))
+        return {"action": "get_brightness", "brightness": brightness}
+    except FileNotFoundError as e:
+        return handle_exception("get_brightness", e, "Device info file not found")
+    except (json.JSONDecodeError, ValueError) as e:
+        return handle_exception("get_brightness", e, "Failed to decode brightness value")
+    except Exception as e:
+        return handle_exception("get_brightness", e, "An error occurred while getting brightness")
+
+def get_volume():
+    try:
+        # Read the device.json file
+        device_info_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_info_path, 'r') as file:
+            device_info = json.load(file)
+        
+        # Extract volume value, default to 50 if missing
+        volume = int(device_info.get('volume', '50'))
+        return {"action": "get_volume", "volume": volume}
+    except FileNotFoundError as e:
+        return handle_exception("get_volume", e, "Device info file not found")
+    except (json.JSONDecodeError, ValueError) as e:
+        return handle_exception("get_volume", e, "Failed to decode volume value")
+    except Exception as e:
+        return handle_exception("get_volume", e, "An error occurred while getting volume")
