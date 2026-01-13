@@ -127,6 +127,269 @@ def process_widget_fields(widget_id, widget_fields_parameter):
                         params[field["id"]]["image"] = tmp_file_path
     return params
 
+# ============================================================================
+# Widget Update Feature
+# ============================================================================
+# Automatic widget version checking and background updates.
+# Widgets are checked when pages become active, and updates are downloaded
+# in the background. Processes are killed and restarted when appropriate
+# to ensure widgets run with the latest version.
+# ============================================================================
+
+# Global dictionary to track last update check time for each widget
+widget_update_checks = {}
+# Global set to track widgets that have been updated and need restart
+widgets_updated = set()
+
+# Function to check widget version and determine if update is needed
+def check_and_update_widget_version(widget_id):
+    """
+    Check if widget needs update by comparing local version with API version.
+    Returns tuple: (needs_update: bool, download_info: dict or None)
+    """
+    try:
+        # Read current version from local conf.json
+        conf_path = os.path.join(os.getcwd(), "apps", widget_id, "conf.json")
+        local_version = None
+        if os.path.isfile(conf_path):
+            try:
+                with open(conf_path, "r") as f:
+                    conf = json.load(f)
+                    local_version = conf.get("version")
+            except Exception as e:
+                print(f"Error reading conf.json for widget {widget_id}: {e}")
+        
+        # Fetch latest version from API
+        try:
+            response = requests.get(f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}")
+            if response.status_code == 200:
+                download_info = response.json().get("data")
+                if download_info is not None:
+                    api_version = download_info.get("version")
+                    
+                    # If local version is missing, schedule update
+                    if local_version is None:
+                        return (True, download_info)
+                    
+                    # If API version is missing, don't update
+                    if api_version is None:
+                        return (False, None)
+                    
+                    # Compare versions (simple string comparison)
+                    if local_version != api_version:
+                        return (True, download_info)
+                    
+                    return (False, download_info)
+            else:
+                print(f"Failed to get download info for widget {widget_id}: {response.status_code}")
+                return (False, None)
+        except Exception as e:
+            print(f"Error fetching widget download info for {widget_id}: {e}")
+            return (False, None)
+    except Exception as e:
+        print(f"Error checking widget version for {widget_id}: {e}")
+        return (False, None)
+
+# Function to download widget asynchronously in background
+def download_widget_async(widget_id, url, md5):
+    """
+    Download widget in background thread without blocking widget startup.
+    
+    After download completes, calls kill_widget_if_page_inactive() to handle
+    process termination based on whether the widget's page is currently active.
+    
+    Args:
+        widget_id: The widget ID to download
+        url: Download URL for the widget
+        md5: MD5 hash for verification
+    """
+    def download_worker():
+        try:
+            print(f"Starting background download for widget {widget_id}")
+            result = download_app(url, md5)
+            if result:
+                print(f"Successfully updated widget {widget_id}")
+                # Kill widget process if its page is not currently active
+                kill_widget_if_page_inactive(widget_id)
+            else:
+                print(f"Failed to update widget {widget_id}")
+        except Exception as e:
+            print(f"Error in background download for widget {widget_id}: {e}")
+    
+    worker = threading.Thread(target=download_worker, daemon=True)
+    worker.start()
+
+# Widget Update Feature Functions
+
+# Helper function to kill a widget process and clean up resources
+def _kill_widget_process(widget_entry, widget_id, reason=""):
+    """
+    Helper function to kill a widget process and clean up resources.
+    
+    Args:
+        widget_entry: Widget entry dictionary with process and shm
+        widget_id: Widget ID for logging
+        reason: Optional reason string for logging
+    """
+    try:
+        process = widget_entry.get("process")
+        if process and process.poll() is None:
+            log_msg = f"Killing widget {widget_id} process"
+            if reason:
+                log_msg += f" ({reason})"
+            print(log_msg)
+            os.kill(process.pid, signal.SIGCONT)
+            os.kill(process.pid, signal.SIGKILL)
+            # Clean up shared memory
+            shm = widget_entry.get("shm")
+            if shm:
+                try:
+                    shm.close()
+                    shm.unlink()
+                except Exception as e:
+                    print(f"Error cleaning up shared memory for widget {widget_id}: {e}")
+            # Mark process as None so it can be restarted
+            widget_entry["process"] = None
+            widget_entry["shm"] = None
+    except Exception as e:
+        print(f"Error killing widget {widget_id} process: {e}")
+
+# Function to kill widget process if its page is not currently active
+def kill_widget_if_page_inactive(widget_id):
+    """
+    Handle widget process termination after update download completes.
+    
+    If the widget's page is not currently active, kills the process immediately.
+    If the page is active, marks the widget in widgets_updated set so it will
+    be killed when the page is suspended.
+    
+    Args:
+        widget_id: The widget ID that was just updated
+    """
+    global pages, page_index, state
+    
+    # Only proceed if we're in widget state and pages exist
+    if state != "widget" or pages is None:
+        return
+    
+    # Find the page containing this widget
+    for page_idx, page in enumerate(pages):
+        for widget_entry in page.get("widgets", []):
+            widget = widget_entry.get("widget")
+            if widget and widget.get("id") == widget_id:
+                # Found the widget, check if its page is currently active
+                if page_idx != page_index:
+                    # Page is not active, kill the widget process
+                    _kill_widget_process(widget_entry, widget_id, "page not active, update complete")
+                else:
+                    # Page is currently active, mark widget as updated (will kill when suspended)
+                    widgets_updated.add(widget_id)
+                    print(f"Widget {widget_id} update complete, page is active - will restart when suspended")
+                return
+
+# Function to restart a widget process
+def restart_widget_process(widget_entry, page, widget_index):
+    """
+    Restart a widget process that was killed after an update.
+    
+    Creates new shared memory and process for the widget, loading the updated
+    widget code. This is called when a page becomes active and its widgets
+    need to be restarted with the new version.
+    
+    Args:
+        widget_entry: Widget entry dictionary to update with new process/shm
+        page: Page object containing the widget
+        widget_index: Index of the widget within the page
+    """
+    widget = widget_entry.get("widget")
+    if not widget:
+        return
+    
+    widget_id = widget.get("id")
+    if widget_id == "0":
+        return  # Skip default widget
+    
+    widget_path = os.path.join(os.getcwd(), "apps", widget_id)
+    if not os.path.isdir(widget_path):
+        return
+    
+    try:
+        page_uuid = page["uuid"]
+        shm_name = f"widget_{page_uuid}_{widget_index}_shm"
+        shm_size = (widget["position"][2] - widget["position"][0] + 1) * (widget["position"][3] - widget["position"][1] + 1) * 3 + 1
+        
+        # Clean up any existing shared memory
+        try:
+            existing_shm = shared_memory.SharedMemory(name=shm_name)
+            existing_shm.close()
+            shared_memory.SharedMemory(name=shm_name).unlink()
+        except FileNotFoundError:
+            pass
+        except FileExistsError:
+            shared_memory.SharedMemory(name=shm_name).unlink()
+        
+        # Create new shared memory and process
+        shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
+        shm.buf[0] = 1
+        command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", widget_id, "main.py")]
+        command.extend(["--params", json.dumps(process_widget_fields(widget_id, widget["fields"]))])
+        command.extend(["--shm", shm_name])
+        process = subprocess.Popen(
+            command,
+            cwd=os.path.join("./apps/", widget_id),
+            preexec_fn=set_pdeathsig
+        )
+        
+        # Update widget entry with new process and shared memory
+        widget_entry["process"] = process
+        widget_entry["shm"] = shm
+        print(f"Successfully restarted widget {widget_id}")
+    except Exception as e:
+        print(f"Error restarting widget {widget_id}: {e}")
+
+# Function to check and update widgets in a page, respecting throttling
+def check_page_widget_updates(page):
+    """
+    Check and update widgets in the given page, respecting throttling.
+    
+    Only checks widgets if 30 seconds have passed since the last check for
+    that widget. If an update is needed, starts background download.
+    
+    Args:
+        page: Page object containing widgets to check
+    """
+    current_time = time.time()
+    check_interval = 3600  # 1 hour
+    
+    for widget_entry in page["widgets"]:
+        # Widget structure: {"process": ..., "shm": ..., "widget": {"id": ..., ...}}
+        widget = widget_entry.get("widget")
+        if widget is None:
+            continue
+        
+        widget_id = widget.get("id")
+        if widget_id is None:
+            continue
+        
+        # Skip default widget (id == "0")
+        if widget_id == "0":
+            continue
+        
+        # Check throttling
+        last_check_time = widget_update_checks.get(widget_id, 0)
+        if current_time - last_check_time > check_interval:
+            try:
+                needs_update, download_info = check_and_update_widget_version(widget_id)
+                widget_update_checks[widget_id] = current_time
+                
+                if needs_update and download_info is not None:
+                    widget_download_url = download_info.get("widget_download_url")
+                    widget_download_md5 = download_info.get("widget_download_md5")
+                    if widget_download_url and widget_download_md5:
+                        download_widget_async(widget_id, widget_download_url, widget_download_md5)
+            except Exception as e:
+                print(f"Error checking widget version for {widget_id}: {e}")
+
 # Function to download widget from the server
 def download_app(url, md5):
     try:
@@ -866,18 +1129,68 @@ while dartsnut.running:
                 if page_index != last_page_index:
                     for i in range(len(pages)):
                         if i == page_index:
-                            for widget in pages[i]["widgets"]:
+                            for widget_idx, widget_entry in enumerate(pages[i]["widgets"]):
                                 try:
-                                    os.kill(widget["process"].pid, signal.SIGCONT)
+                                    process = widget_entry.get("process")
+                                    if process is None:
+                                        # Process was killed, restart it
+                                        widget = widget_entry.get("widget")
+                                        if widget and widget.get("id") != "0":
+                                            print(f"Restarting widget {widget.get('id')} (process was killed)")
+                                            restart_widget_process(widget_entry, pages[i], widget_idx)
+                                        continue
+                                    # Check if process is still alive
+                                    if process.poll() is None:
+                                        # Process is alive, resume it
+                                        os.kill(process.pid, signal.SIGCONT)
+                                    else:
+                                        # Process is dead (likely killed after update), restart it
+                                        widget = widget_entry.get("widget")
+                                        if widget and widget.get("id") != "0":
+                                            print(f"Restarting widget {widget.get('id')} (process was killed)")
+                                            restart_widget_process(widget_entry, pages[i], widget_idx)
                                 except Exception as e:
                                     print(f"Error resuming widget process: {e}")
                         else:
-                            for widget in pages[i]["widgets"]:
+                            for widget_entry in pages[i]["widgets"]:
                                 try:
-                                    os.kill(widget["process"].pid, signal.SIGSTOP)
+                                    widget = widget_entry.get("widget")
+                                    widget_id = widget.get("id") if widget else None
+                                    
+                                    # Check if widget was updated and needs restart
+                                    if widget_id and widget_id in widgets_updated:
+                                        _kill_widget_process(widget_entry, widget_id, "suspending page, update complete")
+                                        # Remove from updated set since we've handled it
+                                        widgets_updated.discard(widget_id)
+                                    else:
+                                        # Normal suspend behavior
+                                        process = widget_entry.get("process")
+                                        if process and process.poll() is None:
+                                            os.kill(process.pid, signal.SIGSTOP)
                                 except Exception as e:
                                     print(f"Error pausing widget process: {e}")
                     last_page_index = page_index
+                    # Check for widget updates when page becomes active
+                    check_page_widget_updates(pages[page_index])
+                else:
+                    # Page hasn't changed, but check if current page's widgets need restarting
+                    for widget_idx, widget_entry in enumerate(pages[page_index]["widgets"]):
+                        try:
+                            process = widget_entry.get("process")
+                            if process is None:
+                                # Process was killed (e.g., after update), restart it
+                                widget = widget_entry.get("widget")
+                                if widget and widget.get("id") != "0":
+                                    print(f"Restarting widget {widget.get('id')} (process was killed)")
+                                    restart_widget_process(widget_entry, pages[page_index], widget_idx)
+                            elif process.poll() is not None:
+                                # Process is dead, restart it
+                                widget = widget_entry.get("widget")
+                                if widget and widget.get("id") != "0":
+                                    print(f"Restarting widget {widget.get('id')} (process died)")
+                                    restart_widget_process(widget_entry, pages[page_index], widget_idx)
+                        except Exception as e:
+                            print(f"Error checking widget process: {e}")
                 # load the widgets' frame buffer
                 widget_img = Image.frombytes("RGB", (128, 160), bytes(pages[page_index]["framebuffer"]))
                 # overlay the lock icon if the widget is freezing
@@ -1195,10 +1508,17 @@ while dartsnut.running:
         if pages is not None and len(pages) > 0:
             for page in pages:
                 for widget in page["widgets"]:
-                    if widget["shm"].buf[0] == 0:
+                    shm = widget.get("shm")
+                    if shm is not None and shm.buf[0] == 0:
                         for widget in page["widgets"]:
-                            shm_buf = widget["shm"].buf
-                            x0, y0, x1, y1 = widget["widget"]["position"]
+                            shm = widget.get("shm")
+                            if shm is None:
+                                continue
+                            shm_buf = shm.buf
+                            widget_data = widget.get("widget")
+                            if widget_data is None:
+                                continue
+                            x0, y0, x1, y1 = widget_data["position"]
                             width = x1 - x0 + 1
                             height = y1 - y0 + 1
                             for y in range(height):
