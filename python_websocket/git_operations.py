@@ -1,4 +1,5 @@
 import subprocess
+import os
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -84,12 +85,26 @@ def perform_update():
             subprocess.run(
                 ["sudo", "./setup.sh"], cwd="/home/rpi/dartsnut_rpi", check=True
             )
+            # Create flag file to indicate successful update
+            flag_path = "/tmp/firmware_updated.flag"
+            try:
+                with open(flag_path, "w") as f:
+                    f.write("")
+            except Exception:
+                pass  # Ignore errors creating flag file
             return {"action": "perform_update", "message": "Update successful"}
         else:
             # Run update.sh to update dependencies and restart service
             subprocess.run(
                 ["sudo", "./update.sh"], cwd="/home/rpi/dartsnut_rpi", check=True
             )
+            # Create flag file to indicate successful update
+            flag_path = "/tmp/firmware_updated.flag"
+            try:
+                with open(flag_path, "w") as f:
+                    f.write("")
+            except Exception:
+                pass  # Ignore errors creating flag file
             return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
         # Rollback to old commit
