@@ -251,6 +251,7 @@ def _kill_widget_process(widget_entry, widget_id, reason=""):
             # Mark process as None so it can be restarted
             widget_entry["process"] = None
             widget_entry["shm"] = None
+            widget_entry["launched"] = False  # Reset launch status when killed
     except Exception as e:
         print(f"Error killing widget {widget_id} process: {e}")
 
@@ -343,6 +344,7 @@ def restart_widget_process(widget_entry, page, widget_index):
         # Update widget entry with new process and shared memory
         widget_entry["process"] = process
         widget_entry["shm"] = shm
+        widget_entry["launched"] = False  # Reset launch status for new process
         print(f"Successfully restarted widget {widget_id}")
     except Exception as e:
         print(f"Error restarting widget {widget_id}: {e}")
@@ -472,7 +474,7 @@ def start_page_process(page):
                     cwd=os.getcwd(),
                     preexec_fn=set_pdeathsig
                 )
-                widgets.append({"process":process, "shm": shm, "widget": widget})
+                widgets.append({"process":process, "shm": shm, "widget": widget, "launched": False})
             except Exception as e:
                 print(f"Error starting default widget: {e}")
                 # If the widget fails to start, we don't add it to the page
@@ -520,7 +522,7 @@ def start_page_process(page):
                         cwd=os.path.join("./apps/", widget["id"]),
                         preexec_fn=set_pdeathsig
                     )
-                    widgets.append({"process":process, "shm": shm, "widget": widget})
+                    widgets.append({"process":process, "shm": shm, "widget": widget, "launched": False})
                 except Exception as e:
                     print(f"Error starting widget {widget['id']}: {e}")
                     # If the widget fails to start, we don't add it to the page
@@ -554,6 +556,8 @@ def start_page_process(page):
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
+                # Reset launched flag when pausing - will need to re-establish when resumed
+                widget["launched"] = False
             except Exception as e:
                 print(f"Error pausing widget process: {e}")
         
@@ -611,7 +615,7 @@ def start_game_process(gameid):
                 start_game_tracking(gameid)
             except Exception as e:
                 print(f"Warning: Failed to start game tracking: {e}")
-            return {"process":process, "shm": shm, "game_id": gameid}
+            return {"process":process, "shm": shm, "game_id": gameid, "launched": False, "pico8_first_frame_seen": False}
         except Exception as e:
             print(f"Error starting game {gameid}: {e}")
     return None
@@ -1116,7 +1120,14 @@ while dartsnut.running:
                     if (time.time() - page_tick > int(pages[page_index]["duration"]) - 3) and (next_page_prepared_index != next_index):
                         for widget in pages[next_index]["widgets"]:
                             try:
-                                os.kill(widget["process"].pid, signal.SIGCONT)
+                                process = widget.get("process")
+                                if process is None:
+                                    # Process was killed, will be restarted when page becomes active
+                                    widget["launched"] = False
+                                    continue
+                                os.kill(process.pid, signal.SIGCONT)
+                                # Reset launched flag when resuming - will be set to True when we see buf[0]==0 in next cycle
+                                widget["launched"] = False
                             except Exception as e:
                                 print(f"Error resuming next widget process: {e}")
                         next_page_prepared_index = next_index
@@ -1143,6 +1154,8 @@ while dartsnut.running:
                                     if process.poll() is None:
                                         # Process is alive, resume it
                                         os.kill(process.pid, signal.SIGCONT)
+                                        # Reset launched flag when resuming - will be set to True when we see buf[0]==0 in next cycle
+                                        widget_entry["launched"] = False
                                     else:
                                         # Process is dead (likely killed after update), restart it
                                         widget = widget_entry.get("widget")
@@ -1167,6 +1180,8 @@ while dartsnut.running:
                                         process = widget_entry.get("process")
                                         if process and process.poll() is None:
                                             os.kill(process.pid, signal.SIGSTOP)
+                                            # Reset launched flag when pausing - will need to re-establish when resumed
+                                            widget_entry["launched"] = False
                                 except Exception as e:
                                     print(f"Error pausing widget process: {e}")
                     last_page_index = page_index
@@ -1243,16 +1258,55 @@ while dartsnut.running:
                 reload_conf = True
             # render the game frame buffer
             elif game is not None:
-                if game["shm"].buf[0] == 0:
-                    # Game has rendered a new frame (buf[0] == 0 means new frame ready)
-                    # Read the frame and mark it as read
-                    game_image = Image.frombytes("RGB", (128, 160), bytes(game["shm"].buf[1:1+128*160*3]))
-                    dartsnut.update_frame_buffer(game_image)
-                    game["shm"].buf[0] = 1  # Mark frame as read
+                game_id = game.get("game_id", "unknown")
+                poll_result = game["process"].poll()
+                shm_buf0 = game["shm"].buf[0] if game.get("shm") else None
+                
+                # Check if process is still running
+                if poll_result is not None:
+                    # Process has ended, handled above
+                    pass
+                
+                # For pico8, bypass launch status check but still check shared memory for new frames
+                if game_id == "pico8":
+                    # Track previous buf[0] value to detect when pico8 writes a new frame
+                    prev_buf0 = game.get("pico8_prev_buf0", None)
+                    if shm_buf0 == 0:
+                        # New frame ready, render it
+                        try:
+                            game_image = Image.frombytes("RGB", (128, 160), bytes(game["shm"].buf[1:1+128*160*3]))
+                            dartsnut.update_frame_buffer(game_image)
+                            # Mark frame as read so pico8 can write the next frame
+                            game["shm"].buf[0] = 1
+                            # If buf[0] transitioned from 1 to 0, pico8 wrote a frame
+                            if prev_buf0 == 1:
+                                game["pico8_first_frame_seen"] = True
+                            game["pico8_prev_buf0"] = 1
+                        except Exception as e:
+                            print(f"Error rendering pico8 frame: {e}")
+                            dartsnut.update_frame_buffer(create_loading_image())
+                    else:
+                        # buf[0] == 1
+                        game["pico8_prev_buf0"] = 1
+                        if not game.get("pico8_first_frame_seen", False):
+                            # We haven't seen pico8 write a frame yet, show loading animation
+                            dartsnut.update_frame_buffer(create_loading_image())
+                        # else: buf[0] == 1 and we've seen at least one frame from pico8, keep showing last frame (don't update frame buffer)
+                # For other games, use buf[0] == 0 as signal that game is launched and ready
                 else:
-                    # Game hasn't rendered a new frame yet (buf[0] == 1), show loading animation
-                    # Display the loading animation (don't update shared memory to avoid overwriting game's frame)
-                    dartsnut.update_frame_buffer(create_loading_image())
+                    if shm_buf0 == 0:
+                        # buf[0] == 0 means game is launched and has a new frame ready
+                        game["launched"] = True
+                        # Read the frame and mark it as read
+                        game_image = Image.frombytes("RGB", (128, 160), bytes(game["shm"].buf[1:1+128*160*3]))
+                        dartsnut.update_frame_buffer(game_image)
+                        game["shm"].buf[0] = 1  # Mark frame as read
+                    elif game.get("launched", False):
+                        # Game is launched but waiting for new frame (buf[0] == 1), show loading animation
+                        dartsnut.update_frame_buffer(create_loading_image())
+                    else:
+                        # Game hasn't launched yet (never seen buf[0] == 0), show loading animation
+                        dartsnut.update_frame_buffer(create_loading_image())
         # in settings
         elif (state == "settings"):
             # Draw the settings menu
@@ -1507,26 +1561,66 @@ while dartsnut.running:
         # render widgets
         if pages is not None and len(pages) > 0:
             for page in pages:
+                # Convert framebuffer to Image for easier manipulation
+                page_img = Image.frombytes("RGB", (128, 160), bytes(page["framebuffer"]))
+                
+                # Get current animated loading frames
+                current_loading_frame_big = get_current_loading_frame_big()
+                current_loading_frame = get_current_loading_frame()
+                # Ensure they're in RGB mode
+                if current_loading_frame_big.mode != "RGB":
+                    current_loading_frame_big = current_loading_frame_big.convert("RGB")
+                if current_loading_frame.mode != "RGB":
+                    current_loading_frame = current_loading_frame.convert("RGB")
+                
                 for widget in page["widgets"]:
+                    widget_data = widget.get("widget")
+                    if widget_data is None:
+                        continue
+                    
+                    widget_id = widget_data.get("id", "unknown")
+                    
                     shm = widget.get("shm")
+                    shm_buf0 = shm.buf[0] if shm is not None else None
+                    
+                    x0, y0, x1, y1 = widget_data["position"]
+                    widget_width = x1 - x0 + 1
+                    widget_height = y1 - y0 + 1
+                    
+                    launched = widget.get("launched", False)
+                    
+                    # Check if widget needs loading animation
+                    # Only show loading animation if widget is not launched yet
+                    if not launched:
+                        # Show animated loading sprites based on widget height
+                        if widget_height == 160:
+                            # Show both sprites matching game's loading sprite coordinates
+                            page_img.paste(current_loading_frame_big, (x0, y0 + 32))
+                            page_img.paste(current_loading_frame, (x0, y0 + 128))
+                        elif widget_height == 128:
+                            # Show only big sprite matching game's big sprite offset
+                            page_img.paste(current_loading_frame_big, (x0, y0 + 32))
+                        elif widget_height == 32:
+                            # Show only regular sprite at widget's top-left
+                            page_img.paste(current_loading_frame, (x0, y0))
+                    
+                    # Check for new frames and update launch status
                     if shm is not None and shm.buf[0] == 0:
-                        for widget in page["widgets"]:
-                            shm = widget.get("shm")
-                            if shm is None:
-                                continue
-                            shm_buf = shm.buf
-                            widget_data = widget.get("widget")
-                            if widget_data is None:
-                                continue
-                            x0, y0, x1, y1 = widget_data["position"]
-                            width = x1 - x0 + 1
-                            height = y1 - y0 + 1
-                            for y in range(height):
-                                for x in range(width):
-                                    src_idx = (y * width + x) * 3 + 1
-                                    dst_idx = ((y0 + y) * 128 + (x0 + x)) * 3
-                                    page["framebuffer"][dst_idx:dst_idx+3] = shm_buf[src_idx:src_idx+3]
-                            shm_buf[0] = 1
+                        # buf[0] == 0 means widget is launched and has a new frame ready
+                        widget["launched"] = True
+                        # Extract widget frame from shared memory as PIL Image
+                        width = x1 - x0 + 1
+                        height = y1 - y0 + 1
+                        widget_frame = Image.frombytes("RGB", (width, height), bytes(shm.buf[1:1+width*height*3]))
+                        # Paste widget frame onto page_img at widget position
+                        page_img.paste(widget_frame, (x0, y0))
+                        # Mark frame as read
+                        shm.buf[0] = 1
+                    elif widget.get("launched", False):
+                        pass  # Widget launched but no new frame, keep last frame
+                
+                # Always update framebuffer from page_img to ensure all widget updates are reflected
+                page["framebuffer"] = bytearray(page_img.tobytes())
     except Exception as e:
         print(f"Error in main loop: {e}")
 
