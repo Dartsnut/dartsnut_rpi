@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
-from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking
+from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking, _load_user_data
 from pydartsnut import Dartsnut
 import struct
 import glob
@@ -63,6 +63,25 @@ def set_pdeathsig():
     libc = ctypes.CDLL("libc.so.6")
     PR_SET_PDEATHSIG = 1
     libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+
+# Function to get user data store path
+def _get_user_data_store_path(app_id):
+    """Get the user data store path based on user_id and app_id, defaulting to 'guest' if user_id is empty."""
+    try:
+        user_data = _load_user_data()
+        user_id = user_data.get("user_id", "")
+        if user_id == "":
+            user_id = "guest"
+        data_store_path = f"/var/lib/dartsnut/user/{user_id}/{app_id}/"
+        # Ensure the directory exists
+        os.makedirs(data_store_path, mode=0o755, exist_ok=True)
+        return data_store_path
+    except Exception as e:
+        # On error, default to guest
+        print(f"Warning: Failed to load user data, defaulting to guest: {e}")
+        data_store_path = f"/var/lib/dartsnut/user/guest/{app_id}/"
+        os.makedirs(data_store_path, mode=0o755, exist_ok=True)
+        return data_store_path
 
 # Function to get the current loading frame based on animation timing
 def get_current_loading_frame():
@@ -380,6 +399,8 @@ def restart_widget_process(widget_entry, page, widget_index):
         command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", widget_id, "main.py")]
         command.extend(["--params", json.dumps(process_widget_fields(widget_id, widget["fields"]))])
         command.extend(["--shm", shm_name])
+        data_store_path = _get_user_data_store_path(widget_id)
+        command.extend(["--data-store", data_store_path])
         process = subprocess.Popen(
             command,
             cwd=os.path.join("./apps/", widget_id),
@@ -514,6 +535,8 @@ def start_page_process(page):
                 command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "default.py")]
                 command.extend(["--params", "{}"])
                 command.extend(["--shm", shm_name])
+                data_store_path = _get_user_data_store_path("0")
+                command.extend(["--data-store", data_store_path])
                 process = subprocess.Popen(
                     command,
                     cwd=os.getcwd(),
@@ -562,6 +585,8 @@ def start_page_process(page):
                     command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", widget["id"], "main.py")]
                     command.extend(["--params", json.dumps(process_widget_fields(widget["id"], widget["fields"]))])
                     command.extend(["--shm", shm_name])
+                    data_store_path = _get_user_data_store_path(widget["id"])
+                    command.extend(["--data-store", data_store_path])
                     process = subprocess.Popen(
                         command,
                         cwd=os.path.join("./apps/", widget["id"]),
@@ -650,6 +675,8 @@ def start_game_process(gameid):
             # if the uuid is "0", it is a default widget
             command = [os.path.join(os.getcwd(), "venv0/bin/python"), os.path.join(os.getcwd(), "apps/", gameid, "main.py")]
             command.extend(["--shm", shm_name])
+            data_store_path = _get_user_data_store_path(gameid)
+            command.extend(["--data-store", data_store_path])
             process = subprocess.Popen(
                 command,
                 cwd=os.path.join("./apps/", gameid),
