@@ -104,6 +104,51 @@ def create_loading_image():
     loading_image.paste(current_loading_frame, (0, 128))
     return loading_image
 
+# Private function to draw "Firmware Updated" text with gap (font doesn't support spaces)
+def _draw_firmware_updated_text(draw, x, y):
+    """Draw 'FIRMWARE UPDATED' text split into two parts with a gap.
+    
+    Args:
+        draw: ImageDraw object to draw on
+        x: Target x coordinate (will be centered around this if negative)
+        y: Target y coordinate
+    """
+    firmware_text1 = "FIRMWARE"
+    firmware_text2 = "UPDATED"
+    gap_width = 6  # gap width in pixels (equivalent to one character)
+    firmware_text1_width = len(firmware_text1) * 6
+    firmware_text2_width = len(firmware_text2) * 6
+    total_width = firmware_text1_width + gap_width + firmware_text2_width
+    
+    # If x is negative, center the text horizontally on screen (128px wide)
+    if x < 0:
+        firmware_text_x = int((128 - total_width) / 2)
+    else:
+        firmware_text_x = x
+    
+    draw.text((firmware_text_x, y), firmware_text1, fill=(255, 255, 255), font=font8)
+    draw.text((firmware_text_x + firmware_text1_width + gap_width, y), firmware_text2, fill=(255, 255, 255), font=font8)
+
+# Private function to check if firmware update flag exists
+def _check_firmware_updated_flag():
+    """Check if the firmware update flag file exists.
+    
+    Returns:
+        bool: True if flag file exists, False otherwise
+    """
+    flag_path = "/tmp/firmware_updated.flag"
+    return os.path.isfile(flag_path)
+
+# Private function to remove firmware update flag
+def _remove_firmware_updated_flag():
+    """Remove the firmware update flag file if it exists."""
+    flag_path = "/tmp/firmware_updated.flag"
+    try:
+        if os.path.isfile(flag_path):
+            os.remove(flag_path)
+    except Exception:
+        pass  # Ignore errors removing flag file
+
 # Function to process the widget's fields
 def process_widget_fields(widget_id, widget_fields_parameter):
     params = widget_fields_parameter.copy()
@@ -1097,6 +1142,9 @@ while dartsnut.running:
                 # Center the text horizontally and position it at y=152 (font is 8px tall, so 152-160 fits in 160px display)
                 text_x = int((64 - text_width) / 2)
                 draw.text((text_x, 152), text, fill=(255, 255, 255), font=font8)
+                # draw "Firmware Updated" label if flag exists
+                if _check_firmware_updated_flag():
+                    _draw_firmware_updated_text(draw, -1, 120)
                 # render the menu to the screen
                 dartsnut.update_frame_buffer(menu_image)
         # widget mode
@@ -1397,6 +1445,9 @@ while dartsnut.running:
         if (buttons["btn_a"]):
             # button A to enter menu item
             if state == "menu":
+                # Remove firmware update flag if it exists (when leaving menu state)
+                if _check_firmware_updated_flag():
+                    _remove_firmware_updated_flag()
                 if menu_select_index == 0:
                     # load the game list
                     game_list = load_game_list()
