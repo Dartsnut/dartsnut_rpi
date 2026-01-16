@@ -5,7 +5,7 @@ sudo venv0/bin/pip install --upgrade pip
 sudo venv0/bin/pip install --upgrade -r requirement.txt
 
 # Step 12: Setup cron job for automatic git updates
-CRON_SCHEDULE="* * * * *"  # Every minute (for testing). Change this to adjust schedule.
+CRON_SCHEDULE="0 3 * * *"  # 3am every day
 UPDATE_SCRIPT="/home/rpi/dartsnut_rpi/check_and_update.py"
 PYTHON_INTERPRETER="/home/rpi/dartsnut_rpi/venv0/bin/python"
 CRON_ENTRY="${CRON_SCHEDULE} ${PYTHON_INTERPRETER} ${UPDATE_SCRIPT} >> /var/log/dartsnut_update.log 2>&1"
