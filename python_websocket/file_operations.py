@@ -50,7 +50,30 @@ def _set_download_progress(game_id, progress=None, status=None, error=None):
 def get_download_progress(game_id):
     """
     Public helper used by websocket_server.py to expose current progress.
+    Accepts either a single game_id (string) or a list of game_ids.
+    Returns a dictionary with progress information for all requested game_ids.
     """
+    # Handle list of game_ids
+    if isinstance(game_id, list):
+        progresses = {}
+        for gid in game_id:
+            entry = DOWNLOAD_PROGRESS.get(gid)
+            if not entry:
+                progresses[gid] = {
+                    "game_id": gid,
+                    "progress": 0,
+                    "status": "not_found",
+                    "error": None,
+                }
+            else:
+                progresses[gid] = dict(entry)
+        
+        return {
+            "action": "get_download_progress",
+            "progresses": progresses,
+        }
+    
+    # Handle single game_id (backward compatibility)
     entry = DOWNLOAD_PROGRESS.get(game_id)
     if not entry:
         return {

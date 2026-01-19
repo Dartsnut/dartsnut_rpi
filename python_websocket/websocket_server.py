@@ -198,7 +198,20 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "perform_update":
                 await send_response(req_id, perform_update())
             elif action == "get_download_progress":
-                await send_response(req_id, get_download_progress_status(message.get("game_id")))
+                game_ids = message.get("game_ids")
+                if game_ids is None:
+                    # Handle backward compatibility: check for single game_id
+                    game_id = message.get("game_id")
+                    if game_id is not None:
+                        game_ids = [game_id]
+                    else:
+                        await send_response(req_id, create_error_response(
+                            "get_download_progress",
+                            ErrorCode.MISSING_PARAMETER,
+                            "game_ids or game_id parameter is required"
+                        ))
+                        continue
+                await send_response(req_id, get_download_progress_status(game_ids))
             elif action == "reboot":
                 reboot()
             elif action == "get_ssh_status":
