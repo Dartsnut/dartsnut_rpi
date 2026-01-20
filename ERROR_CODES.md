@@ -187,6 +187,19 @@ The error message includes the error code in brackets at the end for customer su
 
 ---
 
+### 2006 - DOWNLOAD_ALREADY_IN_PROGRESS
+**Description:** A download with the same parameters is already in progress.
+
+**Common Causes:**
+- Duplicate `download_app` request with the same url and md5
+- Duplicate async game download for the same game_id while a download is pending, initializing, downloading, or extracting
+
+**Example Scenarios:**
+- Starting a game download when that game is already downloading
+- Sending a sync download_app with the same url and checksum while another is in progress
+
+---
+
 ## 3xxx: Validation Errors
 
 ### 3001 - INVALID_INPUT

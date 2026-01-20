@@ -11,7 +11,7 @@ from python_websocket.error_handler import (
     handle_exception,
     handle_file_not_found,
     handle_directory_not_found,
-    create_error_response
+    create_error_response,
 )
 
 APPS_DIR = "apps"  # Update this to your desired save directory
@@ -20,8 +20,36 @@ DOWNLOAD_DIR = "downloads"
 # In-memory store for download progress keyed by game_id
 DOWNLOAD_PROGRESS = {}
 
+_DOWNLOAD_ACTIVE_STATUSES = ("pending", "initializing", "downloading", "extracting")
+# (url, md5) in progress for both sync download_app and async game downloads (by url or resolved in worker)
+_DOWNLOAD_KEYS_IN_FLIGHT = set()
+_DOWNLOAD_KEYS_LOCK = threading.Lock()
 
-def _set_download_progress(game_id, progress=None, status=None, error=None):
+_MISSING = object()
+
+
+def _is_game_download_active(game_id):
+    """Return True if a download for game_id is currently active (pending/initializing/downloading/extracting)."""
+    entry = DOWNLOAD_PROGRESS.get(game_id)
+    return entry is not None and entry.get("status") in _DOWNLOAD_ACTIVE_STATUSES
+
+
+def _read_version_from_conf(game_id):
+    """Read conf.json["version"] from apps_dir/{game_id}/conf.json. Returns None on any error."""
+    try:
+        path = os.path.join(os.getcwd(), APPS_DIR, game_id, "conf.json")
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("version")
+    except Exception:
+        return None
+
+
+def _set_download_progress(
+    game_id, progress=None, status=None, error=None, version=_MISSING
+):
     """
     Internal helper to update progress information for a given game_id.
     """
@@ -43,6 +71,8 @@ def _set_download_progress(game_id, progress=None, status=None, error=None):
     # Allow explicitly clearing error by passing error=""
     if error is not None:
         entry["error"] = error
+    if version is not _MISSING:
+        entry["version"] = version
 
     DOWNLOAD_PROGRESS[game_id] = entry
 
@@ -67,12 +97,12 @@ def get_download_progress(game_id):
                 }
             else:
                 progresses[gid] = dict(entry)
-        
+
         return {
             "action": "get_download_progress",
             "progresses": progresses,
         }
-    
+
     # Handle single game_id (backward compatibility)
     entry = DOWNLOAD_PROGRESS.get(game_id)
     if not entry:
@@ -88,6 +118,7 @@ def get_download_progress(game_id):
     result["action"] = "get_download_progress"
     return result
 
+
 def receive_file(websocket, data):
     try:
         file_name = data.get("file_name")
@@ -98,7 +129,7 @@ def receive_file(websocket, data):
                 "send_file",
                 ErrorCode.MISSING_PARAMETER,
                 "Required file information is missing",
-                file_name=file_name
+                file_name=file_name,
             )
 
         if os.path.isabs(file_name):
@@ -113,7 +144,7 @@ def receive_file(websocket, data):
                 "send_file",
                 ErrorCode.INVALID_INPUT,
                 "The file data format is invalid",
-                file_name=file_name
+                file_name=file_name,
             )
 
         # Save the file locally
@@ -122,9 +153,17 @@ def receive_file(websocket, data):
 
         return {"action": "send_file", "file_name": file_name, "message": "Success"}
     except PermissionError:
-        return handle_exception("send_file", PermissionError(), "Failed to save file", file_name=data.get("file_name"))
+        return handle_exception(
+            "send_file",
+            PermissionError(),
+            "Failed to save file",
+            file_name=data.get("file_name"),
+        )
     except Exception as e:
-        return handle_exception("send_file", e, "Failed to receive file", file_name=data.get("file_name"))
+        return handle_exception(
+            "send_file", e, "Failed to receive file", file_name=data.get("file_name")
+        )
+
 
 def send_file(websocket, data):
     try:
@@ -136,13 +175,25 @@ def send_file(websocket, data):
 
         with open(full_file_path, "rb") as file:
             file_data = file.read()
-            file_data_base64 = b64encode(file_data).decode('utf-8')
+            file_data_base64 = b64encode(file_data).decode("utf-8")
 
-        return {"action": "get_file", "file_name": file_name, "file_data": file_data_base64}
+        return {
+            "action": "get_file",
+            "file_name": file_name,
+            "file_data": file_data_base64,
+        }
     except PermissionError:
-        return handle_exception("get_file", PermissionError(), "Failed to read file", file_name=data.get("file_name"))
+        return handle_exception(
+            "get_file",
+            PermissionError(),
+            "Failed to read file",
+            file_name=data.get("file_name"),
+        )
     except Exception as e:
-        return handle_exception("get_file", e, "Failed to send file", file_name=data.get("file_name"))
+        return handle_exception(
+            "get_file", e, "Failed to send file", file_name=data.get("file_name")
+        )
+
 
 def get_file_md5(websocket, file_name):
     full_file_path = os.path.join(os.getcwd(), APPS_DIR, file_name)
@@ -160,9 +211,17 @@ def get_file_md5(websocket, file_name):
 
         return {"action": "get_file_md5", "file_name": file_name, "md5": file_md5}
     except PermissionError:
-        return handle_exception("get_file_md5", PermissionError(), "Failed to read file for MD5 calculation", file_name=file_name)
+        return handle_exception(
+            "get_file_md5",
+            PermissionError(),
+            "Failed to read file for MD5 calculation",
+            file_name=file_name,
+        )
     except Exception as e:
-        return handle_exception("get_file_md5", e, "Failed to calculate MD5", file_name=file_name)
+        return handle_exception(
+            "get_file_md5", e, "Failed to calculate MD5", file_name=file_name
+        )
+
 
 def remove_directory(websocket, dir_name):
     if os.path.isabs(dir_name):
@@ -176,12 +235,26 @@ def remove_directory(websocket, dir_name):
     try:
         # Remove the directory and its contents
         shutil.rmtree(full_dir_path)
-        # Return success message 
-        return {"action": "remove_directory", "directory": dir_name, "message": "Success"}
+        # Clear download progress for this game_id (directory name)
+        DOWNLOAD_PROGRESS.pop(dir_name, None)
+        # Return success message
+        return {
+            "action": "remove_directory",
+            "directory": dir_name,
+            "message": "Success",
+        }
     except PermissionError:
-        return handle_exception("remove_directory", PermissionError(), "Failed to remove directory", directory=dir_name)
+        return handle_exception(
+            "remove_directory",
+            PermissionError(),
+            "Failed to remove directory",
+            directory=dir_name,
+        )
     except Exception as e:
-        return handle_exception("remove_directory", e, "Failed to remove directory", directory=dir_name)
+        return handle_exception(
+            "remove_directory", e, "Failed to remove directory", directory=dir_name
+        )
+
 
 def create_directory(websocket, dir_name):
     if os.path.isabs(dir_name):
@@ -194,17 +267,29 @@ def create_directory(websocket, dir_name):
             "create_directory",
             ErrorCode.DIRECTORY_ALREADY_EXISTS,
             "The directory already exists",
-            directory=dir_name
+            directory=dir_name,
         )
 
     try:
         # Create the directory
         os.makedirs(full_dir_path)
-        return {"action": "create_directory", "directory": dir_name, "message": "Success"}
+        return {
+            "action": "create_directory",
+            "directory": dir_name,
+            "message": "Success",
+        }
     except PermissionError:
-        return handle_exception("create_directory", PermissionError(), "Failed to create directory", directory=dir_name)
+        return handle_exception(
+            "create_directory",
+            PermissionError(),
+            "Failed to create directory",
+            directory=dir_name,
+        )
     except Exception as e:
-        return handle_exception("create_directory", e, "Failed to create directory", directory=dir_name)
+        return handle_exception(
+            "create_directory", e, "Failed to create directory", directory=dir_name
+        )
+
 
 def get_file_list(directory):
     try:
@@ -214,22 +299,41 @@ def get_file_list(directory):
         full_dir_path = os.path.join(os.getcwd(), APPS_DIR, directory)
         if not os.path.isdir(full_dir_path):
             return handle_directory_not_found("list_files", directory)
-        return {"action": "list_files", "directory": directory, "file_list": os.listdir(full_dir_path)}
+        return {
+            "action": "list_files",
+            "directory": directory,
+            "file_list": os.listdir(full_dir_path),
+        }
     except PermissionError:
-        return handle_exception("list_files", PermissionError(), "Failed to list files", directory=directory)
+        return handle_exception(
+            "list_files", PermissionError(), "Failed to list files", directory=directory
+        )
     except Exception as e:
-        return handle_exception("list_files", e, "Failed to list files", directory=directory)
+        return handle_exception(
+            "list_files", e, "Failed to list files", directory=directory
+        )
+
 
 def download_app(url, md5):
+    key = (str(url or ""), str(md5 or ""))
+    with _DOWNLOAD_KEYS_LOCK:
+        if key in _DOWNLOAD_KEYS_IN_FLIGHT:
+            return create_error_response(
+                "download_app",
+                ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+                "A download for this url and checksum is already in progress",
+                url=url,
+            )
+        _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
     try:
         if not url.endswith(".tar.gz"):
             return create_error_response(
                 "download_app",
                 ErrorCode.INVALID_FILE_TYPE,
                 "This file type is not supported. Only .tar.gz files are supported",
-                url=url
+                url=url,
             )
-        
+
         # Ensure the download directory exists
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         file_name = url.split("/")[-1]
@@ -242,7 +346,7 @@ def download_app(url, md5):
                 "download_app",
                 ErrorCode.DOWNLOAD_FAILED,
                 "Unable to download the file",
-                url=url
+                url=url,
             )
 
         # Check if file exists after download
@@ -251,7 +355,7 @@ def download_app(url, md5):
                 "download_app",
                 ErrorCode.DOWNLOAD_FAILED,
                 "Unable to download the file",
-                url=url
+                url=url,
             )
 
         # Check MD5 using system console
@@ -264,11 +368,13 @@ def download_app(url, md5):
                 "download_app",
                 ErrorCode.MD5_MISMATCH,
                 "File integrity check failed. The downloaded file may be corrupted",
-                url=url
+                url=url,
             )
 
         # Extract tar.gz using system console
-        extract_cmd = f"tar -xzf '{download_path}' -C '{os.path.join(os.getcwd(), APPS_DIR)}'"
+        extract_cmd = (
+            f"tar -xzf '{download_path}' -C '{os.path.join(os.getcwd(), APPS_DIR)}'"
+        )
         extract_result = os.system(extract_cmd)
         if extract_result != 0:
             if os.path.isfile(download_path):
@@ -277,15 +383,18 @@ def download_app(url, md5):
                 "download_app",
                 ErrorCode.FILE_EXTRACTION_ERROR,
                 "Unable to extract the downloaded file",
-                url=url
+                url=url,
             )
 
         if os.path.isfile(download_path):
             os.remove(download_path)
-           
+
         return {"action": "download_app", "url": url, "message": "Success"}
     except Exception as e:
         return handle_exception("download_app", e, "Download failed", url=url)
+    finally:
+        with _DOWNLOAD_KEYS_LOCK:
+            _DOWNLOAD_KEYS_IN_FLIGHT.discard(key)
 
 
 def _download_game_worker(game_id):
@@ -336,75 +445,93 @@ def _download_game_worker(game_id):
             )
             return
 
-        # Ensure the download directory exists
-        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-        file_name = game_download_url.split("/")[-1]
-        download_path = os.path.join(DOWNLOAD_DIR, file_name)
-
-        # Stream download with progress and MD5 calculation
-        _set_download_progress(game_id, progress=0, status="downloading")
-        with requests.get(game_download_url, stream=True) as r:
-            if r.status_code != 200:
+        key = (str(game_download_url), str(game_download_md5))
+        with _DOWNLOAD_KEYS_LOCK:
+            if key in _DOWNLOAD_KEYS_IN_FLIGHT:
                 _set_download_progress(
                     game_id,
                     status="error",
-                    error=f"Download failed with status {r.status_code}",
+                    error="A download for this url and checksum is already in progress",
+                )
+                return
+            _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
+
+        try:
+            # Ensure the download directory exists
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            file_name = game_download_url.split("/")[-1]
+            download_path = os.path.join(DOWNLOAD_DIR, file_name)
+
+            # Stream download with progress and MD5 calculation
+            _set_download_progress(game_id, progress=0, status="downloading")
+            with requests.get(game_download_url, stream=True) as r:
+                if r.status_code != 200:
+                    _set_download_progress(
+                        game_id,
+                        status="error",
+                        error=f"Download failed with status {r.status_code}",
+                    )
+                    return
+
+                total_length = r.headers.get("Content-Length")
+                total_length = int(total_length) if total_length is not None else None
+
+                hash_md5 = hashlib.md5()
+                downloaded = 0
+                chunk_size = 8192
+
+                with open(download_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=chunk_size):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        hash_md5.update(chunk)
+                        downloaded += len(chunk)
+
+                        if total_length:
+                            progress = int(downloaded * 100 / total_length)
+                            # Avoid prematurely reporting 100% until post-processing is done
+                            if progress >= 100:
+                                progress = 99
+                            _set_download_progress(
+                                game_id, progress=progress, status="downloading"
+                            )
+
+            # Verify MD5
+            downloaded_md5 = hash_md5.hexdigest()
+            if downloaded_md5 != game_download_md5:
+                if download_path and os.path.isfile(download_path):
+                    os.remove(download_path)
+                _set_download_progress(
+                    game_id,
+                    status="error",
+                    error="MD5 mismatch",
                 )
                 return
 
-            total_length = r.headers.get("Content-Length")
-            total_length = int(total_length) if total_length is not None else None
+            # Extract tar.gz using tarfile (Python stdlib)
+            apps_dir = os.path.join(os.getcwd(), APPS_DIR)
+            try:
+                with tarfile.open(download_path, "r:gz") as tar:
+                    tar.extractall(apps_dir)
+            except Exception as e:
+                _set_download_progress(
+                    game_id,
+                    status="error",
+                    error=f"Extraction failed: {str(e)}",
+                )
+                return
+            finally:
+                if download_path and os.path.isfile(download_path):
+                    os.remove(download_path)
 
-            hash_md5 = hashlib.md5()
-            downloaded = 0
-            chunk_size = 8192
-
-            with open(download_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=chunk_size):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    hash_md5.update(chunk)
-                    downloaded += len(chunk)
-
-                    if total_length:
-                        progress = int(downloaded * 100 / total_length)
-                        # Avoid prematurely reporting 100% until post-processing is done
-                        if progress >= 100:
-                            progress = 99
-                        _set_download_progress(
-                            game_id, progress=progress, status="downloading"
-                        )
-
-        # Verify MD5
-        downloaded_md5 = hash_md5.hexdigest()
-        if downloaded_md5 != game_download_md5:
-            if download_path and os.path.isfile(download_path):
-                os.remove(download_path)
+            version = _read_version_from_conf(game_id)
             _set_download_progress(
-                game_id,
-                status="error",
-                error="MD5 mismatch",
+                game_id, progress=100, status="completed", error=None, version=version
             )
-            return
-
-        # Extract tar.gz using tarfile (Python stdlib)
-        apps_dir = os.path.join(os.getcwd(), APPS_DIR)
-        try:
-            with tarfile.open(download_path, "r:gz") as tar:
-                tar.extractall(apps_dir)
-        except Exception as e:
-            _set_download_progress(
-                game_id,
-                status="error",
-                error=f"Extraction failed: {str(e)}",
-            )
-            return
         finally:
-            if download_path and os.path.isfile(download_path):
-                os.remove(download_path)
-
-        _set_download_progress(game_id, progress=100, status="completed", error=None)
+            with _DOWNLOAD_KEYS_LOCK:
+                _DOWNLOAD_KEYS_IN_FLIGHT.discard(key)
     except Exception as e:
         # Best-effort cleanup
         try:
@@ -512,7 +639,10 @@ def _download_game_worker_with_url(game_id, url, md5):
             if download_path and os.path.isfile(download_path):
                 os.remove(download_path)
 
-        _set_download_progress(game_id, progress=100, status="completed", error=None)
+        version = _read_version_from_conf(game_id)
+        _set_download_progress(
+            game_id, progress=100, status="completed", error=None, version=version
+        )
     except Exception as e:
         # Best-effort cleanup
         try:
@@ -526,6 +656,9 @@ def _download_game_worker_with_url(game_id, url, md5):
             status="error",
             error=str(e),
         )
+    finally:
+        with _DOWNLOAD_KEYS_LOCK:
+            _DOWNLOAD_KEYS_IN_FLIGHT.discard((str(url), str(md5)))
 
 
 def start_game_download_async(game_id):
@@ -538,7 +671,15 @@ def start_game_download_async(game_id):
             "download_app",
             ErrorCode.MISSING_PARAMETER,
             "Required information is missing",
-            game_id=game_id
+            game_id=game_id,
+        )
+
+    if _is_game_download_active(game_id):
+        return create_error_response(
+            "download_app",
+            ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+            "A download for this game is already in progress",
+            game_id=game_id,
         )
 
     # Initialize / reset progress entry
@@ -567,7 +708,7 @@ def start_game_download_async_with_url(game_id, url, md5):
             "download_app",
             ErrorCode.MISSING_PARAMETER,
             "Required information is missing",
-            game_id=game_id
+            game_id=game_id,
         )
 
     if not url or not md5:
@@ -575,8 +716,28 @@ def start_game_download_async_with_url(game_id, url, md5):
             "download_app",
             ErrorCode.MISSING_PARAMETER,
             "Required information is missing",
-            game_id=game_id
+            game_id=game_id,
         )
+
+    if _is_game_download_active(game_id):
+        return create_error_response(
+            "download_app",
+            ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+            "A download for this game is already in progress",
+            game_id=game_id,
+        )
+
+    key = (str(url or ""), str(md5 or ""))
+    with _DOWNLOAD_KEYS_LOCK:
+        if key in _DOWNLOAD_KEYS_IN_FLIGHT:
+            return create_error_response(
+                "download_app",
+                ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+                "A download for this url and checksum is already in progress",
+                game_id=game_id,
+                url=url,
+            )
+        _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
 
     # Initialize / reset progress entry
     _set_download_progress(game_id, progress=0, status="pending", error=None)
@@ -594,6 +755,7 @@ def start_game_download_async_with_url(game_id, url, md5):
         "message": "Success",
     }
 
+
 def get_app_list():
     try:
         # List all directories in the apps directory
@@ -607,10 +769,14 @@ def get_app_list():
                     with open(conf_path, "r") as conf_file:
                         try:
                             conf = json.load(conf_file)
-                            app_list.append({
-                                "name": name,
-                                "conf":  b64encode(json.dumps(conf).encode("utf-8")).decode("utf-8")
-                            })
+                            app_list.append(
+                                {
+                                    "name": name,
+                                    "conf": b64encode(
+                                        json.dumps(conf).encode("utf-8")
+                                    ).decode("utf-8"),
+                                }
+                            )
                         except Exception:
                             pass
         return {"action": "list_apps", "apps": app_list}
