@@ -235,6 +235,8 @@ def remove_directory(websocket, dir_name):
     try:
         # Remove the directory and its contents
         shutil.rmtree(full_dir_path)
+        # Clear download progress for this game_id (directory name)
+        DOWNLOAD_PROGRESS.pop(dir_name, None)
         # Return success message
         return {
             "action": "remove_directory",
