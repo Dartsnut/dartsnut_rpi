@@ -3,7 +3,6 @@ bluezero
 dbus-python
 fastapi
 requests
-git+https://github.com/pybluez/pybluez.git#egg=pybluez
 opencv-python
 uvicorn
 websockets
