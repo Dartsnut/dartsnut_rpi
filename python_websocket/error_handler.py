@@ -63,6 +63,7 @@ class ErrorCode(Enum):
     DOWNLOAD_FAILED = "2003"
     MD5_MISMATCH = "2004"
     INVALID_URL = "2005"
+    DOWNLOAD_ALREADY_IN_PROGRESS = "2006"
     
     # 3xxx: Validation errors
     INVALID_INPUT = "3001"

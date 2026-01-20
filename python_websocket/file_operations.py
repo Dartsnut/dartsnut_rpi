@@ -20,7 +20,18 @@ DOWNLOAD_DIR = "downloads"
 # In-memory store for download progress keyed by game_id
 DOWNLOAD_PROGRESS = {}
 
+_DOWNLOAD_ACTIVE_STATUSES = ("pending", "initializing", "downloading", "extracting")
+# (url, md5) in progress for both sync download_app and async game downloads (by url or resolved in worker)
+_DOWNLOAD_KEYS_IN_FLIGHT = set()
+_DOWNLOAD_KEYS_LOCK = threading.Lock()
+
 _MISSING = object()
+
+
+def _is_game_download_active(game_id):
+    """Return True if a download for game_id is currently active (pending/initializing/downloading/extracting)."""
+    entry = DOWNLOAD_PROGRESS.get(game_id)
+    return entry is not None and entry.get("status") in _DOWNLOAD_ACTIVE_STATUSES
 
 
 def _read_version_from_conf(game_id):
@@ -302,6 +313,16 @@ def get_file_list(directory):
 
 
 def download_app(url, md5):
+    key = (str(url or ""), str(md5 or ""))
+    with _DOWNLOAD_KEYS_LOCK:
+        if key in _DOWNLOAD_KEYS_IN_FLIGHT:
+            return create_error_response(
+                "download_app",
+                ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+                "A download for this url and checksum is already in progress",
+                url=url,
+            )
+        _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
     try:
         if not url.endswith(".tar.gz"):
             return create_error_response(
@@ -369,6 +390,9 @@ def download_app(url, md5):
         return {"action": "download_app", "url": url, "message": "Success"}
     except Exception as e:
         return handle_exception("download_app", e, "Download failed", url=url)
+    finally:
+        with _DOWNLOAD_KEYS_LOCK:
+            _DOWNLOAD_KEYS_IN_FLIGHT.discard(key)
 
 
 def _download_game_worker(game_id):
@@ -419,78 +443,93 @@ def _download_game_worker(game_id):
             )
             return
 
-        # Ensure the download directory exists
-        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-        file_name = game_download_url.split("/")[-1]
-        download_path = os.path.join(DOWNLOAD_DIR, file_name)
-
-        # Stream download with progress and MD5 calculation
-        _set_download_progress(game_id, progress=0, status="downloading")
-        with requests.get(game_download_url, stream=True) as r:
-            if r.status_code != 200:
+        key = (str(game_download_url), str(game_download_md5))
+        with _DOWNLOAD_KEYS_LOCK:
+            if key in _DOWNLOAD_KEYS_IN_FLIGHT:
                 _set_download_progress(
                     game_id,
                     status="error",
-                    error=f"Download failed with status {r.status_code}",
+                    error="A download for this url and checksum is already in progress",
+                )
+                return
+            _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
+
+        try:
+            # Ensure the download directory exists
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            file_name = game_download_url.split("/")[-1]
+            download_path = os.path.join(DOWNLOAD_DIR, file_name)
+
+            # Stream download with progress and MD5 calculation
+            _set_download_progress(game_id, progress=0, status="downloading")
+            with requests.get(game_download_url, stream=True) as r:
+                if r.status_code != 200:
+                    _set_download_progress(
+                        game_id,
+                        status="error",
+                        error=f"Download failed with status {r.status_code}",
+                    )
+                    return
+
+                total_length = r.headers.get("Content-Length")
+                total_length = int(total_length) if total_length is not None else None
+
+                hash_md5 = hashlib.md5()
+                downloaded = 0
+                chunk_size = 8192
+
+                with open(download_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=chunk_size):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        hash_md5.update(chunk)
+                        downloaded += len(chunk)
+
+                        if total_length:
+                            progress = int(downloaded * 100 / total_length)
+                            # Avoid prematurely reporting 100% until post-processing is done
+                            if progress >= 100:
+                                progress = 99
+                            _set_download_progress(
+                                game_id, progress=progress, status="downloading"
+                            )
+
+            # Verify MD5
+            downloaded_md5 = hash_md5.hexdigest()
+            if downloaded_md5 != game_download_md5:
+                if download_path and os.path.isfile(download_path):
+                    os.remove(download_path)
+                _set_download_progress(
+                    game_id,
+                    status="error",
+                    error="MD5 mismatch",
                 )
                 return
 
-            total_length = r.headers.get("Content-Length")
-            total_length = int(total_length) if total_length is not None else None
+            # Extract tar.gz using tarfile (Python stdlib)
+            apps_dir = os.path.join(os.getcwd(), APPS_DIR)
+            try:
+                with tarfile.open(download_path, "r:gz") as tar:
+                    tar.extractall(apps_dir)
+            except Exception as e:
+                _set_download_progress(
+                    game_id,
+                    status="error",
+                    error=f"Extraction failed: {str(e)}",
+                )
+                return
+            finally:
+                if download_path and os.path.isfile(download_path):
+                    os.remove(download_path)
 
-            hash_md5 = hashlib.md5()
-            downloaded = 0
-            chunk_size = 8192
-
-            with open(download_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=chunk_size):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    hash_md5.update(chunk)
-                    downloaded += len(chunk)
-
-                    if total_length:
-                        progress = int(downloaded * 100 / total_length)
-                        # Avoid prematurely reporting 100% until post-processing is done
-                        if progress >= 100:
-                            progress = 99
-                        _set_download_progress(
-                            game_id, progress=progress, status="downloading"
-                        )
-
-        # Verify MD5
-        downloaded_md5 = hash_md5.hexdigest()
-        if downloaded_md5 != game_download_md5:
-            if download_path and os.path.isfile(download_path):
-                os.remove(download_path)
+            version = _read_version_from_conf(game_id)
             _set_download_progress(
-                game_id,
-                status="error",
-                error="MD5 mismatch",
+                game_id, progress=100, status="completed", error=None, version=version
             )
-            return
-
-        # Extract tar.gz using tarfile (Python stdlib)
-        apps_dir = os.path.join(os.getcwd(), APPS_DIR)
-        try:
-            with tarfile.open(download_path, "r:gz") as tar:
-                tar.extractall(apps_dir)
-        except Exception as e:
-            _set_download_progress(
-                game_id,
-                status="error",
-                error=f"Extraction failed: {str(e)}",
-            )
-            return
         finally:
-            if download_path and os.path.isfile(download_path):
-                os.remove(download_path)
-
-        version = _read_version_from_conf(game_id)
-        _set_download_progress(
-            game_id, progress=100, status="completed", error=None, version=version
-        )
+            with _DOWNLOAD_KEYS_LOCK:
+                _DOWNLOAD_KEYS_IN_FLIGHT.discard(key)
     except Exception as e:
         # Best-effort cleanup
         try:
@@ -615,6 +654,9 @@ def _download_game_worker_with_url(game_id, url, md5):
             status="error",
             error=str(e),
         )
+    finally:
+        with _DOWNLOAD_KEYS_LOCK:
+            _DOWNLOAD_KEYS_IN_FLIGHT.discard((str(url), str(md5)))
 
 
 def start_game_download_async(game_id):
@@ -627,6 +669,14 @@ def start_game_download_async(game_id):
             "download_app",
             ErrorCode.MISSING_PARAMETER,
             "Required information is missing",
+            game_id=game_id,
+        )
+
+    if _is_game_download_active(game_id):
+        return create_error_response(
+            "download_app",
+            ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+            "A download for this game is already in progress",
             game_id=game_id,
         )
 
@@ -666,6 +716,26 @@ def start_game_download_async_with_url(game_id, url, md5):
             "Required information is missing",
             game_id=game_id,
         )
+
+    if _is_game_download_active(game_id):
+        return create_error_response(
+            "download_app",
+            ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+            "A download for this game is already in progress",
+            game_id=game_id,
+        )
+
+    key = (str(url or ""), str(md5 or ""))
+    with _DOWNLOAD_KEYS_LOCK:
+        if key in _DOWNLOAD_KEYS_IN_FLIGHT:
+            return create_error_response(
+                "download_app",
+                ErrorCode.DOWNLOAD_ALREADY_IN_PROGRESS,
+                "A download for this url and checksum is already in progress",
+                game_id=game_id,
+                url=url,
+            )
+        _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
 
     # Initialize / reset progress entry
     _set_download_progress(game_id, progress=0, status="pending", error=None)
