@@ -104,3 +104,144 @@ def get_volume():
         return handle_exception("get_volume", e, "Failed to decode volume value")
     except Exception as e:
         return handle_exception("get_volume", e, "An error occurred while getting volume")
+
+
+def _parse_hhmm(s):
+    """Parse 'HH:MM' string into (h, m). Returns None if invalid. h in 0-23, m in 0-59."""
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip()
+    parts = s.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        h, m = int(parts[0]), int(parts[1])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return (h, m)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _dim_enabled_to_bool(x):
+    """Convert dim_window_enabled to bool. None stays None; True/1/'true'->True; else False."""
+    if x is None:
+        return None
+    return str(x).lower() in ("true", "1")
+
+
+def get_dim_window():
+    try:
+        device_info_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_info_path, 'r') as file:
+            device_info = json.load(file)
+        return {
+            "action": "get_dim_window",
+            "dim_window_start": device_info.get("dim_window_start", ""),
+            "dim_window_end": device_info.get("dim_window_end", ""),
+            "dim_level": int(device_info.get("dim_level", 10)),
+            "dim_restore_seconds": int(device_info.get("dim_restore_seconds", 30)),
+            "dim_window_enabled": str(device_info.get("dim_window_enabled", "false")).lower() == "true",
+        }
+    except FileNotFoundError as e:
+        return handle_exception("get_dim_window", e, "Device info file not found")
+    except (json.JSONDecodeError, ValueError) as e:
+        return handle_exception("get_dim_window", e, "Failed to decode device info")
+    except Exception as e:
+        return handle_exception("get_dim_window", e, "An error occurred while getting dim window")
+
+
+def set_dim_window(dim_window_start, dim_window_end, dim_level=None, dim_restore_seconds=None, dim_window_enabled=None):
+    device_info_path = os.path.join(os.getcwd(), "device.json")
+    start_s = (dim_window_start or "").strip() if dim_window_start is not None else ""
+    end_s = (dim_window_end or "").strip() if dim_window_end is not None else ""
+
+    # Both start and end empty
+    if not start_s and not end_s:
+        try:
+            with open(device_info_path, 'r') as file:
+                device_info = json.load(file)
+            if dim_window_enabled is not None:
+                # Only update the enable flag; keep existing window config
+                device_info["dim_window_enabled"] = _dim_enabled_to_bool(dim_window_enabled)
+            else:
+                # Clear all dim-window keys
+                for key in ("dim_window_start", "dim_window_end", "dim_level", "dim_restore_seconds", "dim_window_enabled"):
+                    device_info.pop(key, None)
+            with open(device_info_path, 'w') as file:
+                json.dump(device_info, file)
+            return {"action": "set_dim_window", "message": "Success"}
+        except FileNotFoundError as e:
+            return handle_exception("set_dim_window", e, "Device info file not found")
+        except (json.JSONDecodeError, ValueError) as e:
+            return handle_exception("set_dim_window", e, "Failed to decode device info")
+        except Exception as e:
+            return handle_exception("set_dim_window", e, "Failed to set dim window")
+
+    # Enable: both required
+    if not start_s or not end_s:
+        return create_error_response(
+            "set_dim_window",
+            ErrorCode.INVALID_INPUT,
+            "dim_window_start and dim_window_end must both be provided to enable, or both empty to disable"
+        )
+
+    # Validate HH:MM
+    if _parse_hhmm(start_s) is None or _parse_hhmm(end_s) is None:
+        return create_error_response(
+            "set_dim_window",
+            ErrorCode.INVALID_INPUT,
+            "dim_window_start and dim_window_end must be in HH:MM format (00-23:00-59)"
+        )
+
+    # dim_level: 1-100, default 10
+    try:
+        level = int(dim_level) if dim_level is not None else 10
+    except (TypeError, ValueError):
+        return create_error_response(
+            "set_dim_window",
+            ErrorCode.INVALID_INPUT,
+            "dim_level must be between 1 and 100"
+        )
+    if not (1 <= level <= 100):
+        return create_error_response(
+            "set_dim_window",
+            ErrorCode.INVALID_INPUT,
+            "dim_level must be between 1 and 100"
+        )
+
+    # dim_restore_seconds: 5-300, default 30
+    try:
+        secs = int(dim_restore_seconds) if dim_restore_seconds is not None else 30
+    except (TypeError, ValueError):
+        return create_error_response(
+            "set_dim_window",
+            ErrorCode.INVALID_INPUT,
+            "dim_restore_seconds must be between 5 and 300"
+        )
+    if not (5 <= secs <= 300):
+        return create_error_response(
+            "set_dim_window",
+            ErrorCode.INVALID_INPUT,
+            "dim_restore_seconds must be between 5 and 300"
+        )
+
+    enabled = _dim_enabled_to_bool(dim_window_enabled) if dim_window_enabled is not None else True
+
+    try:
+        with open(device_info_path, 'r') as file:
+            device_info = json.load(file)
+        device_info["dim_window_start"] = start_s
+        device_info["dim_window_end"] = end_s
+        device_info["dim_level"] = level
+        device_info["dim_restore_seconds"] = secs
+        device_info["dim_window_enabled"] = enabled
+        with open(device_info_path, 'w') as file:
+            json.dump(device_info, file)
+        return {"action": "set_dim_window", "message": "Success"}
+    except FileNotFoundError as e:
+        return handle_exception("set_dim_window", e, "Device info file not found")
+    except (json.JSONDecodeError, ValueError) as e:
+        return handle_exception("set_dim_window", e, "Failed to decode device info")
+    except Exception as e:
+        return handle_exception("set_dim_window", e, "Failed to set dim window")
