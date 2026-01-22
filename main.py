@@ -1105,7 +1105,7 @@ device_info = get_device_info()
 set_volume(int(device_info.get('volume', "50")) )
 
 # start ble server
-ble_thread = threading.Thread(target=start_ble_server, daemon=True)
+ble_thread = threading.Thread(target=start_ble_server, args=(locate_device,), daemon=True)
 ble_thread.start()
 
 # start websocket server
