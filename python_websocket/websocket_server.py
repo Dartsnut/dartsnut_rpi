@@ -15,7 +15,7 @@ from python_websocket.json_operations import read_json_file, write_json_file, ge
 from python_websocket.bluetooth_operations import scan_bluetooth_devices, list_paired_devices, disconnect_and_unpair_device, pair_and_connect_device
 from python_websocket.git_operations import check_update, perform_update, get_version
 from python_websocket.udp_broadcast import udp_broadcast
-from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh, get_brightness, get_volume
+from python_websocket.device_operations import get_wifi_rssi, forget_wifi, reboot, get_ssh_status, start_ssh, stop_ssh, get_brightness, get_volume, get_dim_window, set_dim_window
 from python_websocket.user_data_operations import (
     get_user_data,
     update_user_info,
@@ -255,6 +255,19 @@ async def websocket_endpoint(websocket: WebSocket):
                     await send_response(req_id, result)
                 elif action == "get_volume":
                     result = await asyncio.to_thread(get_volume)
+                    await send_response(req_id, result)
+                elif action == "get_dim_window":
+                    result = await asyncio.to_thread(get_dim_window)
+                    await send_response(req_id, result)
+                elif action == "set_dim_window":
+                    result = await asyncio.to_thread(
+                        set_dim_window,
+                        message.get("dim_window_start"),
+                        message.get("dim_window_end"),
+                        message.get("dim_level"),
+                        message.get("dim_restore_seconds"),
+                        message.get("dim_window_enabled"),
+                    )
                     await send_response(req_id, result)
                 elif action == "forget_wifi":
                     await asyncio.to_thread(forget_wifi)

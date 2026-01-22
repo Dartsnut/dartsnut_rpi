@@ -13,9 +13,11 @@ import io
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking, _load_user_data
+from python_websocket.device_operations import _parse_hhmm
 from pydartsnut import Dartsnut
 import struct
 import glob
+from datetime import datetime, time as dt_time
 
 dartsnut = Dartsnut()
 
@@ -886,22 +888,47 @@ def get_device_info():
     except Exception:
         return {}
 
+# Dim window state (module-level)
+_currently_in_dim_window = False
+_brightness_before_dim = None
+_last_dim_check_time = 0
+_dim_temporary_restore_until = None
+
+
+def _set_brightness_hardware(brightness):
+    """Set brightness on hardware only (no persist). Used for dim/restore."""
+    dartsnut.set_brightness(brightness)
+
+
 # Function to set brightness
 def set_brightness(brightness):
-    # Set the brightness on the device
-    dartsnut.set_brightness(brightness)
+    global _brightness_before_dim
+    # Only-persist when in dim window and currently showing dimmed (not in active temporary restore)
+    if _currently_in_dim_window and (_dim_temporary_restore_until is None or time.time() >= _dim_temporary_restore_until):
+        try:
+            device_info = get_device_info()
+            device_info["brightness"] = str(brightness)
+            with open("./device.json", "w") as file:
+                json.dump(device_info, file)
+            _brightness_before_dim = brightness
+        except FileNotFoundError:
+            print("Device info file not found")
+        except json.JSONDecodeError:
+            print("Error decoding JSON from device info file")
+        except Exception as e:
+            print(f"An error occurred while updating device info: {e}")
+        return
+    # Else: set hardware and persist
+    _set_brightness_hardware(brightness)
     try:
-        # Read the existing device info
         device_info = get_device_info()
-        # Update the device brightness
-        device_info['brightness'] = str(brightness)
-        # Write the updated info back to the file
-        with open("./device.json", 'w') as file:
+        device_info["brightness"] = str(brightness)
+        with open("./device.json", "w") as file:
             json.dump(device_info, file)
     except FileNotFoundError:
-        print(f"Device info file not found")
+        print("Device info file not found")
     except json.JSONDecodeError:
-        print(f"Error decoding JSON from device info file")
+        print("Error decoding JSON from device info file")
     except Exception as e:
         print(f"An error occurred while updating device info: {e}")
 
@@ -1078,7 +1105,7 @@ device_info = get_device_info()
 set_volume(int(device_info.get('volume', "50")) )
 
 # start ble server
-ble_thread = threading.Thread(target=start_ble_server, daemon=True)
+ble_thread = threading.Thread(target=start_ble_server, args=(locate_device,), daemon=True)
 ble_thread.start()
 
 # start websocket server
@@ -1103,6 +1130,58 @@ while dartsnut.running:
         time.sleep(1/30)
         # Update loading animation frame
         get_current_loading_frame()
+
+        # Every-loop: temporary restore expiry (during dim window, re-dimmer when period ends)
+        if _dim_temporary_restore_until is not None and time.time() >= _dim_temporary_restore_until:
+            _dim_temporary_restore_until = None
+            if _currently_in_dim_window:
+                di = get_device_info()
+                _set_brightness_hardware(int(di.get("dim_level", 10)))
+
+        # 60s dim-window check
+        if (time.time() - _last_dim_check_time) >= 60 or _last_dim_check_time == 0:
+            _last_dim_check_time = time.time()
+            di = get_device_info()
+            enabled = str(di.get("dim_window_enabled", "false")).lower() == "true"
+            start_s = (di.get("dim_window_start") or "").strip()
+            end_s = (di.get("dim_window_end") or "").strip()
+            dim_lvl = int(di.get("dim_level", 10))
+
+            # Disabled (feature off or no window) or parse fail: restore and clear
+            if not enabled or not start_s or not end_s:
+                if _currently_in_dim_window:
+                    restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                    _set_brightness_hardware(restore)
+                    _currently_in_dim_window = False
+                    _dim_temporary_restore_until = None
+            else:
+                start_hm = _parse_hhmm(start_s)
+                end_hm = _parse_hhmm(end_s)
+                if start_hm is None or end_hm is None:
+                    if _currently_in_dim_window:
+                        restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                        _set_brightness_hardware(restore)
+                        _currently_in_dim_window = False
+                        _dim_temporary_restore_until = None
+                else:
+                    now = datetime.now().time()
+                    start_t = dt_time(start_hm[0], start_hm[1])
+                    end_t = dt_time(end_hm[0], end_hm[1])
+                    in_window = (start_t <= end_t and start_t <= now <= end_t) or (
+                        start_t > end_t and (now >= start_t or now < end_t)
+                    )
+                    if in_window:
+                        if not _currently_in_dim_window:
+                            _brightness_before_dim = int(di.get("brightness", 50))
+                            _set_brightness_hardware(dim_lvl)
+                            _currently_in_dim_window = True
+                    else:
+                        if _currently_in_dim_window:
+                            restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                            _set_brightness_hardware(restore)
+                            _currently_in_dim_window = False
+                            _dim_temporary_restore_until = None
+
         # locate device
         if locate_device_intv:
             dartsnut.update_frame_buffer(identify_image)
@@ -1469,6 +1548,13 @@ while dartsnut.running:
         
         # read the buttons
         buttons = get_buttons_pressed()
+        # Button-triggered temporary restore: during dim window, any press restores brightness for dim_restore_seconds
+        if _currently_in_dim_window and any(buttons.values()):
+            di = get_device_info()
+            secs = max(5, min(300, int(di.get("dim_restore_seconds", 30))))
+            _dim_temporary_restore_until = time.time() + secs
+            restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+            _set_brightness_hardware(restore)
         if (buttons["btn_a"]):
             # button A to enter menu item
             if state == "menu":

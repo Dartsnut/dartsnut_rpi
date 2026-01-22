@@ -17,6 +17,7 @@ class UARTDevice:
     tx_obj = None
     callback = None
     device_info = None
+    locate_device = None
 
     @classmethod
     def on_connect(cls, ble_device: device.Device):
@@ -181,6 +182,10 @@ class UARTDevice:
                 except Exception as e:
                     print("Failed to get device info:", e)
                     cls.send_data({"command": "device_info", "error": "Failed to get device info"})
+            elif (command == "locate_device"):
+                if UARTDevice.locate_device:
+                    threading.Thread(target=UARTDevice.locate_device, daemon=True).start()
+                cls.send_data({"command": "locate_device", "status": "success"})
             else:
                 cls.send_data({"error": "Unknown command"})
                 
@@ -188,7 +193,8 @@ class UARTDevice:
             cls.send_data({"error": "Failed to decode JSON"})
 
 
-def start_ble_server():
+def start_ble_server(locate_device=None):
+    UARTDevice.locate_device = locate_device if locate_device else None
     with open("device.json", 'r') as file:
         UARTDevice.device_info = json.load(file)
 
