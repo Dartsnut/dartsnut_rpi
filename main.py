@@ -205,19 +205,21 @@ def process_widget_fields(widget_id, widget_fields_parameter):
     with open(conf_path, "r") as f:
         conf = json.load(f)
         # special handling for files and image type
-        # for field in conf["fields"]:
-        #     # if there is image type in the field, decode the base64 data
-        #     if field["type"] == "image":
-        #         if params.get(field["id"]) is not None:
-        #             # read the file data
-        #             file = params[field["id"]]["image"]
-        #             file_data = base64.b64decode(file)
-        #             # write the file data into a named temp file
-        #             with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        #                 tmp_file.write(file_data)
-        #                 tmp_file_path = tmp_file.name
-        #                 # replace the file field with the file paths
-        #                 params[field["id"]]["image"] = tmp_file_path
+        for field in conf["fields"]:
+            # if there is image type in the field, decode the base64 data
+            if field["type"] == "image":
+                if params.get(field["id"]) is not None:
+                    # read the file data
+                    file = params[field["id"]]["image"]
+                    # file is longer then 500 bytes, it's from an older version of the app
+                    if len(file) > 500:
+                        file_data = base64.b64decode(file)
+                        # write the file data into a named temp file
+                        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                            tmp_file.write(file_data)
+                            tmp_file_path = tmp_file.name
+                            # replace the file field with the file paths
+                            params[field["id"]]["image"] = tmp_file_path
     return params
 
 # ============================================================================
