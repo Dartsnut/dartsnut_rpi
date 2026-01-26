@@ -8,6 +8,65 @@ import json
 import re
 from enum import Enum
 
+# Mapping of error codes to user-friendly messages
+# This dictionary should be kept in sync with ERROR_MESSAGES.md
+# Edit messages in ERROR_MESSAGES.md for reference, then update this dict
+ERROR_MESSAGES = {
+    # 1xxx: File/IO errors - Unified message for all file system errors
+    "1001": "A file system error occurred",
+    "1002": "A file system error occurred",
+    "1003": "A file system error occurred",
+    "1004": "A file system error occurred",
+    "1005": "A file system error occurred",
+    "1006": "A file system error occurred",
+    "1007": "A file system error occurred",
+    "1008": "A file system error occurred",
+    
+    # 2xxx: Network errors
+    "2001": "Unable to connect to the network",
+    "2002": "Failed to establish connection",
+    "2003": "A network error occurred",  # Download - unified
+    "2004": "A network error occurred",  # MD5 mismatch - unified
+    "2005": "The provided URL is invalid",
+    "2006": "A network error occurred",  # Download already in progress - unified
+    
+    # 3xxx: Validation errors
+    "3001": "The provided input is invalid",
+    "3002": "Required information is missing",
+    "3003": "The data format is invalid",
+    "3004": "This file type is not supported. Only .tar.gz files are supported",
+    "3005": "Brightness must be between 10 and 100",
+    
+    # 4xxx: System/Command errors
+    "4001": "Unable to complete the operation",
+    "4002": "Service operation failed",
+    "4003": "Unable to start SSH service",
+    "4004": "Unable to stop SSH service",
+    "4005": "Unable to retrieve WiFi signal strength",
+    
+    # 5xxx: Bluetooth errors - Unified message for firmware version
+    "5001": "This feature requires a newer firmware version",
+    "5002": "This feature requires a newer firmware version",
+    "5003": "This feature requires a newer firmware version",
+    "5004": "This feature requires a newer firmware version",
+    "5005": "This feature requires a newer firmware version",
+    "5006": "This feature requires a newer firmware version",
+    "5007": "This feature requires a newer firmware version",
+    "5008": "This feature requires a newer firmware version",
+    
+    # 6xxx: Git/Update errors - Unified message for network errors
+    "6001": "A network error occurred",
+    "6002": "A network error occurred",
+    "6003": "A network error occurred",
+    "6004": "A network error occurred",
+    "6005": "A network error occurred",
+    
+    # 7xxx: General errors
+    "7001": "An unexpected error occurred",
+    "7002": "This feature requires a newer firmware version",  # FUNCTION_NOT_AVAILABLE - unified
+    "7003": "The requested action is not recognized",
+}
+
 # Mapping of commands to user-friendly error messages
 COMMAND_MESSAGES = {
     # Network/WiFi commands
@@ -102,6 +161,34 @@ class ErrorCode(Enum):
     UNKNOWN_ACTION = "7003"
 
 
+def _format_error_code(error_code_value):
+    """
+    Format error code as XX-YY where XX is category prefix and YY is code suffix.
+    
+    Args:
+        error_code_value: 4-digit error code string (e.g., "1001")
+    
+    Returns:
+        str: Formatted error code (e.g., "10-01")
+    """
+    if not error_code_value or len(error_code_value) != 4:
+        return error_code_value
+    return f"{error_code_value[:2]}-{error_code_value[2:]}"
+
+
+def _get_error_message(error_code_value):
+    """
+    Get user-friendly error message for an error code.
+    
+    Args:
+        error_code_value: 4-digit error code string (e.g., "1001")
+    
+    Returns:
+        str: User-friendly error message, or default message if not found
+    """
+    return ERROR_MESSAGES.get(error_code_value, "An unexpected error occurred")
+
+
 def _get_user_friendly_command_message(command):
     """Get user-friendly message for a command."""
     if not command:
@@ -134,21 +221,27 @@ def create_error_response(action, error_code, message, **kwargs):
     Args:
         action: The action name
         error_code: ErrorCode enum value
-        message: User-friendly error message
+        message: User-friendly error message (if None, will be looked up from ERROR_MESSAGES)
         **kwargs: Additional fields to include in the response
     
     Returns:
         dict: Error response with format:
             {
                 "action": action,
-                "error": message + " [error_code]",  # String with error code in brackets
-                "error_code": error_code.value,  # New field for programmatic handling
+                "error": "message (XX-YY)",  # Formatted with message first, code in parentheses
+                "error_code": error_code.value,  # 4-digit code for programmatic handling
                 ...kwargs  # Any additional fields
             }
     """
     error_code_value = error_code.value if isinstance(error_code, ErrorCode) else error_code
-    # Append error code in brackets to the message for customer support
-    message_with_code = f"{message} [{error_code_value}]"
+    
+    # Use provided message or look it up from ERROR_MESSAGES
+    if message is None:
+        message = _get_error_message(error_code_value)
+    
+    # Format as "message (XX-YY)"
+    formatted_code = _format_error_code(error_code_value)
+    message_with_code = f"{message} ({formatted_code})"
     
     response = {
         "action": action,
