@@ -8,12 +8,35 @@ All error responses follow this format:
 ```json
 {
   "action": "action_name",
-  "error": "User-friendly error message [error_code]",
-  "error_code": "error_code"
+  "error": "User-friendly error message (XX-YY)",
+  "error_code": "XXXX"
 }
 ```
 
-The error message includes the error code in brackets at the end for customer support identification.
+### Format Details
+
+- **error**: The error message is formatted as `"message (XX-YY)"` where:
+  - `message` is the user-friendly error message
+  - `XX` is the 2-digit category prefix (10, 20, 30, etc.)
+  - `YY` is the 2-digit error code within the category (01, 02, 03, etc.)
+  - The error code appears in parentheses at the end for support reference
+  - Example: `"A file system error occurred (10-01)"` (from error code 1001)
+
+- **error_code**: The full 4-digit error code (e.g., "1001", "2001") for programmatic handling and backward compatibility.
+
+The user-friendly message is displayed first, with the error code reference at the end in parentheses for support purposes.
+
+**Note**: All error messages can be customized in `ERROR_MESSAGES.md`. The format (message (XX-YY)) is automatically applied by the error handling system.
+
+### Message Grouping Strategy
+
+Error messages are grouped into unified categories for better user experience:
+
+- **File System Errors (1001-1008)**: All file system related errors use the unified message: `"A file system error occurred"`
+- **Network Errors**: Download operations (2003, 2004, 2006) and Git operations (6001-6005) use the unified message: `"A network error occurred"`
+- **Firmware Version Errors**: Bluetooth operations (5001-5008) and websocket actions (7002) use the unified message: `"This feature requires a newer firmware version"`
+
+Individual error codes are still maintained for programmatic error handling and debugging, allowing developers to identify specific error conditions while providing users with simplified, unified messages.
 
 ---
 
@@ -533,7 +556,7 @@ The error message includes the error code in brackets at the end for customer su
 | Category | Range | Description |
 |----------|-------|-------------|
 | File/IO | 1001-1008 | File and directory operations |
-| Network | 2001-2005 | Network and download operations |
+| Network | 2001-2006 | Network and download operations |
 | Validation | 3001-3005 | Input validation and parameter errors |
 | System/Command | 4001-4005 | System commands and services |
 | Bluetooth | 5001-5008 | Bluetooth device operations |
@@ -544,11 +567,13 @@ The error message includes the error code in brackets at the end for customer su
 
 ## Best Practices for Error Handling
 
-1. **Always check the error_code field** for programmatic error handling
-2. **Display the error message** (without the bracketed code) to end users
+1. **Always check the error_code field** for programmatic error handling (4-digit code)
+2. **Display the error message** to end users - the message appears first with error code reference at the end
 3. **Log the full error response** including error_code for debugging
-4. **Use error_code for customer support** - the code in brackets helps identify the exact failure point
+4. **Use error_code for customer support** - the (XX-YY) code in parentheses helps identify the exact failure point quickly
 5. **Handle errors gracefully** - provide fallback options when possible
+6. **Understand message grouping** - Related errors share unified messages, but individual error codes are still available for specific handling
+7. **Customize messages** - Edit error messages in `ERROR_MESSAGES.md` and update the `ERROR_MESSAGES` dictionary in `python_websocket/error_handler.py` to keep them in sync
 
 ---
 
