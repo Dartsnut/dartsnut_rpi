@@ -69,6 +69,7 @@ async def websocket_endpoint(websocket: WebSocket):
     async def send_response(req_id, data):
         response = data
         response["req_id"] = req_id
+        print("response: ", response)
         await websocket.send_text(json.dumps(response))
 
     try:

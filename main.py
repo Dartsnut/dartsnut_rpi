@@ -125,6 +125,33 @@ def create_loading_image():
     loading_image.paste(current_loading_frame, (0, 128))
     return loading_image
 
+# Function to check if widget is ready by checking top and bottom pixel rows
+def check_widget_ready(widget_frame):
+    """
+    Check if widget is ready by examining top and bottom rows of pixels.
+    Returns True if any pixel in top or bottom row is not black (0,0,0).
+    """
+    if widget_frame is None:
+        return False
+    
+    width, height = widget_frame.size
+    
+    # Check top row (y=0)
+    top_row = widget_frame.crop((0, 0, width, 1))
+    top_pixels_flat = top_row.get_flattened_data()
+    top_has_content = any(value != 0 for value in top_pixels_flat)
+    
+    # Check bottom row (y=height-1)
+    if height > 1:
+        bottom_row = widget_frame.crop((0, height - 1, width, height))
+        bottom_pixels_flat = bottom_row.get_flattened_data()
+        bottom_has_content = any(value != 0 for value in bottom_pixels_flat)
+    else:
+        # If height is 1, we already checked it in top_row
+        bottom_has_content = False
+    
+    return top_has_content or bottom_has_content
+
 # Private function to draw "Firmware Updated" text with gap (font doesn't support spaces)
 def _draw_firmware_updated_text(draw, x, y):
     """Draw 'FIRMWARE UPDATED' text split into two parts with a gap.
@@ -178,19 +205,19 @@ def process_widget_fields(widget_id, widget_fields_parameter):
     with open(conf_path, "r") as f:
         conf = json.load(f)
         # special handling for files and image type
-        for field in conf["fields"]:
-            # if there is image type in the field, decode the base64 data
-            if field["type"] == "image":
-                if params.get(field["id"]) is not None:
-                    # read the file data
-                    file = params[field["id"]]["image"]
-                    file_data = base64.b64decode(file)
-                    # write the file data into a named temp file
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                        tmp_file.write(file_data)
-                        tmp_file_path = tmp_file.name
-                        # replace the file field with the file paths
-                        params[field["id"]]["image"] = tmp_file_path
+        # for field in conf["fields"]:
+        #     # if there is image type in the field, decode the base64 data
+        #     if field["type"] == "image":
+        #         if params.get(field["id"]) is not None:
+        #             # read the file data
+        #             file = params[field["id"]]["image"]
+        #             file_data = base64.b64decode(file)
+        #             # write the file data into a named temp file
+        #             with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        #                 tmp_file.write(file_data)
+        #                 tmp_file_path = tmp_file.name
+        #                 # replace the file field with the file paths
+        #                 params[field["id"]]["image"] = tmp_file_path
     return params
 
 # ============================================================================
@@ -413,6 +440,7 @@ def restart_widget_process(widget_entry, page, widget_index):
         widget_entry["process"] = process
         widget_entry["shm"] = shm
         widget_entry["launched"] = False  # Reset launch status for new process
+        widget_entry["has_small_widget"] = None  # Reset small widget detection for new process
         print(f"Successfully restarted widget {widget_id}")
     except Exception as e:
         print(f"Error restarting widget {widget_id}: {e}")
@@ -544,7 +572,7 @@ def start_page_process(page):
                     cwd=os.getcwd(),
                     preexec_fn=set_pdeathsig
                 )
-                widgets.append({"process":process, "shm": shm, "widget": widget, "launched": False})
+                widgets.append({"process":process, "shm": shm, "widget": widget, "launched": False, "has_small_widget": None})
             except Exception as e:
                 print(f"Error starting default widget: {e}")
                 # If the widget fails to start, we don't add it to the page
@@ -594,37 +622,16 @@ def start_page_process(page):
                         cwd=os.path.join("./apps/", widget["id"]),
                         preexec_fn=set_pdeathsig
                     )
-                    widgets.append({"process":process, "shm": shm, "widget": widget, "launched": False})
+                    widgets.append({"process":process, "shm": shm, "widget": widget, "launched": False, "has_small_widget": None})
                 except Exception as e:
                     print(f"Error starting widget {widget['id']}: {e}")
                     # If the widget fails to start, we don't add it to the page
                     continue
     # if at lease one widget is valid, add the page
     if len(widgets) > 0:
+        # Initialize page framebuffer as black - widgets will render their content immediately
         img = Image.new("RGB", (128, 160), (0, 0, 0))
-        current_loading_frame_big = get_current_loading_frame_big()
-        current_loading_frame = get_current_loading_frame()
-        # Ensure they're in RGB mode
-        if current_loading_frame_big.mode != "RGB":
-            current_loading_frame_big = current_loading_frame_big.convert("RGB")
-        if current_loading_frame.mode != "RGB":
-            current_loading_frame = current_loading_frame.convert("RGB")
         for widget in widgets:
-            pos = widget["widget"]["position"]
-            x0, y0, x1, y1 = pos
-            widget_width = x1 - x0 + 1
-            widget_height = y1 - y0 + 1
-            # Show loading sprites based on widget height
-            if widget_height == 160:
-                # Show both sprites matching game's loading sprite coordinates
-                img.paste(current_loading_frame_big, (x0, y0 + 32))
-                img.paste(current_loading_frame, (x0, y0 + 128))
-            elif widget_height == 128:
-                # Show only big sprite matching game's big sprite offset
-                img.paste(current_loading_frame_big, (x0, y0 + 32))
-            elif widget_height == 32:
-                # Show only regular sprite at widget's top-left
-                img.paste(current_loading_frame, (x0, y0))
             try:
                 # pause all widgets process
                 os.kill(widget["process"].pid, signal.SIGSTOP)
@@ -1751,37 +1758,59 @@ while dartsnut.running:
                     widget_width = x1 - x0 + 1
                     widget_height = y1 - y0 + 1
                     
-                    launched = widget.get("launched", False)
+                    # Always try to read and render widget frame from shared memory
+                    widget_frame = None
+                    if shm is not None:
+                        width = x1 - x0 + 1
+                        height = y1 - y0 + 1
+                        try:
+                            # Read widget frame from shared memory (even if buf[0] == 1)
+                            widget_frame = Image.frombytes("RGB", (width, height), bytes(shm.buf[1:1+width*height*3]))
+                            
+                            # Paste widget frame onto page_img at widget position
+                            page_img.paste(widget_frame, (x0, y0))
+                            
+                            # Check if new frame is ready (buf[0] == 0)
+                            if shm.buf[0] == 0:
+                                # Mark frame as read
+                                shm.buf[0] = 1
+                        except Exception as e:
+                            print(f"Error reading widget frame for {widget_id}: {e}")
                     
-                    # Check if widget needs loading animation
-                    # Only show loading animation if widget is not launched yet
-                    if not launched:
+                    # Check if widget is ready by examining top and bottom pixel rows
+                    widget_ready = False
+                    if widget_frame is not None:
+                        was_not_launched = not widget.get("launched", False)
+                        widget_ready = check_widget_ready(widget_frame)
+                        if widget_ready:
+                            widget["launched"] = True
+                            
+                            # Detect small widget usage for 160-height widgets on first frame
+                            if widget_height == 160 and was_not_launched:
+                                # Extract the small widget area (bottom 32 pixels: from y0+128 to y0+159)
+                                small_widget_area = widget_frame.crop((0, 128, width, 160))
+                                # Check if this area has non-black content (not all zeros)
+                                area_bytes = small_widget_area.tobytes()
+                                has_content = any(byte != 0 for byte in area_bytes)
+                                widget["has_small_widget"] = has_content
+                    
+                    # Show loading overlay if widget is not ready
+                    if not widget_ready:
                         # Show animated loading sprites based on widget height
                         if widget_height == 160:
                             # Show both sprites matching game's loading sprite coordinates
                             page_img.paste(current_loading_frame_big, (x0, y0 + 32))
-                            page_img.paste(current_loading_frame, (x0, y0 + 128))
+                            # Only show small loading sprite if we haven't determined yet that there's no small widget
+                            # has_small_widget: None = not yet determined, True = has small widget, False = no small widget
+                            has_small_widget = widget.get("has_small_widget", None)
+                            if has_small_widget is not False:  # Show if None (not determined) or True (has small widget)
+                                page_img.paste(current_loading_frame, (x0, y0 + 128))
                         elif widget_height == 128:
                             # Show only big sprite matching game's big sprite offset
                             page_img.paste(current_loading_frame_big, (x0, y0 + 32))
                         elif widget_height == 32:
                             # Show only regular sprite at widget's top-left
                             page_img.paste(current_loading_frame, (x0, y0))
-                    
-                    # Check for new frames and update launch status
-                    if shm is not None and shm.buf[0] == 0:
-                        # buf[0] == 0 means widget is launched and has a new frame ready
-                        widget["launched"] = True
-                        # Extract widget frame from shared memory as PIL Image
-                        width = x1 - x0 + 1
-                        height = y1 - y0 + 1
-                        widget_frame = Image.frombytes("RGB", (width, height), bytes(shm.buf[1:1+width*height*3]))
-                        # Paste widget frame onto page_img at widget position
-                        page_img.paste(widget_frame, (x0, y0))
-                        # Mark frame as read
-                        shm.buf[0] = 1
-                    elif widget.get("launched", False):
-                        pass  # Widget launched but no new frame, keep last frame
                 
                 # Always update framebuffer from page_img to ensure all widget updates are reflected
                 page["framebuffer"] = bytearray(page_img.tobytes())
