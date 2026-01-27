@@ -29,6 +29,8 @@ ERROR_MESSAGES = {
     "2004": "A network error occurred",  # MD5 mismatch - unified
     "2005": "The provided URL is invalid",
     "2006": "A network error occurred",  # Download already in progress - unified
+    "2007": "Already connected to the given network",
+    "2008": "The WiFi password is incorrect",
     
     # 3xxx: Validation errors
     "3001": "The provided input is invalid",
@@ -123,6 +125,8 @@ class ErrorCode(Enum):
     MD5_MISMATCH = "2004"
     INVALID_URL = "2005"
     DOWNLOAD_ALREADY_IN_PROGRESS = "2006"
+    WIFI_ALREADY_CONNECTED = "2007"
+    WIFI_PASSWORD_WRONG = "2008"
     
     # 3xxx: Validation errors
     INVALID_INPUT = "3001"
