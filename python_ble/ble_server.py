@@ -2,6 +2,11 @@
 from bluezero import adapter
 from bluezero import peripheral
 from bluezero import device
+from python_websocket.error_handler import (
+    ErrorCode,
+    create_error_response,
+    handle_exception
+)
 import json
 import subprocess
 import time
@@ -70,7 +75,9 @@ class UARTDevice:
                 cls.send_data({"command": "scan_wifi", "networks": [], "end": True})
         except subprocess.CalledProcessError as e:
             print("Failed to scan WiFi networks:", e)
-            cls.send_data({"command": "scan_wifi", "error": "Failed to scan WiFi networks"})
+            error_response = handle_exception("scan_wifi", e, "Failed to scan WiFi networks")
+            error_response["command"] = "scan_wifi"
+            cls.send_data(error_response)
 
     @classmethod
     def _connect_wifi_task(cls, ssid, password):
@@ -83,8 +90,21 @@ class UARTDevice:
                 ip_res = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=False)
                 ip_address = ip_res.stdout.strip().split()[0] if ip_res.stdout.strip() else ""
                 cls.send_data({"command": "connect_wifi", "status": "success", "ip_address": ip_address})
-            except subprocess.CalledProcessError:
-                # If that fails, try specifying WPA-PSK explicitly (sometimes needed for nmcli)
+            except subprocess.CalledProcessError as inner_e:
+                # Check for specific error codes that shouldn't trigger fallback
+                if inner_e.returncode == 255:
+                    # Already connected - don't try fallback
+                    error_response = create_error_response("connect_wifi", ErrorCode.WIFI_ALREADY_CONNECTED, "Already connected to the given network")
+                    error_response["command"] = "connect_wifi"
+                    cls.send_data(error_response)
+                    return
+                elif inner_e.returncode == 4:
+                    # Wrong password - don't try fallback
+                    error_response = create_error_response("connect_wifi", ErrorCode.WIFI_PASSWORD_WRONG, "The WiFi password is incorrect")
+                    error_response["command"] = "connect_wifi"
+                    cls.send_data(error_response)
+                    return
+                # If that fails with other error, try specifying WPA-PSK explicitly (sometimes needed for nmcli)
                 # Or try without specifying security if it's open (though password implies security)
                 # This fallback attempts to delete any existing connection profile first to avoid conflicts
                 # Delete existing connection if any (ignore errors if it doesn't exist)
@@ -101,7 +121,15 @@ class UARTDevice:
                 cls.send_data({"command": "connect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
             print("Failed to connect to WiFi:", e)
-            cls.send_data({"command": "connect_wifi", "status": "error", "message": str(e)})
+            # Check nmcli return code for specific error conditions
+            if e.returncode == 255:
+                error_response = create_error_response("connect_wifi", ErrorCode.WIFI_ALREADY_CONNECTED, "Already connected to the given network")
+            elif e.returncode == 4:
+                error_response = create_error_response("connect_wifi", ErrorCode.WIFI_PASSWORD_WRONG, "The WiFi password is incorrect")
+            else:
+                error_response = handle_exception("connect_wifi", e, "Failed to connect to WiFi")
+            error_response["command"] = "connect_wifi"
+            cls.send_data(error_response)
 
     @classmethod
     def _reconnect_wifi_task(cls):
@@ -118,7 +146,9 @@ class UARTDevice:
             cls.send_data({"command": "reconnect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
             print("Failed to reconnect WiFi:", e)
-            cls.send_data({"command": "reconnect_wifi", "status": "error", "message": str(e)})
+            error_response = handle_exception("reconnect_wifi", e, "Failed to reconnect WiFi")
+            error_response["command"] = "reconnect_wifi"
+            cls.send_data(error_response)
 
     @classmethod
     def uart_write(cls, value, options):
@@ -138,7 +168,9 @@ class UARTDevice:
                     cls.send_data({"command": "enable_wifi", "status": "success"})
                 except subprocess.CalledProcessError as e:
                     print("Failed to enable WiFi:", e)
-                    cls.send_data({"command": "enable_wifi", "status": "error", "message": str(e)})
+                    error_response = handle_exception("enable_wifi", e, "Failed to enable WiFi")
+                    error_response["command"] = "enable_wifi"
+                    cls.send_data(error_response)
             elif (command == "wifi_status"):
                 # Check WiFi status
                 try:
@@ -161,7 +193,9 @@ class UARTDevice:
                         cls.send_data({"command": "wifi_status", "wifi_enabled": False})
                 except subprocess.CalledProcessError as e:
                     print("Failed to get WiFi status:", e)
-                    cls.send_data({"command": "wifi_status", "error": "Failed to get WiFi status"})
+                    error_response = handle_exception("wifi_status", e, "Failed to get WiFi status")
+                    error_response["command"] = "wifi_status"
+                    cls.send_data(error_response)
             elif (command == "connect_wifi"):
                 # Connect to a WiFi network
                 ssid = data.get("ssid")
@@ -169,7 +203,9 @@ class UARTDevice:
                 if ssid and password:
                     threading.Thread(target=cls._connect_wifi_task, args=(ssid, password), daemon=True).start()
                 else:
-                    cls.send_data({"command": "connect_wifi", "status": "error", "message": "SSID or password missing"})
+                    error_response = create_error_response("connect_wifi", ErrorCode.MISSING_PARAMETER, "SSID or password missing")
+                    error_response["command"] = "connect_wifi"
+                    cls.send_data(error_response)
             elif (command == "reconnect_wifi"):
                 threading.Thread(target=cls._reconnect_wifi_task, daemon=True).start()
             elif (command == "device_info"):
@@ -181,16 +217,22 @@ class UARTDevice:
                     cls.send_data({"command": "device_info", "info": UARTDevice.device_info})
                 except Exception as e:
                     print("Failed to get device info:", e)
-                    cls.send_data({"command": "device_info", "error": "Failed to get device info"})
+                    error_response = handle_exception("device_info", e, "Failed to get device info")
+                    error_response["command"] = "device_info"
+                    cls.send_data(error_response)
             elif (command == "locate_device"):
                 if UARTDevice.locate_device:
                     threading.Thread(target=UARTDevice.locate_device, daemon=True).start()
                 cls.send_data({"command": "locate_device", "status": "success"})
             else:
-                cls.send_data({"error": "Unknown command"})
+                error_response = create_error_response("unknown", ErrorCode.UNKNOWN_ACTION, "Unknown command")
+                error_response["command"] = command if command else "unknown"
+                cls.send_data(error_response)
                 
         except json.JSONDecodeError as e:
-            cls.send_data({"error": "Failed to decode JSON"})
+            error_response = create_error_response("unknown", ErrorCode.INVALID_JSON, "Failed to decode JSON")
+            error_response["command"] = "unknown"
+            cls.send_data(error_response)
 
 
 def start_ble_server(locate_device=None):
