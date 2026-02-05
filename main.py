@@ -131,6 +131,47 @@ def check_widget_ready(widget_frame):
     Check if widget is ready by examining top and bottom rows of pixels.
     Returns True if any pixel in top or bottom row is not black (0,0,0).
     """
+<<<<<<< HEAD
+=======
+
+    def _get_flattened_data_compat(img):
+        """
+        Backwards-compatible pixel flattener.
+        Prefer new get_flattened_data() API, but fall back to old getdata().
+        """
+        # New API: get_flattened_data()
+        if hasattr(img, "get_flattened_data"):
+            try:
+                return img.get_flattened_data()
+            except Exception:
+                # If anything goes wrong, fall through to the old API
+                pass
+
+        # Old API: getdata()
+        if hasattr(img, "getdata"):
+            try:
+                data_iter = iter(img.getdata())
+                first = next(data_iter, None)
+                if first is None:
+                    return []
+                # If pixels are tuples/lists, flatten them; otherwise return scalars
+                if isinstance(first, (tuple, list)):
+                    flat = list(first)
+                    for px in data_iter:
+                        flat.extend(px)
+                    return flat
+                else:
+                    return [first, *list(data_iter)]
+            except Exception:
+                pass
+
+        # Fallback: use raw bytes
+        try:
+            return list(img.tobytes())
+        except Exception:
+            return []
+
+>>>>>>> master
     if widget_frame is None:
         return False
     
@@ -138,13 +179,21 @@ def check_widget_ready(widget_frame):
     
     # Check top row (y=0)
     top_row = widget_frame.crop((0, 0, width, 1))
+<<<<<<< HEAD
     top_pixels_flat = top_row.get_flattened_data()
+=======
+    top_pixels_flat = _get_flattened_data_compat(top_row)
+>>>>>>> master
     top_has_content = any(value != 0 for value in top_pixels_flat)
     
     # Check bottom row (y=height-1)
     if height > 1:
         bottom_row = widget_frame.crop((0, height - 1, width, height))
+<<<<<<< HEAD
         bottom_pixels_flat = bottom_row.get_flattened_data()
+=======
+        bottom_pixels_flat = _get_flattened_data_compat(bottom_row)
+>>>>>>> master
         bottom_has_content = any(value != 0 for value in bottom_pixels_flat)
     else:
         # If height is 1, we already checked it in top_row
