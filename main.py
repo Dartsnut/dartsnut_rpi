@@ -408,6 +408,9 @@ set_volume(int(device_info.get("volume", "50")))
 
 ble_thread = threading.Thread(target=start_ble_server, args=(locate_device,), daemon=True)
 ble_thread.start()
+def trigger_dim_check():
+    _app_ctx.trigger_dim_check = True
+
 websocket_thread = threading.Thread(
     target=start_websocket_server,
     args=(
@@ -418,6 +421,7 @@ websocket_thread = threading.Thread(
         get_widgets_framebuffer,
         start_game_from_websocket,
         set_volume,
+        trigger_dim_check,
     ),
     daemon=True,
 )

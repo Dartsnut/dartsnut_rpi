@@ -270,6 +270,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         message.get("dim_window_enabled"),
                     )
                     await send_response(req_id, result)
+                    if result.get("message") == "Success" and websocket_endpoint.trigger_dim_check:
+                        await asyncio.to_thread(websocket_endpoint.trigger_dim_check)
                 elif action == "forget_wifi":
                     await asyncio.to_thread(forget_wifi)
                 elif action == "get_version":
@@ -346,7 +348,7 @@ async def websocket_endpoint(websocket: WebSocket):
         except asyncio.CancelledError:
             pass
 
-def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None, start_game_process=None, set_volume=None):
+def start_websocket_server(set_brightness=None, locate_device=None, reload_config=None, set_time_zone=None, get_widgets_framebuffer=None, start_game_process=None, set_volume=None, trigger_dim_check=None):
     # Start UDP broadcast thread
     udp_thread = threading.Thread(target=udp_broadcast, daemon=True)
     udp_thread.start()
@@ -358,4 +360,5 @@ def start_websocket_server(set_brightness=None, locate_device=None, reload_confi
     websocket_endpoint.get_widgets_framebuffer = get_widgets_framebuffer if get_widgets_framebuffer else None
     websocket_endpoint.start_game_process = start_game_process if start_game_process else None
     websocket_endpoint.set_volume = set_volume if set_volume else None
+    websocket_endpoint.trigger_dim_check = trigger_dim_check if trigger_dim_check else None
     uvicorn.run(app, host="0.0.0.0", port=9251)
