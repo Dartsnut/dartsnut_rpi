@@ -45,6 +45,63 @@ _brightness_before_dim = None
 _last_dim_check_time = 0
 _dim_force_normal_brightness = False
 
+# Smooth brightness transition (1 second to target)
+_brightness_transition_start_time = None
+_brightness_transition_start_value = None
+_brightness_transition_target = None
+_brightness_last_set = None
+
+BRIGHTNESS_TRANSITION_DURATION = 1.0
+
+
+def _get_current_brightness_for_transition():
+    """Current brightness value (for transition start): last set or from device.json."""
+    if _brightness_last_set is not None:
+        return _brightness_last_set
+    try:
+        return int(get_device_info().get("brightness", 50))
+    except Exception:
+        return 50
+
+
+def _start_brightness_transition(target):
+    """Start or replace a 1-second smooth transition to target brightness (0-100)."""
+    global _brightness_transition_start_time, _brightness_transition_start_value, _brightness_transition_target
+    now = time.time()
+    if _brightness_transition_start_time is not None and _brightness_transition_target is not None:
+        t = min(1.0, (now - _brightness_transition_start_time) / BRIGHTNESS_TRANSITION_DURATION)
+        start_val = round(
+            _brightness_transition_start_value
+            + (_brightness_transition_target - _brightness_transition_start_value) * t
+        )
+    else:
+        start_val = _get_current_brightness_for_transition()
+    if start_val == target:
+        _brightness_transition_start_time = None
+        return
+    _brightness_transition_start_time = now
+    _brightness_transition_start_value = start_val
+    _brightness_transition_target = target
+
+
+def _update_brightness_transition():
+    """Run once per frame: advance smooth transition and set hardware."""
+    global _brightness_transition_start_time, _brightness_transition_start_value, _brightness_transition_target, _brightness_last_set
+    if _brightness_transition_start_time is None:
+        return
+    elapsed = time.time() - _brightness_transition_start_time
+    t = min(1.0, elapsed / BRIGHTNESS_TRANSITION_DURATION)
+    current = round(
+        _brightness_transition_start_value
+        + (_brightness_transition_target - _brightness_transition_start_value) * t
+    )
+    _set_brightness_hardware(current)
+    _brightness_last_set = current
+    if t >= 1.0:
+        _brightness_transition_start_time = None
+        _brightness_transition_start_value = None
+        _brightness_transition_target = None
+
 
 def get_device_info():
     if not hasattr(get_device_info, "_last_mtime"):
@@ -63,6 +120,8 @@ def get_device_info():
 
 
 def _set_brightness_hardware(brightness):
+    global _brightness_last_set
+    _brightness_last_set = brightness
     dartsnut.set_brightness(brightness)
 
 
@@ -380,6 +439,8 @@ while dartsnut.running:
         time.sleep(1 / 30)
         assets.get_current_loading_frame()
 
+        _update_brightness_transition()
+
         if ctx.trigger_dim_check:
             ctx.trigger_dim_check = False
             _last_dim_check_time = 0
@@ -395,7 +456,7 @@ while dartsnut.running:
             if not enabled or not start_s or not end_s:
                 if _currently_in_dim_window:
                     restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                    _set_brightness_hardware(restore)
+                    _start_brightness_transition(restore)
                     _currently_in_dim_window = False
                     _dim_force_normal_brightness = False
             else:
@@ -404,7 +465,7 @@ while dartsnut.running:
                 if start_hm is None or end_hm is None:
                     if _currently_in_dim_window:
                         restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                        _set_brightness_hardware(restore)
+                        _start_brightness_transition(restore)
                         _currently_in_dim_window = False
                         _dim_force_normal_brightness = False
                 else:
@@ -418,12 +479,12 @@ while dartsnut.running:
                         if ctx.current_state.name() != "in_game" and not _dim_force_normal_brightness:
                             if not _currently_in_dim_window:
                                 _brightness_before_dim = int(di.get("brightness", 50))
-                            _set_brightness_hardware(dim_lvl)
+                            _start_brightness_transition(dim_lvl)
                             _currently_in_dim_window = True
                     else:
                         if _currently_in_dim_window:
                             restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                            _set_brightness_hardware(restore)
+                            _start_brightness_transition(restore)
                             _currently_in_dim_window = False
                             _dim_force_normal_brightness = False
 
@@ -452,14 +513,19 @@ while dartsnut.running:
             di = get_device_info()
             dim_lvl = int(di.get("dim_level", 10))
             if _dim_force_normal_brightness and buttons.get("btn_b"):
-                if not ctx.current_state.is_showing_exit_game_overlay(ctx):
+                # Let B go to state when it has a meaning: menu exit overlay (end game) or game_select (back to menu)
+                btn_b_handled_by_state = (
+                    ctx.current_state.is_showing_exit_game_overlay(ctx)
+                    or ctx.current_state.name() == "game_select"
+                )
+                if not btn_b_handled_by_state:
                     _dim_force_normal_brightness = False
-                    _set_brightness_hardware(dim_lvl)
+                    _start_brightness_transition(dim_lvl)
                     buttons["btn_b"] = False
             elif not _dim_force_normal_brightness and buttons.get("btn_a"):
                 _dim_force_normal_brightness = True
                 restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                _set_brightness_hardware(restore)
+                _start_brightness_transition(restore)
                 buttons["btn_a"] = False
 
         ctx.current_state.handle_input(ctx, buttons)
