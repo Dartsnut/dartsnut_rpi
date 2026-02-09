@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import glob
+import urllib.request
 from datetime import datetime, time as dt_time
 
 from PIL import Image
@@ -383,13 +384,15 @@ def check_connection_loop():
             )
             _app_ctx.wifi_connected = wifi_check.returncode == 0
             if _app_ctx.wifi_connected:
-                internet_check = subprocess.run(
-                    ["ping", "-c", "1", "-W", "2", "github.com"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                _app_ctx.internet_connected = internet_check.returncode == 0
+                # Prefer HTTP over ping: many networks block or rate-limit ICMP
+                try:
+                    urllib.request.urlopen(
+                        "https://api.github.com",
+                        timeout=5,
+                    )
+                    _app_ctx.internet_connected = True
+                except Exception:
+                    _app_ctx.internet_connected = False
             else:
                 _app_ctx.internet_connected = False
         except Exception as e:
