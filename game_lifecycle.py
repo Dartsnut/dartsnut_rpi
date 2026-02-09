@@ -1,0 +1,130 @@
+"""Game lifecycle: start/term game process, load game list."""
+import base64
+import io
+import json
+import os
+import signal
+from multiprocessing import shared_memory
+import subprocess
+import requests
+
+from core.helpers import set_pdeathsig, get_user_data_store_path
+from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking
+from widget_lifecycle import download_app
+import assets
+from PIL import Image
+
+
+def start_game_process(gameid: str) -> dict:
+    """Start game process and return game dict (process, shm, game_id, launched, pico8_first_frame_seen) or None."""
+    game_path = os.path.join(os.getcwd(), "apps", gameid)
+    if not os.path.isdir(game_path):
+        try:
+            response = requests.get(
+                f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}"
+            )
+            if response.status_code == 200:
+                data = response.json().get("data")
+                if data:
+                    u = data.get("game_download_url")
+                    m = data.get("game_download_md5")
+                    if u and m:
+                        download_app(u, m)
+            else:
+                print(f"Failed to get download info for game {gameid}: {response.status_code}")
+        except Exception as e:
+            print(f"Error fetching game download info: {e}")
+    if not os.path.isdir(game_path):
+        return None
+    shm_name = "game_shm"
+    shm_size = 128 * 160 * 3 + 1
+    try:
+        existing = shared_memory.SharedMemory(name=shm_name)
+        existing.close()
+        shared_memory.SharedMemory(name=shm_name).unlink()
+    except (FileNotFoundError, FileExistsError):
+        pass
+    try:
+        shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
+        loading_image = assets.create_loading_image()
+        img_bytes = loading_image.tobytes()
+        shm.buf[1 : 1 + len(img_bytes)] = img_bytes
+        shm.buf[0] = 0
+        command = [
+            os.path.join(os.getcwd(), "venv0/bin/python"),
+            os.path.join(os.getcwd(), "apps/", gameid, "main.py"),
+        ]
+        command.extend(["--shm", shm_name])
+        command.extend(["--data-store", get_user_data_store_path(gameid)])
+        process = subprocess.Popen(
+            command,
+            cwd=os.path.join("./apps/", gameid),
+            preexec_fn=set_pdeathsig,
+        )
+        try:
+            start_game_tracking(gameid)
+        except Exception as e:
+            print(f"Warning: Failed to start game tracking: {e}")
+        return {
+            "process": process,
+            "shm": shm,
+            "game_id": gameid,
+            "launched": False,
+            "pico8_first_frame_seen": False,
+        }
+    except Exception as e:
+        print(f"Error starting game {gameid}: {e}")
+        return None
+
+
+def term_game_process(g: dict) -> None:
+    """Terminate game process and clean up; clear game dict. Returns None (caller should set game = None)."""
+    if g is None:
+        return
+    try:
+        try:
+            stop_game_tracking()
+        except Exception as e:
+            print(f"Warning: Failed to stop game tracking: {e}")
+        if g.get("process") and g["process"].poll() is None:
+            os.kill(g["process"].pid, signal.SIGCONT)
+            os.kill(g["process"].pid, signal.SIGKILL)
+        if g.get("shm"):
+            g["shm"].close()
+            g["shm"].unlink()
+        g.clear()
+    except Exception as e:
+        print(f"Error terminating game: {e}")
+    return None
+
+
+def load_game_list() -> list:
+    """Load game list from apps directory with preview images decoded."""
+    game_list = []
+    apps_dir = os.path.join(os.getcwd(), "apps")
+    for name in os.listdir(apps_dir):
+        path = os.path.join(apps_dir, name)
+        if not os.path.isdir(path):
+            continue
+        conf_path = os.path.join(path, "conf.json")
+        if not os.path.isfile(conf_path):
+            continue
+        try:
+            with open(conf_path, "r") as f:
+                conf = json.load(f)
+            if conf.get("type") != "game":
+                continue
+            if "preview" in conf:
+                images = []
+                for img_b64 in conf["preview"]:
+                    img_data = base64.b64decode(img_b64)
+                    img = Image.open(io.BytesIO(img_data))
+                    img = img.convert("RGB").resize((128, 128), Image.LANCZOS)
+                    image = Image.new("RGB", (128, 160), (0, 0, 0))
+                    image.paste(img, (0, 0))
+                    images.append(bytearray(image.tobytes()))
+                conf["preview"] = images
+            game_list.append(conf)
+        except Exception as e:
+            print(f"Error loading game config for {name}: {e}")
+    return game_list
