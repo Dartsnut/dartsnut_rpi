@@ -44,6 +44,7 @@ _currently_in_dim_window = False
 _brightness_before_dim = None
 _last_dim_check_time = 0
 _dim_force_normal_brightness = False
+_dim_force_normal_start_time = None
 
 # Smooth brightness transition (1 second to target)
 _brightness_transition_start_time = None
@@ -459,6 +460,7 @@ while dartsnut.running:
                     _start_brightness_transition(restore)
                     _currently_in_dim_window = False
                     _dim_force_normal_brightness = False
+                    _dim_force_normal_start_time = None
             else:
                 start_hm = _parse_hhmm(start_s)
                 end_hm = _parse_hhmm(end_s)
@@ -468,6 +470,7 @@ while dartsnut.running:
                         _start_brightness_transition(restore)
                         _currently_in_dim_window = False
                         _dim_force_normal_brightness = False
+                        _dim_force_normal_start_time = None
                 else:
                     now = datetime.now().time()
                     start_t = dt_time(start_hm[0], start_hm[1])
@@ -487,6 +490,7 @@ while dartsnut.running:
                             _start_brightness_transition(restore)
                             _currently_in_dim_window = False
                             _dim_force_normal_brightness = False
+                            _dim_force_normal_start_time = None
 
         ctx.state_str = ctx.current_state.name()
 
@@ -512,6 +516,13 @@ while dartsnut.running:
         if ctx.current_state.name() != "in_game" and _currently_in_dim_window:
             di = get_device_info()
             dim_lvl = int(di.get("dim_level", 10))
+            # Remove force after dim_restore_seconds
+            if _dim_force_normal_brightness and _dim_force_normal_start_time is not None:
+                secs = max(5, min(300, int(di.get("dim_restore_seconds", 30))))
+                if time.time() - _dim_force_normal_start_time >= secs:
+                    _dim_force_normal_brightness = False
+                    _dim_force_normal_start_time = None
+                    _start_brightness_transition(dim_lvl)
             if _dim_force_normal_brightness and buttons.get("btn_b"):
                 # Let B go to state when it has a meaning: menu exit overlay (end game) or game_select (back to menu)
                 btn_b_handled_by_state = (
@@ -520,10 +531,12 @@ while dartsnut.running:
                 )
                 if not btn_b_handled_by_state:
                     _dim_force_normal_brightness = False
+                    _dim_force_normal_start_time = None
                     _start_brightness_transition(dim_lvl)
                     buttons["btn_b"] = False
             elif not _dim_force_normal_brightness and buttons.get("btn_a"):
                 _dim_force_normal_brightness = True
+                _dim_force_normal_start_time = time.time()
                 restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
                 _start_brightness_transition(restore)
                 buttons["btn_a"] = False
