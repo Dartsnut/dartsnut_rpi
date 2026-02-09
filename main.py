@@ -43,6 +43,7 @@ dartsnut = Dartsnut()
 _currently_in_dim_window = False
 _brightness_before_dim = None
 _last_dim_check_time = 0
+_dim_force_normal_brightness = False
 
 
 def get_device_info():
@@ -379,6 +380,10 @@ while dartsnut.running:
         time.sleep(1 / 30)
         assets.get_current_loading_frame()
 
+        if ctx.trigger_dim_check:
+            ctx.trigger_dim_check = False
+            _last_dim_check_time = 0
+
         # Dim window: 60s check
         if (time.time() - _last_dim_check_time) >= 60 or _last_dim_check_time == 0:
             _last_dim_check_time = time.time()
@@ -392,6 +397,7 @@ while dartsnut.running:
                     restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
                     _set_brightness_hardware(restore)
                     _currently_in_dim_window = False
+                    _dim_force_normal_brightness = False
             else:
                 start_hm = _parse_hhmm(start_s)
                 end_hm = _parse_hhmm(end_s)
@@ -400,6 +406,7 @@ while dartsnut.running:
                         restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
                         _set_brightness_hardware(restore)
                         _currently_in_dim_window = False
+                        _dim_force_normal_brightness = False
                 else:
                     now = datetime.now().time()
                     start_t = dt_time(start_hm[0], start_hm[1])
@@ -408,8 +415,9 @@ while dartsnut.running:
                         start_t > end_t and (now >= start_t or now < end_t)
                     )
                     if in_window:
-                        if not _currently_in_dim_window:
-                            _brightness_before_dim = int(di.get("brightness", 50))
+                        if ctx.current_state.name() != "in_game" and not _dim_force_normal_brightness:
+                            if not _currently_in_dim_window:
+                                _brightness_before_dim = int(di.get("brightness", 50))
                             _set_brightness_hardware(dim_lvl)
                             _currently_in_dim_window = True
                     else:
@@ -417,6 +425,7 @@ while dartsnut.running:
                             restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
                             _set_brightness_hardware(restore)
                             _currently_in_dim_window = False
+                            _dim_force_normal_brightness = False
 
         ctx.state_str = ctx.current_state.name()
 
@@ -437,6 +446,21 @@ while dartsnut.running:
             ctx.current_state.update(ctx)
 
         buttons = get_buttons_pressed(ctx)
+
+        # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
+        if ctx.current_state.name() != "in_game" and _currently_in_dim_window:
+            di = get_device_info()
+            dim_lvl = int(di.get("dim_level", 10))
+            if _dim_force_normal_brightness and buttons.get("btn_b"):
+                if not ctx.current_state.is_showing_exit_game_overlay(ctx):
+                    _dim_force_normal_brightness = False
+                    _set_brightness_hardware(dim_lvl)
+                    buttons["btn_b"] = False
+            elif not _dim_force_normal_brightness and buttons.get("btn_a"):
+                _dim_force_normal_brightness = True
+                restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                _set_brightness_hardware(restore)
+                buttons["btn_a"] = False
 
         ctx.current_state.handle_input(ctx, buttons)
 

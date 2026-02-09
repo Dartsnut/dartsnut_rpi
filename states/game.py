@@ -132,6 +132,7 @@ class InGameState(BaseState):
             from states.menu import MenuState
             from states.widget import WidgetState
             device_info = ctx.get_device_info()
+            ctx.trigger_dim_check = True
             if device_info.get("model") == "PixelBoard":
                 ctx.reload_conf = True
                 ctx.transition_to(WidgetState())

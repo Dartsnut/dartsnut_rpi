@@ -22,3 +22,7 @@ class BaseState(ABC):
     def name(self) -> str:
         """State name for joystick consumption (e.g. 'in_game' means don't consume joystick)."""
         return ""
+
+    def is_showing_exit_game_overlay(self, ctx: "AppContext") -> bool:
+        """True when this state is showing the 'B: End the game' overlay (B should end game, not dim override)."""
+        return False

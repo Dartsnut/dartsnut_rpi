@@ -51,6 +51,8 @@ class AppContext:
         self.pending_state: Optional[str] = None
         # Current state name (set by main each frame) for lifecycle callbacks that run in threads
         self.state_str: str = "menu"
+        # Set True when exiting in_game so main loop runs dim check on next frame
+        self.trigger_dim_check: bool = False
 
         # Lifecycle callbacks (set by main after creating context)
         self.load_game_list: Optional[Callable[[], list]] = None

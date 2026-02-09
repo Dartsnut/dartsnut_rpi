@@ -48,6 +48,13 @@ class MenuState(BaseState):
     def name(self) -> str:
         return "menu"
 
+    def is_showing_exit_game_overlay(self, ctx: AppContext) -> bool:
+        return (
+            ctx.game is not None
+            and "process" in ctx.game
+            and ctx.game["process"].poll() is None
+        )
+
     def update(self, ctx: AppContext) -> None:
         device_info = ctx.get_device_info()
         if device_info.get("model") == "PixelBoard":
@@ -57,11 +64,7 @@ class MenuState(BaseState):
         # PixelDart: draw menu
         assets = ctx.assets
         menu_image = Image.new("RGB", (128, 160), (0, 0, 0))
-        if (
-            ctx.game is not None
-            and "process" in ctx.game
-            and ctx.game["process"].poll() is None
-        ):
+        if self.is_showing_exit_game_overlay(ctx):
             game_buf = ctx.game["shm"].buf[1:]
             game_image = Image.frombytes("RGB", (128, 128), bytes(game_buf))
             menu_image.paste(game_image, (0, 0))
