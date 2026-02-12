@@ -71,10 +71,12 @@ settings_icon = Image.open("./settings_icon.png")
 widget_icon = Image.open("./widget_icon.png")
 lock_widget_icon = Image.open("./lock_widget_icon.png")
 wifi_disconnect_icon = Image.open("./wifi_disconnect_icon.png")
+wifi_icon = Image.open("./wifi.png")
 internet_disconnect_icon = Image.open("./internet_disconnect_icon.png")
 game_select_image = Image.open("./game_sel.png")
 
 # Fonts
 font8 = ImageFont.load("./dartsnut-6X8.pil")
+font_6x8 = ImageFont.load("./font-6x8.pil")
 font16 = ImageFont.truetype("./Micro5.ttf", size=16)
 font24 = ImageFont.truetype("./Micro5.ttf", size=24)

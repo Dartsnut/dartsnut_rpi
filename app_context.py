@@ -33,7 +33,7 @@ class AppContext:
         self.game_list = []
         self.game_index = 0
         self.menu_select_index = 0
-        self.setting_select_index = 0
+        self.setting_select_index = 3
         self.page_tick = 0.0
         self.last_page_index = -1
         self.next_page_prepared_index = -1
@@ -59,6 +59,7 @@ class AppContext:
         self.term_game_process: Optional[Callable[[Any], Any]] = None
         self.start_game_process: Optional[Callable[[str], Any]] = None
         self.term_widget_processes: Optional[Callable[[Any], None]] = None
+        self.reset_device: Optional[Callable[[], None]] = None
 
     def transition_to(self, new_state: "BaseState") -> None:
         """Switch to a new state."""

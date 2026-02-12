@@ -19,7 +19,7 @@ from pydartsnut import Dartsnut
 
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
-from python_websocket.device_operations import _parse_hhmm
+from python_websocket.device_operations import _parse_hhmm, forget_wifi
 
 import assets
 from app_context import AppContext
@@ -202,6 +202,7 @@ ctx.load_game_list = load_game_list
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
+ctx.reset_device = lambda: forget_wifi()
 
 _app_ctx = ctx
 
@@ -435,7 +436,7 @@ connection_thread.start()
 ctx.reload_conf = False
 ctx.start_game = False
 ctx.menu_select_index = 0
-ctx.setting_select_index = 0
+ctx.setting_select_index = 3
 init_widgets(ctx)
 
 
@@ -531,10 +532,11 @@ while dartsnut.running:
                     _dim_force_normal_start_time = None
                     _start_brightness_transition(dim_lvl)
             if _dim_force_normal_brightness and buttons.get("btn_b"):
-                # Let B go to state when it has a meaning: menu exit overlay (end game) or game_select (back to menu)
+                # Let B go to state when it has a meaning: menu exit overlay (end game), game_select (back to menu), or settings reset overlay (dismiss)
                 btn_b_handled_by_state = (
                     ctx.current_state.is_showing_exit_game_overlay(ctx)
                     or ctx.current_state.name() == "game_select"
+                    or ctx.current_state.consumes_btn_b_for_overlay(ctx)
                 )
                 if not btn_b_handled_by_state:
                     _dim_force_normal_brightness = False
