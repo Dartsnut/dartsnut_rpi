@@ -487,7 +487,10 @@ while dartsnut.running:
                         start_t > end_t and (now >= start_t or now < end_t)
                     )
                     if in_window:
-                        if ctx.current_state.name() != "in_game" and not _dim_force_normal_brightness:
+                        if (ctx.current_state.name() != "in_game" 
+                            and ctx.current_state.name() != "game_select"
+                            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
+                            and not _dim_force_normal_brightness):
                             if not _currently_in_dim_window:
                                 _brightness_before_dim = int(di.get("brightness", 50))
                             _start_brightness_transition(dim_lvl)
@@ -521,7 +524,10 @@ while dartsnut.running:
         buttons = get_buttons_pressed(ctx)
 
         # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
-        if ctx.current_state.name() != "in_game" and _currently_in_dim_window:
+        if (ctx.current_state.name() != "in_game" 
+            and ctx.current_state.name() != "game_select"
+            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
+            and _currently_in_dim_window):
             di = get_device_info()
             dim_lvl = int(di.get("dim_level", 10))
             # Remove force after dim_restore_seconds
