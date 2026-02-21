@@ -301,7 +301,11 @@ def init_widgets(context: AppContext):
 def get_buttons_pressed(context: AppContext):
     consume_joystick = True
     if context is not None and context.current_state is not None:
-        consume_joystick = context.current_state.name() != "in_game"
+        # In in_game without overlay, game gets joystick; with overlay, app handles A/B
+        consume_joystick = (
+            context.current_state.name() != "in_game"
+            or context.current_state.is_showing_exit_game_overlay(context)
+        )
 
     if not hasattr(get_buttons_pressed, "old_buttons"):
         get_buttons_pressed.old_buttons = {
