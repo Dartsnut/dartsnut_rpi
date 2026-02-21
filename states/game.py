@@ -1,7 +1,7 @@
 """Game states: game select (carousel) and in-game (render from shm)."""
 import signal
 import time
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app_context import AppContext
 from states.base import BaseState
@@ -69,10 +69,16 @@ class GameSelectState(BaseState):
 
 
 class InGameState(BaseState):
-    """In-game: render from game shm; B/home exit to menu or widget."""
+    """In-game: render from game shm; HOME shows pause overlay (A resume, B terminate)."""
+
+    def __init__(self) -> None:
+        self._showing_pause_overlay = False
 
     def name(self) -> str:
         return "in_game"
+
+    def is_showing_exit_game_overlay(self, ctx: AppContext) -> bool:
+        return self._showing_pause_overlay
 
     def update(self, ctx: AppContext) -> None:
         game = ctx.game
@@ -86,6 +92,31 @@ class InGameState(BaseState):
             except Exception as e:
                 print(f"Warning: Failed to stop game tracking: {e}")
             ctx.reload_conf = True
+            return
+        if self._showing_pause_overlay:
+            menu_image = Image.new("RGB", (128, 160), (0, 0, 0))
+            try:
+                game_buf = game["shm"].buf[1:]
+                game_image = Image.frombytes(
+                    "RGB",
+                    (128, 128),
+                    bytes(game_buf[: 128 * 128 * 3]),
+                )
+            except Exception:
+                game_image = Image.new("RGB", (128, 128), (0, 0, 0))
+            menu_image.paste(game_image, (0, 0))
+            overlay = Image.new("RGBA", (128, 128), (0, 0, 0, 128))
+            menu_image.paste(overlay, (0, 0), overlay)
+            draw = ImageDraw.Draw(menu_image)
+            text = "B: End the game"
+            text_bbox = draw.textbbox((0, 0), text, font=ctx.assets.font24)
+            draw.text(
+                ((128 - text_bbox[2]) / 2, (128 - text_bbox[3]) / 2),
+                text,
+                fill="white",
+                font=ctx.assets.font24,
+            )
+            ctx.display.update_frame_buffer(menu_image)
             return
         game_id = game.get("game_id", "unknown")
         shm_buf0 = game["shm"].buf[0] if game.get("shm") else None
@@ -126,18 +157,30 @@ class InGameState(BaseState):
                 ctx.display.update_frame_buffer(assets.create_loading_image())
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:
+        from states.menu import MenuState
+        from states.widget import WidgetState
+
+        if self._showing_pause_overlay:
+            if buttons.get("btn_a"):
+                if ctx.game and ctx.game.get("process") and ctx.game["process"].poll() is None:
+                    ctx.game["process"].send_signal(signal.SIGCONT)
+                self._showing_pause_overlay = False
+            elif buttons.get("btn_b"):
+                if ctx.term_game_process and ctx.game is not None:
+                    ctx.term_game_process(ctx.game)
+                ctx.game = None
+                self._showing_pause_overlay = False
+                ctx.transition_to(MenuState())
+            return
         if buttons.get("btn_b"):
-            pass  # B in game: handled in main as "end game" only from menu
+            pass  # B in game: only overlay B ends the game
         elif buttons.get("btn_home"):
-            from states.menu import MenuState
-            from states.widget import WidgetState
             device_info = ctx.get_device_info()
             ctx.trigger_dim_check = True
             if device_info.get("model") == "PixelBoard":
                 ctx.reload_conf = True
                 ctx.transition_to(WidgetState())
             else:
-                # PixelDart: pause game and go to menu (game stays alive for "B: End the game" overlay)
                 if ctx.game and ctx.game.get("process") and ctx.game["process"].poll() is None:
                     ctx.game["process"].send_signal(signal.SIGSTOP)
-                ctx.transition_to(MenuState())
+                self._showing_pause_overlay = True
