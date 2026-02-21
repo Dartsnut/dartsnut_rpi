@@ -73,6 +73,7 @@ class InGameState(BaseState):
 
     def __init__(self) -> None:
         self._showing_pause_overlay = False
+        self._resume_on_a_release = False
 
     def name(self) -> str:
         return "in_game"
@@ -162,14 +163,18 @@ class InGameState(BaseState):
 
         if self._showing_pause_overlay:
             if buttons.get("btn_a"):
+                self._resume_on_a_release = True
+            elif self._resume_on_a_release and not (getattr(ctx, "current_button_state", None) or {}).get("btn_a", False):
                 if ctx.game and ctx.game.get("process") and ctx.game["process"].poll() is None:
                     ctx.game["process"].send_signal(signal.SIGCONT)
                 self._showing_pause_overlay = False
+                self._resume_on_a_release = False
             elif buttons.get("btn_b"):
                 if ctx.term_game_process and ctx.game is not None:
                     ctx.term_game_process(ctx.game)
                 ctx.game = None
                 self._showing_pause_overlay = False
+                self._resume_on_a_release = False
                 ctx.transition_to(MenuState())
             return
         if buttons.get("btn_b"):

@@ -526,6 +526,7 @@ while dartsnut.running:
             ctx.current_state.update(ctx)
 
         buttons = get_buttons_pressed(ctx)
+        ctx.current_button_state = dict(get_buttons_pressed.old_buttons)
 
         # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
         if (ctx.current_state.name() != "in_game" 
