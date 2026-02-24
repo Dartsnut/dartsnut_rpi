@@ -301,7 +301,11 @@ def init_widgets(context: AppContext):
 def get_buttons_pressed(context: AppContext):
     consume_joystick = True
     if context is not None and context.current_state is not None:
-        consume_joystick = context.current_state.name() != "in_game"
+        # In in_game without overlay, game gets joystick; with overlay, app handles A/B
+        consume_joystick = (
+            context.current_state.name() != "in_game"
+            or context.current_state.is_showing_exit_game_overlay(context)
+        )
 
     if not hasattr(get_buttons_pressed, "old_buttons"):
         get_buttons_pressed.old_buttons = {
@@ -487,7 +491,10 @@ while dartsnut.running:
                         start_t > end_t and (now >= start_t or now < end_t)
                     )
                     if in_window:
-                        if ctx.current_state.name() != "in_game" and not _dim_force_normal_brightness:
+                        if (ctx.current_state.name() != "in_game" 
+                            and ctx.current_state.name() != "game_select"
+                            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
+                            and not _dim_force_normal_brightness):
                             if not _currently_in_dim_window:
                                 _brightness_before_dim = int(di.get("brightness", 50))
                             _start_brightness_transition(dim_lvl)
@@ -519,9 +526,13 @@ while dartsnut.running:
             ctx.current_state.update(ctx)
 
         buttons = get_buttons_pressed(ctx)
+        ctx.current_button_state = dict(get_buttons_pressed.old_buttons)
 
         # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
-        if ctx.current_state.name() != "in_game" and _currently_in_dim_window:
+        if (ctx.current_state.name() != "in_game" 
+            and ctx.current_state.name() != "game_select"
+            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
+            and _currently_in_dim_window):
             di = get_device_info()
             dim_lvl = int(di.get("dim_level", 10))
             # Remove force after dim_restore_seconds

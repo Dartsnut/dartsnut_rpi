@@ -1,6 +1,5 @@
 """Menu state: main menu with games/widgets/settings icons and selection."""
 import os
-import signal
 import time
 from PIL import Image, ImageDraw
 
@@ -43,17 +42,10 @@ def _draw_firmware_updated_text(draw: ImageDraw.Draw, x: int, y: int, font8) -> 
 
 
 class MenuState(BaseState):
-    """Main menu: logo or game overlay, icons, selection; transitions to widget/game_select/settings."""
+    """Main menu: logo, icons, selection; transitions to widget/game_select/settings."""
 
     def name(self) -> str:
         return "menu"
-
-    def is_showing_exit_game_overlay(self, ctx: AppContext) -> bool:
-        return (
-            ctx.game is not None
-            and "process" in ctx.game
-            and ctx.game["process"].poll() is None
-        )
 
     def update(self, ctx: AppContext) -> None:
         device_info = ctx.get_device_info()
@@ -64,23 +56,7 @@ class MenuState(BaseState):
         # PixelDart: draw menu
         assets = ctx.assets
         menu_image = Image.new("RGB", (128, 160), (0, 0, 0))
-        if self.is_showing_exit_game_overlay(ctx):
-            game_buf = ctx.game["shm"].buf[1:]
-            game_image = Image.frombytes("RGB", (128, 128), bytes(game_buf))
-            menu_image.paste(game_image, (0, 0))
-            overlay = Image.new("RGBA", (128, 128), (0, 0, 0, 128))
-            menu_image.paste(overlay, (0, 0), overlay)
-            draw = ImageDraw.Draw(menu_image)
-            text = "B: End the game"
-            text_bbox = draw.textbbox((0, 0), text, font=assets.font24)
-            draw.text(
-                ((128 - text_bbox[2]) / 2, (128 - text_bbox[3]) / 2),
-                text,
-                fill="white",
-                font=assets.font24,
-            )
-        else:
-            menu_image.paste(assets.logo_image, (0, 0))
+        menu_image.paste(assets.logo_image, (0, 0))
         menu_image.paste(assets.game_icon, (4, 132), assets.game_icon.convert("RGBA"))
         menu_image.paste(assets.widget_icon, (24, 132), assets.widget_icon.convert("RGBA"))
         menu_image.paste(
@@ -109,7 +85,7 @@ class MenuState(BaseState):
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:
         from states.widget import WidgetState
-        from states.game import GameSelectState, InGameState
+        from states.game import GameSelectState
         from states.settings import SettingsState
 
         if buttons.get("btn_a"):
@@ -145,21 +121,6 @@ class MenuState(BaseState):
             if device_info.get("model") == "PixelBoard":
                 pass  # toggle freeze handled in widget state
             else:
-                if ctx.current_state and ctx.current_state.name() == "menu":
-                    if (
-                        ctx.game is not None
-                        and "process" in ctx.game
-                        and ctx.game["process"].poll() is None
-                    ):
-                        ctx.game["process"].send_signal(signal.SIGCONT)
-                        ctx.transition_to(InGameState())
-                    elif ctx.pages is not None and len(ctx.pages) > 0:
-                        ctx.transition_to(WidgetState())
-                else:
-                    if (
-                        ctx.game is not None
-                        and "process" in ctx.game
-                        and ctx.game["process"].poll() is None
-                    ):
-                        ctx.game["process"].send_signal(signal.SIGSTOP)
-                    ctx.transition_to(MenuState())
+                # In menu: go to widget if we have pages, else no-op
+                if ctx.pages is not None and len(ctx.pages) > 0:
+                    ctx.transition_to(WidgetState())
