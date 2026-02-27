@@ -40,13 +40,9 @@ def _get_wifi_rssi_cached():
 
 
 def _rssi_to_color(rssi):
-    """Map RSSI (int or None) to (R, G, B). Dark grey if not connected."""
-    if rssi is None:
-        return (80, 80, 80)
-    if rssi >= -60:
+    """Map RSSI (int or None) to (R, G, B). Red when not connected or not strong, green when strong."""
+    if rssi is not None and rssi >= -60:
         return (0, 255, 0)
-    if rssi >= -70:
-        return (255, 255, 0)
     return (255, 0, 0)
 
 
