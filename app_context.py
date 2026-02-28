@@ -42,7 +42,11 @@ class AppContext:
         self.wifi_connected = False
         self.internet_connected = False
         self.locate_device_intv = 0
+        # Flags for config reload behavior
+        # reload_conf: hard reload via init_widgets (used for failures / explicit resets)
+        # reload_pages: soft reload of ./apps/conf.json pages without forcing a state reset
         self.reload_conf = False
+        self.reload_pages = False
         self.game_preview_index = 0
 
         # Current state (object, not string)
