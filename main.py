@@ -212,7 +212,9 @@ def locate_device():
 
 
 def reload_config():
-    _app_ctx.reload_conf = True
+    # WebSocket-driven config reloads should be soft: update pages from ./apps/conf.json
+    # without forcing a hard reset back to menu/widgets or killing any running game.
+    _app_ctx.reload_pages = True
 
 
 def get_widgets_framebuffer():
@@ -244,18 +246,8 @@ def start_game_from_websocket(gameid):
     return True
 
 
-# -----------------------------------------------------------------------------
-# init_widgets: load config, term existing, init pages, set initial state
-# -----------------------------------------------------------------------------
-def init_widgets(context: AppContext):
-    from states.menu import MenuState
-    from states.widget import WidgetState
-
-    if context.current_state and context.current_state.name() == "in_game":
-        context.transition_to(MenuState())
-    term_widget_processes(context.pages)
-    term_game_process(context.game)
-    context.game = None
+def _ensure_apps_conf_and_load_pages(context: AppContext) -> None:
+    """Ensure ./apps/conf.json exists and (re)load pages into context.pages."""
     if not os.path.isdir("./apps"):
         os.makedirs("./apps")
     if not os.path.isfile("./apps/conf.json"):
@@ -279,6 +271,21 @@ def init_widgets(context: AppContext):
             json.dump(default_config, f)
     with open("./apps/conf.json", "r") as f:
         context.pages = init_pages(json.load(f))
+
+
+# -----------------------------------------------------------------------------
+# init_widgets: load config, term existing, init pages, set initial state
+# -----------------------------------------------------------------------------
+def init_widgets(context: AppContext):
+    from states.menu import MenuState
+    from states.widget import WidgetState
+
+    if context.current_state and context.current_state.name() == "in_game":
+        context.transition_to(MenuState())
+    term_widget_processes(context.pages)
+    term_game_process(context.game)
+    context.game = None
+    _ensure_apps_conf_and_load_pages(context)
     context.page_index = 0
     context.last_page_index = -1
     context.next_page_prepared_index = -1
@@ -293,6 +300,22 @@ def init_widgets(context: AppContext):
         context.transition_to(WidgetState())
     else:
         context.transition_to(MenuState())
+
+
+def reload_pages_from_conf(context: AppContext) -> None:
+    """
+    Soft reload of ./apps/conf.json:
+    - Terminates existing widget processes and rebuilds context.pages from config
+    - Does NOT kill or restart the current game
+    - Does NOT force a state transition back to menu/widget
+    """
+    term_widget_processes(context.pages)
+    _ensure_apps_conf_and_load_pages(context)
+    context.page_index = 0
+    context.last_page_index = -1
+    context.next_page_prepared_index = -1
+    context.page_freeze = False
+    context.page_tick = time.time()
 
 
 # -----------------------------------------------------------------------------
@@ -515,6 +538,9 @@ while dartsnut.running:
         elif ctx.reload_conf:
             ctx.reload_conf = False
             init_widgets(ctx)
+        elif getattr(ctx, "reload_pages", False):
+            ctx.reload_pages = False
+            reload_pages_from_conf(ctx)
         elif ctx.start_game:
             ctx.start_game = False
             term_game_process(ctx.game)
