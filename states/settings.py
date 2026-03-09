@@ -9,8 +9,8 @@ from PIL import Image, ImageDraw
 from app_context import AppContext
 from states.base import BaseState
 
-# Rate limit WiFi RSSI: 2 fetches per minute
-RSSI_MIN_INTERVAL = 30
+# Rate limit WiFi RSSI: refresh every ~5 seconds
+RSSI_MIN_INTERVAL = 5
 _last_rssi = None
 _last_rssi_time = 0.0
 
@@ -40,8 +40,15 @@ def _get_wifi_rssi_cached():
 
 
 def _rssi_to_color(rssi):
-    """Map RSSI (int or None) to (R, G, B). Red when not connected or not strong, green when strong."""
-    if rssi is not None and rssi >= -60:
+    """Map RSSI (int or None) to (R, G, B).
+
+    - None: no WiFi RSSI available / not connected -> gray
+    - rssi >= -60: strong/acceptable WiFi -> green
+    - otherwise: weak/poor WiFi -> red
+    """
+    if rssi is None:
+        return (128, 128, 128)
+    if rssi >= -60:
         return (0, 255, 0)
     return (255, 0, 0)
 
@@ -54,6 +61,72 @@ def _tint_icon_rgba(icon_rgba, color):
     G = Image.new("L", size, color[1])
     B = Image.new("L", size, color[2])
     return Image.merge("RGBA", (R, G, B, a))
+
+
+BRIGHTNESS_LEVEL_VALUES = [10, 20, 30, 40, 50, 59, 73, 79, 100]
+VOLUME_LEVEL_VALUES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+
+def _clamp(value, min_value, max_value):
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
+
+
+def _brightness_raw_to_level(brightness_raw):
+    """Map raw brightness (any int) to nearest level 1–9."""
+    try:
+        value = int(brightness_raw)
+    except (TypeError, ValueError):
+        value = 50
+    value = _clamp(value, BRIGHTNESS_LEVEL_VALUES[0], BRIGHTNESS_LEVEL_VALUES[-1])
+    closest_index = 0
+    smallest_diff = abs(BRIGHTNESS_LEVEL_VALUES[0] - value)
+    for idx, v in enumerate(BRIGHTNESS_LEVEL_VALUES[1:], start=1):
+        diff = abs(v - value)
+        if diff < smallest_diff:
+            smallest_diff = diff
+            closest_index = idx
+    return closest_index + 1
+
+
+def _brightness_level_to_raw(level):
+    """Map brightness level (1–9) to canonical raw brightness."""
+    try:
+        level_int = int(level)
+    except (TypeError, ValueError):
+        level_int = 5
+    level_int = _clamp(level_int, 1, len(BRIGHTNESS_LEVEL_VALUES))
+    return BRIGHTNESS_LEVEL_VALUES[level_int - 1]
+
+
+def _volume_raw_to_level(volume_raw):
+    """Map raw volume (any int) to nearest level 0–10."""
+    try:
+        value = int(volume_raw)
+    except (TypeError, ValueError):
+        value = 50
+    value = _clamp(value, VOLUME_LEVEL_VALUES[0], VOLUME_LEVEL_VALUES[-1])
+    closest_index = 0
+    smallest_diff = abs(VOLUME_LEVEL_VALUES[0] - value)
+    for idx, v in enumerate(VOLUME_LEVEL_VALUES[1:], start=1):
+        diff = abs(v - value)
+        if diff < smallest_diff:
+            smallest_diff = diff
+            closest_index = idx
+    return closest_index
+
+
+def _volume_level_to_raw(level):
+    """Map volume level (0–10) to canonical raw volume."""
+    try:
+        level_int = int(level)
+    except (TypeError, ValueError):
+        level_int = 5
+    level_int = _clamp(level_int, 0, len(VOLUME_LEVEL_VALUES) - 1)
+    return VOLUME_LEVEL_VALUES[level_int]
 
 
 SETTINGS_ITEMS = [
@@ -181,25 +254,53 @@ class SettingsState(BaseState):
                     font=font_6x8,
                 )
             elif item["name"] == "Brightness":
-                value_str = f"{brightness}"
-                value_width = len(value_str) * 6
-                arrow_right_x = 104
-                value_x = arrow_right_x - value_width
-                arrow_left_x = value_x - 8
-                if focused:
-                    draw.text((arrow_left_x, ty), "<", fill="white", font=font8)
-                    draw.text((arrow_right_x, ty), ">", fill="white", font=font8)
-                draw.text((value_x, ty), value_str, fill="white", font=font8)
+                brightness_level = _brightness_raw_to_level(brightness)
+                dot_size = 5
+                dot_count = 9
+                dot_gap = 1
+                bar_width = dot_count * dot_size + (dot_count - 1) * dot_gap
+                bar_right_x = 126
+                bar_left_x = bar_right_x - bar_width + 1
+                dot_top_y = y + (item_height - dot_size) // 2
+                for i in range(dot_count):
+                    dot_x0 = bar_left_x + i * (dot_size + dot_gap)
+                    dot_x1 = dot_x0 + dot_size - 1
+                    lit = i < brightness_level
+                    if lit:
+                        draw.rectangle(
+                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
+                            fill="white",
+                        )
+                    else:
+                        draw.rectangle(
+                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
+                            fill=None,
+                            outline="white",
+                        )
             elif item["name"] == "Volume":
-                value_str = f"{volume}"
-                value_width = len(value_str) * 6
-                arrow_right_x = 104
-                value_x = arrow_right_x - value_width
-                arrow_left_x = value_x - 8
-                if focused:
-                    draw.text((arrow_left_x, ty), "<", fill="white", font=font8)
-                    draw.text((arrow_right_x, ty), ">", fill="white", font=font8)
-                draw.text((value_x, ty), value_str, fill="white", font=font8)
+                volume_level = _volume_raw_to_level(volume)
+                dot_size = 5
+                dot_count = 10
+                dot_gap = 1
+                bar_width = dot_count * dot_size + (dot_count - 1) * dot_gap
+                bar_right_x = 126
+                bar_left_x = bar_right_x - bar_width + 1
+                dot_top_y = y + (item_height - dot_size) // 2
+                for i in range(dot_count):
+                    dot_x0 = bar_left_x + i * (dot_size + dot_gap)
+                    dot_x1 = dot_x0 + dot_size - 1
+                    lit = i < volume_level
+                    if lit:
+                        draw.rectangle(
+                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
+                            fill="white",
+                        )
+                    else:
+                        draw.rectangle(
+                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
+                            fill=None,
+                            outline="white",
+                        )
             elif item["name"] == "IP":
                 text_width = len(ip_address) * 6
                 value_x = 126 - text_width
@@ -272,20 +373,32 @@ class SettingsState(BaseState):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
             if idx == 3:
-                brightness = max(int(di.get("brightness", "50")) - 10, 10)
-                ctx.set_brightness(brightness)
+                raw_brightness = int(di.get("brightness", "50"))
+                level = _brightness_raw_to_level(raw_brightness)
+                new_level = max(1, level - 1)
+                new_brightness = _brightness_level_to_raw(new_level)
+                ctx.set_brightness(new_brightness)
             elif idx == 4:
-                volume = max(int(di.get("volume", "50")) - 10, 0)
-                ctx.set_volume(volume)
+                raw_volume = int(di.get("volume", "50"))
+                level = _volume_raw_to_level(raw_volume)
+                new_level = max(0, level - 1)
+                new_volume = _volume_level_to_raw(new_level)
+                ctx.set_volume(new_volume)
         elif buttons.get("btn_right"):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
             if idx == 3:
-                brightness = min(int(di.get("brightness", "50")) + 10, 100)
-                ctx.set_brightness(brightness)
+                raw_brightness = int(di.get("brightness", "50"))
+                level = _brightness_raw_to_level(raw_brightness)
+                new_level = min(len(BRIGHTNESS_LEVEL_VALUES), level + 1)
+                new_brightness = _brightness_level_to_raw(new_level)
+                ctx.set_brightness(new_brightness)
             elif idx == 4:
-                volume = min(int(di.get("volume", "50")) + 10, 100)
-                ctx.set_volume(volume)
+                raw_volume = int(di.get("volume", "50"))
+                level = _volume_raw_to_level(raw_volume)
+                new_level = min(len(VOLUME_LEVEL_VALUES) - 1, level + 1)
+                new_volume = _volume_level_to_raw(new_level)
+                ctx.set_volume(new_volume)
         elif buttons.get("btn_up"):
             ctx.setting_select_index = max(3, ctx.setting_select_index - 1)
         elif buttons.get("btn_down"):

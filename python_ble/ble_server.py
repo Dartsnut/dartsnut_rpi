@@ -18,6 +18,21 @@ UART_SERVICE = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
 RX_CHARACTERISTIC = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'
 TX_CHARACTERISTIC = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
 
+
+def _ble_mac_last_two_octets(adapter_address: str) -> str:
+    """Return the last two octets of a BLE MAC address as 4 hex chars (e.g. eeff)."""
+    try:
+        s = adapter_address.strip().lower().replace(":", "")
+        if len(s) >= 4:
+            return s[-4:]
+        parts = adapter_address.strip().lower().split(":")
+        if len(parts) >= 2:
+            return (parts[-2] + parts[-1]).replace(":", "")
+    except Exception:
+        pass
+    return "0000"
+
+
 class UARTDevice:
     tx_obj = None
     callback = None
@@ -240,10 +255,11 @@ def start_ble_server(locate_device=None):
     with open("device.json", 'r') as file:
         UARTDevice.device_info = json.load(file)
 
-    # Get the device name, use model as the name
-    local_name = UARTDevice.device_info.get("model", "Dartsnut")
-
+    # Get the device name: model plus last two octets of BLE MAC for uniqueness
+    base_name = UARTDevice.device_info.get("model", "Dartsnut")
     adapter_address = list(adapter.Adapter.available())[0].address
+    suffix = _ble_mac_last_two_octets(adapter_address)
+    local_name = f"{base_name}-{suffix}"
     # Ensure Bluetooth is unblocked and powered on
     try:
         subprocess.run(['rfkill', 'unblock', 'bluetooth'], check=False, capture_output=True)

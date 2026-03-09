@@ -399,6 +399,8 @@ Set display brightness.
 }
 ```
 
+> **Note:** The on-device settings UI presents brightness as 9 discrete levels (1–9) that internally map to raw brightness values `[10, 20, 30, 40, 50, 59, 73, 79, 100]`. The WebSocket API continues to accept and return raw brightness values in the 10–100 range.
+
 If the value is invalid or out of range, you receive an error with `INVALID_BRIGHTNESS (3005)` or `INVALID_INPUT (3001)`.
 
 #### 3.2.2 `get_brightness`
