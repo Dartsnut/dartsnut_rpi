@@ -227,15 +227,28 @@ class SettingsState(BaseState):
                 )
             elif item["name"] == "Brightness":
                 brightness_level = _brightness_raw_to_level(brightness)
-                value_str = f"{brightness_level}"
-                value_width = len(value_str) * 6
-                arrow_right_x = 104
-                value_x = arrow_right_x - value_width
-                arrow_left_x = value_x - 8
-                if focused:
-                    draw.text((arrow_left_x, ty), "<", fill="white", font=font8)
-                    draw.text((arrow_right_x, ty), ">", fill="white", font=font8)
-                draw.text((value_x, ty), value_str, fill="white", font=font8)
+                dot_size = 5
+                dot_count = 9
+                dot_gap = 1
+                bar_width = dot_count * dot_size + (dot_count - 1) * dot_gap
+                bar_right_x = 126
+                bar_left_x = bar_right_x - bar_width + 1
+                dot_top_y = y + (item_height - dot_size) // 2
+                for i in range(dot_count):
+                    dot_x0 = bar_left_x + i * (dot_size + dot_gap)
+                    dot_x1 = dot_x0 + dot_size - 1
+                    lit = i < brightness_level
+                    if lit:
+                        draw.rectangle(
+                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
+                            fill="white",
+                        )
+                    else:
+                        draw.rectangle(
+                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
+                            fill=None,
+                            outline="white",
+                        )
             elif item["name"] == "Volume":
                 value_str = f"{volume}"
                 value_width = len(value_str) * 6
