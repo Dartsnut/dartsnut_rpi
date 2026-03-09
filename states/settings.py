@@ -9,8 +9,8 @@ from PIL import Image, ImageDraw
 from app_context import AppContext
 from states.base import BaseState
 
-# Rate limit WiFi RSSI: 2 fetches per minute
-RSSI_MIN_INTERVAL = 30
+# Rate limit WiFi RSSI: refresh every ~5 seconds
+RSSI_MIN_INTERVAL = 5
 _last_rssi = None
 _last_rssi_time = 0.0
 
@@ -40,8 +40,15 @@ def _get_wifi_rssi_cached():
 
 
 def _rssi_to_color(rssi):
-    """Map RSSI (int or None) to (R, G, B). Red when not connected or not strong, green when strong."""
-    if rssi is not None and rssi >= -60:
+    """Map RSSI (int or None) to (R, G, B).
+
+    - None: no WiFi RSSI available / not connected -> gray
+    - rssi >= -60: strong/acceptable WiFi -> green
+    - otherwise: weak/poor WiFi -> red
+    """
+    if rssi is None:
+        return (128, 128, 128)
+    if rssi >= -60:
         return (0, 255, 0)
     return (255, 0, 0)
 
