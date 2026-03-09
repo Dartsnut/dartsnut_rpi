@@ -32,7 +32,7 @@ The firmware exposes a Nordic UART–style GATT service:
 
 **Advertising name:**
 
-- The device advertises using the `model` field from `device.json`, e.g. `PixelDart` or `PixelBoard`.
+- The device advertises using the `model` field from `device.json` suffixed with the last two octets of the BLE MAC (e.g. `PixelDart-eeff` or `PixelBoard-a1b2`), so each device has a unique name when scanning; apps can filter by model prefix or display the suffix.
 
 ---
 
@@ -40,7 +40,7 @@ The firmware exposes a Nordic UART–style GATT service:
 
 At a high level, a mobile app should:
 
-1. Scan for BLE peripherals whose name matches your expected model (`PixelDart`, `PixelBoard`, etc.).
+1. Scan for BLE peripherals whose name starts with your expected model (`PixelDart`, `PixelBoard`, etc.); the full name is `{model}-{last 2 octets of BLE MAC}` (e.g. `PixelDart-eeff`).
 2. Connect to the device.
 3. Discover the UART service and RX/TX characteristics by UUID.
 4. Enable notifications on the TX characteristic.
