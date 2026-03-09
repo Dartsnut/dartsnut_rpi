@@ -63,6 +63,44 @@ def _tint_icon_rgba(icon_rgba, color):
     return Image.merge("RGBA", (R, G, B, a))
 
 
+BRIGHTNESS_LEVEL_VALUES = [10, 20, 30, 40, 50, 59, 73, 79, 100]
+
+
+def _clamp(value, min_value, max_value):
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
+
+
+def _brightness_raw_to_level(brightness_raw):
+    """Map raw brightness (any int) to nearest level 1–9."""
+    try:
+        value = int(brightness_raw)
+    except (TypeError, ValueError):
+        value = 50
+    value = _clamp(value, BRIGHTNESS_LEVEL_VALUES[0], BRIGHTNESS_LEVEL_VALUES[-1])
+    closest_index = 0
+    smallest_diff = abs(BRIGHTNESS_LEVEL_VALUES[0] - value)
+    for idx, v in enumerate(BRIGHTNESS_LEVEL_VALUES[1:], start=1):
+        diff = abs(v - value)
+        if diff < smallest_diff:
+            smallest_diff = diff
+            closest_index = idx
+    return closest_index + 1
+
+
+def _brightness_level_to_raw(level):
+    """Map brightness level (1–9) to canonical raw brightness."""
+    try:
+        level_int = int(level)
+    except (TypeError, ValueError):
+        level_int = 5
+    level_int = _clamp(level_int, 1, len(BRIGHTNESS_LEVEL_VALUES))
+    return BRIGHTNESS_LEVEL_VALUES[level_int - 1]
+
+
 SETTINGS_ITEMS = [
     {"name": "Name", "type": "info"},
     {"name": "IP", "type": "info"},
@@ -188,7 +226,8 @@ class SettingsState(BaseState):
                     font=font_6x8,
                 )
             elif item["name"] == "Brightness":
-                value_str = f"{brightness}"
+                brightness_level = _brightness_raw_to_level(brightness)
+                value_str = f"{brightness_level}"
                 value_width = len(value_str) * 6
                 arrow_right_x = 104
                 value_x = arrow_right_x - value_width
@@ -279,8 +318,11 @@ class SettingsState(BaseState):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
             if idx == 3:
-                brightness = max(int(di.get("brightness", "50")) - 10, 10)
-                ctx.set_brightness(brightness)
+                raw_brightness = int(di.get("brightness", "50"))
+                level = _brightness_raw_to_level(raw_brightness)
+                new_level = max(1, level - 1)
+                new_brightness = _brightness_level_to_raw(new_level)
+                ctx.set_brightness(new_brightness)
             elif idx == 4:
                 volume = max(int(di.get("volume", "50")) - 10, 0)
                 ctx.set_volume(volume)
@@ -288,8 +330,11 @@ class SettingsState(BaseState):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
             if idx == 3:
-                brightness = min(int(di.get("brightness", "50")) + 10, 100)
-                ctx.set_brightness(brightness)
+                raw_brightness = int(di.get("brightness", "50"))
+                level = _brightness_raw_to_level(raw_brightness)
+                new_level = min(len(BRIGHTNESS_LEVEL_VALUES), level + 1)
+                new_brightness = _brightness_level_to_raw(new_level)
+                ctx.set_brightness(new_brightness)
             elif idx == 4:
                 volume = min(int(di.get("volume", "50")) + 10, 100)
                 ctx.set_volume(volume)
