@@ -309,9 +309,24 @@ def reload_pages_from_conf(context: AppContext) -> None:
     - Does NOT kill or restart the current game
     - Does NOT force a state transition back to menu/widget
     """
+    # Preserve the currently active page by UUID if it still exists after reload.
+    preserved_page_uuid = None
+    old_pages = context.pages or []
+    if old_pages and 0 <= context.page_index < len(old_pages):
+        preserved_page_uuid = old_pages[context.page_index].get("uuid")
+
     term_widget_processes(context.pages)
     _ensure_apps_conf_and_load_pages(context)
-    context.page_index = 0
+
+    # Default to the first page; if the preserved page still exists, restore it.
+    new_index = 0
+    if preserved_page_uuid is not None and context.pages:
+        for idx, page in enumerate(context.pages):
+            if page.get("uuid") == preserved_page_uuid:
+                new_index = idx
+                break
+
+    context.page_index = new_index
     context.last_page_index = -1
     context.next_page_prepared_index = -1
     context.page_freeze = False

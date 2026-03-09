@@ -769,6 +769,11 @@ def get_app_list():
                     with open(conf_path, "r") as conf_file:
                         try:
                             conf = json.load(conf_file)
+                            # Sanitize preview field so that list_apps never exposes preview data.
+                            # Ensure preview exists and is always an empty list while leaving
+                            # all other configuration fields untouched.
+                            if isinstance(conf, dict):
+                                conf["preview"] = []
                             app_list.append(
                                 {
                                     "name": name,
