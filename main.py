@@ -1,6 +1,7 @@
 """
 Main entry point: display, device, context, state machine, and main loop.
 """
+
 import base64
 import io
 import json
@@ -33,6 +34,10 @@ from game_lifecycle import (
     load_game_list,
     start_game_process,
     term_game_process,
+)
+from firestore_sync_bridge import (
+    start_firestore_sync_if_available,
+    notify_device_state_update,
 )
 
 # -----------------------------------------------------------------------------
@@ -70,8 +75,14 @@ def _start_brightness_transition(target):
     """Start or replace a 1-second smooth transition to target brightness (0-100)."""
     global _brightness_transition_start_time, _brightness_transition_start_value, _brightness_transition_target
     now = time.time()
-    if _brightness_transition_start_time is not None and _brightness_transition_target is not None:
-        t = min(1.0, (now - _brightness_transition_start_time) / BRIGHTNESS_TRANSITION_DURATION)
+    if (
+        _brightness_transition_start_time is not None
+        and _brightness_transition_target is not None
+    ):
+        t = min(
+            1.0,
+            (now - _brightness_transition_start_time) / BRIGHTNESS_TRANSITION_DURATION,
+        )
         start_val = round(
             _brightness_transition_start_value
             + (_brightness_transition_target - _brightness_transition_start_value) * t
@@ -112,7 +123,10 @@ def get_device_info():
     file_path = os.path.join(os.getcwd(), "device.json")
     try:
         current_mtime = os.path.getmtime(file_path)
-        if current_mtime != get_device_info._last_mtime or get_device_info._cached_device_info is None:
+        if (
+            current_mtime != get_device_info._last_mtime
+            or get_device_info._cached_device_info is None
+        ):
             with open(file_path, "r") as file:
                 get_device_info._cached_device_info = json.load(file)
             get_device_info._last_mtime = current_mtime
@@ -136,6 +150,7 @@ def set_brightness(brightness):
             with open("./device.json", "w") as file:
                 json.dump(device_info, file)
             _brightness_before_dim = brightness
+            notify_device_state_update({"brightness": int(brightness)})
         except Exception as e:
             print(f"Error updating device info: {e}")
         return
@@ -145,6 +160,7 @@ def set_brightness(brightness):
         device_info["brightness"] = str(brightness)
         with open("./device.json", "w") as file:
             json.dump(device_info, file)
+        notify_device_state_update({"brightness": int(brightness)})
     except Exception as e:
         print(f"Error updating device info: {e}")
 
@@ -173,6 +189,7 @@ def set_volume(volume):
         device_info["volume"] = str(volume)
         with open("./device.json", "w") as file:
             json.dump(device_info, file)
+        notify_device_state_update({"volume": int(volume)})
     except subprocess.CalledProcessError as e:
         print(f"Failed to set volume: {e.stderr.decode().strip()}")
     except Exception as e:
@@ -207,6 +224,62 @@ ctx.reset_device = lambda: forget_wifi()
 _app_ctx = ctx
 
 
+def _apply_firestore_config(config: dict) -> None:
+    if not isinstance(config, dict):
+        return
+    try:
+        pages = config.get("pages")
+        if isinstance(pages, list):
+            apps_dir = os.path.join(os.getcwd(), "apps")
+            os.makedirs(apps_dir, exist_ok=True)
+            conf_path = os.path.join(apps_dir, "conf.json")
+            with open(conf_path, "w") as f:
+                json.dump({"pages": pages}, f)
+    except Exception as e:
+        print(f"Error applying Firestore pages config: {e}")
+    try:
+        device_info = get_device_info() or {}
+        if "brightness" in config:
+            device_info["brightness"] = str(
+                config.get("brightness", device_info.get("brightness", "50"))
+            )
+        if "volume" in config:
+            device_info["volume"] = str(
+                config.get("volume", device_info.get("volume", "50"))
+            )
+        if "time_zone" in config:
+            device_info["time_zone"] = config.get(
+                "time_zone", device_info.get("time_zone", "")
+            )
+        dim_window = config.get("dim_window") or {}
+        if isinstance(dim_window, dict):
+            if "dim_window_enabled" in dim_window:
+                device_info["dim_window_enabled"] = bool(
+                    dim_window.get("dim_window_enabled", False)
+                )
+            if "dim_window_start" in dim_window:
+                device_info["dim_window_start"] = dim_window.get(
+                    "dim_window_start", device_info.get("dim_window_start", "")
+                )
+            if "dim_window_end" in dim_window:
+                device_info["dim_window_end"] = dim_window.get(
+                    "dim_window_end", device_info.get("dim_window_end", "")
+                )
+            if "dim_level" in dim_window:
+                device_info["dim_level"] = dim_window.get(
+                    "dim_level", device_info.get("dim_level", 0)
+                )
+            if "dim_restore_seconds" in dim_window:
+                device_info["dim_restore_seconds"] = dim_window.get(
+                    "dim_restore_seconds", device_info.get("dim_restore_seconds", 0)
+                )
+        device_info_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_info_path, "w") as f:
+            json.dump(device_info, f)
+    except Exception as e:
+        print(f"Error applying Firestore device config: {e}")
+
+
 def locate_device():
     _app_ctx.locate_device_intv = 60 * 3
 
@@ -227,16 +300,22 @@ def get_widgets_framebuffer():
         main_img = img.crop((0, 0, 128, 128))
         main_img_buffer = io.BytesIO()
         main_img.save(main_img_buffer, format="JPEG")
-        main_img_base64_str = "data:image/png;base64," + base64.b64encode(main_img_buffer.getvalue()).decode("utf-8")
+        main_img_base64_str = "data:image/png;base64," + base64.b64encode(
+            main_img_buffer.getvalue()
+        ).decode("utf-8")
         second_img = img.crop((0, 128, 64, 160))
         second_img_buffer = io.BytesIO()
         second_img.save(second_img_buffer, format="JPEG")
-        second_img_base64_str = "data:image/png;base64," + base64.b64encode(second_img_buffer.getvalue()).decode("utf-8")
-        framebuffers.append({
-            "uuid": page["uuid"],
-            "main_screen": main_img_base64_str,
-            "sec_screen": second_img_base64_str,
-        })
+        second_img_base64_str = "data:image/png;base64," + base64.b64encode(
+            second_img_buffer.getvalue()
+        ).decode("utf-8")
+        framebuffers.append(
+            {
+                "uuid": page["uuid"],
+                "main_screen": main_img_base64_str,
+                "sec_screen": second_img_base64_str,
+            }
+        )
     return framebuffers
 
 
@@ -262,7 +341,11 @@ def _ensure_apps_conf_and_load_pages(context: AppContext) -> None:
                     "combination": "0",
                     "enabled": True,
                     "widgets": [
-                        {"id": "factory_tool", "position": [0, 0, 127, 159], "fields": {}}
+                        {
+                            "id": "factory_tool",
+                            "position": [0, 0, 127, 159],
+                            "fields": {},
+                        }
                     ],
                 }
             ],
@@ -452,10 +535,15 @@ dartsnut.update_frame_buffer(assets.create_loading_image())
 device_info = get_device_info()
 set_volume(int(device_info.get("volume", "50")))
 
-ble_thread = threading.Thread(target=start_ble_server, args=(locate_device,), daemon=True)
+ble_thread = threading.Thread(
+    target=start_ble_server, args=(locate_device,), daemon=True
+)
 ble_thread.start()
+
+
 def trigger_dim_check():
     _app_ctx.trigger_dim_check = True
+
 
 websocket_thread = threading.Thread(
     target=start_websocket_server,
@@ -474,6 +562,12 @@ websocket_thread = threading.Thread(
 websocket_thread.start()
 connection_thread = threading.Thread(target=check_connection_loop, daemon=True)
 connection_thread.start()
+
+try:
+    di = get_device_info()
+    start_firestore_sync_if_available(di or {}, reload_config, _apply_firestore_config)
+except Exception as e:
+    print(f"Failed to start Firestore sync: {e}")
 
 ctx.reload_conf = False
 ctx.start_game = False
@@ -506,7 +600,11 @@ while dartsnut.running:
             dim_lvl = int(di.get("dim_level", 10))
             if not enabled or not start_s or not end_s:
                 if _currently_in_dim_window:
-                    restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                    restore = (
+                        _brightness_before_dim
+                        if _brightness_before_dim is not None
+                        else int(di.get("brightness", 50))
+                    )
                     _start_brightness_transition(restore)
                     _currently_in_dim_window = False
                     _dim_force_normal_brightness = False
@@ -516,7 +614,11 @@ while dartsnut.running:
                 end_hm = _parse_hhmm(end_s)
                 if start_hm is None or end_hm is None:
                     if _currently_in_dim_window:
-                        restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                        restore = (
+                            _brightness_before_dim
+                            if _brightness_before_dim is not None
+                            else int(di.get("brightness", 50))
+                        )
                         _start_brightness_transition(restore)
                         _currently_in_dim_window = False
                         _dim_force_normal_brightness = False
@@ -529,17 +631,23 @@ while dartsnut.running:
                         start_t > end_t and (now >= start_t or now < end_t)
                     )
                     if in_window:
-                        if (ctx.current_state.name() != "in_game" 
+                        if (
+                            ctx.current_state.name() != "in_game"
                             and ctx.current_state.name() != "game_select"
                             and not ctx.current_state.is_showing_exit_game_overlay(ctx)
-                            and not _dim_force_normal_brightness):
+                            and not _dim_force_normal_brightness
+                        ):
                             if not _currently_in_dim_window:
                                 _brightness_before_dim = int(di.get("brightness", 50))
                             _start_brightness_transition(dim_lvl)
                             _currently_in_dim_window = True
                     else:
                         if _currently_in_dim_window:
-                            restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                            restore = (
+                                _brightness_before_dim
+                                if _brightness_before_dim is not None
+                                else int(di.get("brightness", 50))
+                            )
                             _start_brightness_transition(restore)
                             _currently_in_dim_window = False
                             _dim_force_normal_brightness = False
@@ -570,14 +678,19 @@ while dartsnut.running:
         ctx.current_button_state = dict(get_buttons_pressed.old_buttons)
 
         # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
-        if (ctx.current_state.name() != "in_game" 
+        if (
+            ctx.current_state.name() != "in_game"
             and ctx.current_state.name() != "game_select"
             and not ctx.current_state.is_showing_exit_game_overlay(ctx)
-            and _currently_in_dim_window):
+            and _currently_in_dim_window
+        ):
             di = get_device_info()
             dim_lvl = int(di.get("dim_level", 10))
             # Remove force after dim_restore_seconds
-            if _dim_force_normal_brightness and _dim_force_normal_start_time is not None:
+            if (
+                _dim_force_normal_brightness
+                and _dim_force_normal_start_time is not None
+            ):
                 secs = max(5, min(300, int(di.get("dim_restore_seconds", 30))))
                 if time.time() - _dim_force_normal_start_time >= secs:
                     _dim_force_normal_brightness = False
@@ -598,7 +711,11 @@ while dartsnut.running:
             elif not _dim_force_normal_brightness and buttons.get("btn_a"):
                 _dim_force_normal_brightness = True
                 _dim_force_normal_start_time = time.time()
-                restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
+                restore = (
+                    _brightness_before_dim
+                    if _brightness_before_dim is not None
+                    else int(di.get("brightness", 50))
+                )
                 _start_brightness_transition(restore)
                 buttons["btn_a"] = False
 
@@ -607,7 +724,9 @@ while dartsnut.running:
         # Render widgets: update all page framebuffers from shared memory
         if ctx.pages is not None and len(ctx.pages) > 0:
             for page in ctx.pages:
-                page_img = Image.frombytes("RGB", (128, 160), bytes(page["framebuffer"]))
+                page_img = Image.frombytes(
+                    "RGB", (128, 160), bytes(page["framebuffer"])
+                )
                 current_loading_frame_big = assets.get_current_loading_frame_big()
                 current_loading_frame = assets.get_current_loading_frame()
                 if current_loading_frame_big.mode != "RGB":
@@ -645,9 +764,13 @@ while dartsnut.running:
                         if widget_ready:
                             widget["launched"] = True
                             if widget_height == 160 and was_not_launched:
-                                small_widget_area = widget_frame.crop((0, 128, widget_width, 160))
+                                small_widget_area = widget_frame.crop(
+                                    (0, 128, widget_width, 160)
+                                )
                                 area_bytes = small_widget_area.tobytes()
-                                widget["has_small_widget"] = any(byte != 0 for byte in area_bytes)
+                                widget["has_small_widget"] = any(
+                                    byte != 0 for byte in area_bytes
+                                )
                     if not widget_ready:
                         if widget_height == 160:
                             page_img.paste(current_loading_frame_big, (x0, y0 + 32))

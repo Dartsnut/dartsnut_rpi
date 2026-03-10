@@ -45,6 +45,9 @@ sudo apt-get install git -y
 sudo apt-get install xvfb -y
 sudo apt-get install libsdl2-dev -y
 sudo apt-get install libgpiod-dev gpiod -y
+sudo apt-get install -y cmake ninja-build libssl-dev libcurl4-openssl-dev zlib1g-dev
+sudo apt-get install -y libprotobuf-dev protobuf-compiler
+sudo apt-get install -y libgoogle-cloud-firestore-dev libgoogle-cloud-cpp-dev || true
 
 # 7. Install the python modules
 sudo venv0/bin/pip install --upgrade pip
