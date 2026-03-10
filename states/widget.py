@@ -185,5 +185,10 @@ class WidgetState(BaseState):
                     ctx.page_index = len(pages) - 1
                 ctx.page_tick = time.time()
         elif buttons.get("btn_home"):
-            from states.menu import MenuState
-            ctx.transition_to(MenuState())
+            device_info = ctx.get_device_info()
+            if device_info.get("model") == "PixelBoard":
+                ctx.page_freeze = not ctx.page_freeze
+                ctx.page_tick = time.time()
+            else:
+                from states.menu import MenuState
+                ctx.transition_to(MenuState())
