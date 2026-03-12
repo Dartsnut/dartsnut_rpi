@@ -35,10 +35,18 @@ from game_lifecycle import (
     start_game_process,
     term_game_process,
 )
-from firestore_sync_bridge import (
-    start_firestore_sync_if_available,
-    notify_device_state_update,
-)
+
+try:
+    from firestore_sync_bridge import (
+        start_firestore_sync_if_available,
+        notify_device_state_update,
+    )
+except ImportError:
+    def start_firestore_sync_if_available(*args, **kwargs):
+        return None
+
+    def notify_device_state_update(*args, **kwargs):
+        return None
 
 # -----------------------------------------------------------------------------
 # Display and device (used by context and dim logic)
