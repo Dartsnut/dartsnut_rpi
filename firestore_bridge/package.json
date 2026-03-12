@@ -1,0 +1,16 @@
+{
+  "name": "dartsnut-firestore-bridge",
+  "version": "1.0.0",
+  "description": "Bun bridge for Firestore sync; Python talks to this executable via Unix socket.",
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/index.ts --compile --outfile ./dist/dartsnut_firestore_bridge",
+    "start": "bun run ./src/index.ts"
+  },
+  "dependencies": {
+    "firebase": "^12.10.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
