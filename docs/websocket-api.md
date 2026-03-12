@@ -1,3 +1,8 @@
+---
+title: WebSocket API
+nav_order: 3
+---
+
 ## WebSocket API
 
 This document describes the JSON‑based WebSocket API exposed by the Dartsnut firmware. It is intended for mobile and web apps that manage a device already connected to the local network.
