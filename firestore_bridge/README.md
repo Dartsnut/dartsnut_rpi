@@ -35,6 +35,8 @@ The executable is written to `dist/dartsnut_firestore_bridge` (Linux arm64, via 
 - Bridge checks Firestore `devices/{deviceId}`: if the doc does not exist, it creates it with the payload; if it exists, it sends the current doc as `{"kind":"config","payload":<data>}`. It then subscribes with `onSnapshot` and sends `config` on every change.
 - Python sends `{"kind":"device_state","payload":<partial state>}` when brightness/volume/etc. change; the bridge merges into the Firestore document.
 
+In current versions, Python derives `deviceId` from the full BLE adapter MAC address (e.g. `aa:bb:cc:dd:ee:ff`) and passes that as `--device-id`, so Firestore documents are keyed by the BLE MAC.
+
 ## Development
 
 Run without compiling (requires Node.js and `ts-node` on the host):

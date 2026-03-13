@@ -3,7 +3,7 @@
  * for Firestore (getDoc, setDoc, onSnapshot). Python listens; we connect and
  * speak newline-delimited JSON. Config is in source so it is bundled into the compiled executable.
  *
- * CLI: --device-id=<ble_suffix> --socket-path=<path>
+ * CLI: --device-id=<device_identifier> --socket-path=<path>
  */
 
 import { createConnection } from "node:net";

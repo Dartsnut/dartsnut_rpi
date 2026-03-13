@@ -30,22 +30,26 @@ _DEFAULT_BRIDGE_BIN = os.path.join(
 _client: Optional["_SyncClient"] = None
 
 
-def _ble_mac_last_two_octets(adapter_address: str) -> str:
-    """Return the last two octets of a BLE MAC address as 4 hex chars (e.g. eeff)."""
+def _normalize_mac(adapter_address: str) -> str:
+    """
+    Normalize a MAC address to lowercase colon-separated form
+    (e.g. 'AA:BB:CC:DD:EE:FF' -> 'aa:bb:cc:dd:ee:ff').
+    """
     try:
-        s = adapter_address.strip().lower().replace(":", "")
-        if len(s) >= 4:
-            return s[-4:]
-        parts = adapter_address.strip().lower().split(":")
-        if len(parts) >= 2:
-            return (parts[-2] + parts[-1]).replace(":", "")
+        s = adapter_address.strip().lower()
+        # If already colon-separated, just normalize case/whitespace
+        if ":" in s:
+            return s
+        # Fallback: insert colons every two hex chars
+        if len(s) == 12:
+            return ":".join(s[i : i + 2] for i in range(0, 12, 2))
     except Exception:
         pass
-    return "0000"
+    return ""
 
 
 def _derive_device_id_from_ble() -> Optional[str]:
-    """Derive device ID from BLE MAC so it matches BLE local name suffix."""
+    """Derive device ID from full BLE MAC for Firestore device document id."""
     if _ble_adapter is None:
         return None
     try:
@@ -53,7 +57,8 @@ def _derive_device_id_from_ble() -> Optional[str]:
         if not adapters:
             return None
         adapter_address = adapters[0].address
-        return _ble_mac_last_two_octets(adapter_address)
+        normalized = _normalize_mac(adapter_address)
+        return normalized or adapter_address
     except Exception:
         return None
 
