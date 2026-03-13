@@ -65,7 +65,7 @@ function parseIncoming(buffer: string): { kind: string; payload: unknown } | nul
 }
 
 const INITIAL_RETRY_DELAY_MS = 2000;
-const MAX_INITIAL_RETRIES = 5;
+const MAX_INITIAL_RETRY_DELAY_MS = 60_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -74,21 +74,56 @@ function delay(ms: number): Promise<void> {
 async function getDocWithRetry(
   docRef: ReturnType<typeof doc>
 ): Promise<Awaited<ReturnType<typeof getDoc>>> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < MAX_INITIAL_RETRIES; attempt++) {
+  let attempt = 0;
+  // Retry indefinitely with exponential backoff so offline boot does not
+  // permanently wedge the bridge. This relies on the Firestore client to
+  // eventually succeed once network connectivity is available.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     try {
       const snapshot = await getDoc(docRef);
       return snapshot;
     } catch (e) {
-      lastErr = e;
-      if (attempt < MAX_INITIAL_RETRIES - 1) {
-        await delay(INITIAL_RETRY_DELAY_MS);
-        continue;
-      }
-      throw e;
+      attempt += 1;
+      const delayMs = Math.min(
+        INITIAL_RETRY_DELAY_MS * 2 ** Math.min(attempt, 5),
+        MAX_INITIAL_RETRY_DELAY_MS
+      );
+      console.error("Firestore getDoc error, will retry:", e);
+      await delay(delayMs);
     }
   }
-  throw lastErr;
+}
+
+async function setDocWithRetry(
+  docRef: ReturnType<typeof doc>,
+  data: Record<string, unknown>,
+  options?: Parameters<typeof setDoc>[2]
+): Promise<void> {
+  let attempt = 0;
+  const maxAttempts = 5;
+  // Keep this bounded; Firestore SDK also has its own retry behavior. We just
+  // want to avoid dropping transient updates.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (setDoc as any)(docRef, data, options);
+      return;
+    } catch (e) {
+      attempt += 1;
+      console.error("Firestore setDoc error, will retry if attempts remain:", e);
+      if (attempt >= maxAttempts) {
+        console.error("Firestore setDoc giving up after maxAttempts");
+        return;
+      }
+      const delayMs = Math.min(
+        INITIAL_RETRY_DELAY_MS * 2 ** Math.min(attempt, 5),
+        MAX_INITIAL_RETRY_DELAY_MS
+      );
+      await delay(delayMs);
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -117,7 +152,7 @@ async function main(): Promise<void> {
         try {
           const snapshot = await getDocWithRetry(docRef);
           if (!snapshot.exists()) {
-            await setDoc(docRef, payload);
+            await setDocWithRetry(docRef, payload);
           } else {
             const data = snapshot.data() ?? {};
             send(socket, "config", data);
@@ -140,7 +175,7 @@ async function main(): Promise<void> {
         const payload = msg.payload as Record<string, unknown> | undefined;
         if (!payload || typeof payload !== "object") continue;
         try {
-          await setDoc(docRef, payload, { merge: true });
+          await setDocWithRetry(docRef, payload, { merge: true });
         } catch (e) {
           console.error("Firestore device_state error:", e);
         }

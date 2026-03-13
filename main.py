@@ -40,12 +40,16 @@ try:
     from firestore_sync_bridge import (
         start_firestore_sync_if_available,
         notify_device_state_update,
+        restart_firestore_sync,
     )
 except ImportError:
     def start_firestore_sync_if_available(*args, **kwargs):
         return None
 
     def notify_device_state_update(*args, **kwargs):
+        return None
+
+    def restart_firestore_sync(*args, **kwargs):
         return None
 
 # -----------------------------------------------------------------------------
@@ -516,6 +520,9 @@ def check_connection_loop():
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
+            previous_wifi = getattr(_app_ctx, "wifi_connected", False)
+            previous_internet = getattr(_app_ctx, "internet_connected", False)
+
             _app_ctx.wifi_connected = wifi_check.returncode == 0
             if _app_ctx.wifi_connected:
                 # Prefer HTTP over ping: many networks block or rate-limit ICMP
@@ -529,6 +536,17 @@ def check_connection_loop():
                     _app_ctx.internet_connected = False
             else:
                 _app_ctx.internet_connected = False
+
+            if (
+                not previous_internet
+                and _app_ctx.wifi_connected
+                and _app_ctx.internet_connected
+            ):
+                try:
+                    di = get_device_info()
+                    restart_firestore_sync(di or {}, reload_config, _apply_firestore_config)
+                except Exception as e:
+                    print(f"Error restarting Firestore sync after connectivity established: {e}")
         except Exception as e:
             print(f"Error checking connection: {e}")
             _app_ctx.wifi_connected = False

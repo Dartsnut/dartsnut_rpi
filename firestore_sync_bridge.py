@@ -11,6 +11,7 @@ import os
 import socket
 import subprocess
 import threading
+import time
 from typing import Any, Callable, Dict, Optional
 
 try:
@@ -28,6 +29,8 @@ _DEFAULT_BRIDGE_BIN = os.path.join(
 )
 
 _client: Optional["_SyncClient"] = None
+_bridge_proc: Optional[subprocess.Popen] = None
+_bridge_lock = threading.Lock()
 
 
 def _normalize_mac(adapter_address: str) -> str:
@@ -215,45 +218,7 @@ def start_firestore_sync_if_available(
     - Sends initial_state (full device + pages config); receives config pushes and applies via
       on_config_updated + reload_config. Partial local updates go out via notify_device_state_update.
     """
-    global _client
-
-    device_id = _derive_device_id_from_ble()
-    if not device_id:
-        print("Firestore sync skipped: could not derive device ID from BLE (bluezero or no adapter)")
-        return
-
-    executable_path = os.environ.get("DARTSNUT_FIRESTORE_BRIDGE", _DEFAULT_BRIDGE_BIN)
-    if not os.path.isfile(executable_path):
-        print(f"Firestore sync skipped: bridge binary not found at {executable_path}")
-        return
-    if not os.access(executable_path, os.X_OK):
-        print(f"Firestore sync skipped: bridge binary not executable: {executable_path}")
-        return
-
-    socket_path = os.environ.get("DARTSNUT_FIRESTORE_SOCKET", SOCKET_PATH)
-    print(f"Firestore sync starting for device id {device_id} (bridge: {executable_path})")
-    initial_state = _build_initial_state(device_info)
-    _client = _SyncClient(socket_path, reload_config, on_config_updated, initial_state)
-    _client.start_server()
-
-    def _launch() -> None:
-        args = [
-            executable_path,
-            f"--device-id={device_id}",
-            f"--socket-path={socket_path}",
-        ]
-        try:
-            # Leave stderr attached so bridge errors (Firebase, socket) are visible
-            subprocess.Popen(
-                args,
-                stdout=subprocess.DEVNULL,
-                stderr=None,
-                env=os.environ.copy(),
-            )
-        except Exception as e:
-            print(f"Firestore sync: failed to launch bridge: {e}")
-
-    threading.Thread(target=_launch, daemon=True).start()
+    ensure_firestore_sync_running(device_info, reload_config, on_config_updated)
 
 
 def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
@@ -264,3 +229,127 @@ def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
     if _client is None:
         return
     _client.send_state(partial_state, full=False)
+
+
+def ensure_firestore_sync_running(
+    device_info: Dict[str, Any],
+    reload_config: Callable[[], None],
+    on_config_updated: Callable[[Dict[str, Any]], None],
+) -> None:
+    """
+    Idempotently start Firestore sync if prerequisites are met and the bridge
+    is not already believed to be running.
+
+    This is safe to call multiple times (e.g. from startup and from a WiFi
+    connectivity monitor) and will be a no-op if a bridge process is already
+    tracked as running.
+    """
+    global _client, _bridge_proc
+
+    with _bridge_lock:
+        if _bridge_proc is not None and _bridge_proc.poll() is None:
+            return
+
+        device_id = _derive_device_id_from_ble()
+        if not device_id:
+            print("Firestore sync skipped: could not derive device ID from BLE (bluezero or no adapter)")
+            return
+
+        executable_path = os.environ.get("DARTSNUT_FIRESTORE_BRIDGE", _DEFAULT_BRIDGE_BIN)
+        if not os.path.isfile(executable_path):
+            print(f"Firestore sync skipped: bridge binary not found at {executable_path}")
+            return
+        if not os.access(executable_path, os.X_OK):
+            print(f"Firestore sync skipped: bridge binary not executable: {executable_path}")
+            return
+
+        socket_path = os.environ.get("DARTSNUT_FIRESTORE_SOCKET", SOCKET_PATH)
+        print(f"Firestore sync starting for device id {device_id} (bridge: {executable_path})")
+        initial_state = _build_initial_state(device_info)
+        _client = _SyncClient(socket_path, reload_config, on_config_updated, initial_state)
+        _client.start_server()
+
+        def _launch() -> None:
+            global _bridge_proc
+            args = [
+                executable_path,
+                f"--device-id={device_id}",
+                f"--socket-path={socket_path}",
+            ]
+            try:
+                proc = subprocess.Popen(
+                    args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=None,
+                    env=os.environ.copy(),
+                )
+                with _bridge_lock:
+                    _bridge_proc = proc
+            except Exception as e:
+                print(f"Firestore sync: failed to launch bridge: {e}")
+
+        threading.Thread(target=_launch, daemon=True).start()
+
+
+def restart_firestore_sync(
+    device_info: Dict[str, Any],
+    reload_config: Callable[[], None],
+    on_config_updated: Callable[[Dict[str, Any]], None],
+) -> None:
+    """
+    Restart Firestore sync bridge:
+    - Terminates any existing bridge process.
+    - Clears the current client.
+    - Starts a fresh bridge and socket server.
+
+    Intended to be called from a long-running WiFi monitor when connectivity
+    transitions from offline to online.
+    """
+    global _client, _bridge_proc
+
+    with _bridge_lock:
+        proc = _bridge_proc
+        _bridge_proc = None
+
+    if proc is not None:
+        try:
+            proc.terminate()
+            # Give the process a brief window to exit cleanly before forcing.
+            for _ in range(10):
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            if proc.poll() is None:
+                proc.kill()
+        except Exception as e:
+            print(f"Firestore sync: error while stopping existing bridge: {e}")
+
+    _client = None
+    ensure_firestore_sync_running(device_info, reload_config, on_config_updated)
+
+
+def stop_firestore_sync() -> None:
+    """
+    Stop Firestore sync bridge if it is running. This does not prevent future
+    calls to ensure_firestore_sync_running/restart_firestore_sync from starting
+    it again.
+    """
+    global _client, _bridge_proc
+
+    with _bridge_lock:
+        proc = _bridge_proc
+        _bridge_proc = None
+
+    if proc is not None:
+        try:
+            proc.terminate()
+            for _ in range(10):
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            if proc.poll() is None:
+                proc.kill()
+        except Exception as e:
+            print(f"Firestore sync: error while stopping bridge: {e}")
+
+    _client = None
