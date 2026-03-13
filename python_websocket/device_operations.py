@@ -8,6 +8,7 @@ from python_websocket.error_handler import (
     handle_command_error,
     create_error_response
 )
+from machine_state_service import get_machine_state_service
 
 def get_wifi_rssi():
     try:
@@ -152,29 +153,30 @@ def get_dim_window():
 
 
 def set_dim_window(dim_window_start, dim_window_end, dim_level=None, dim_restore_seconds=None, dim_window_enabled=None):
-    device_info_path = os.path.join(os.getcwd(), "device.json")
     start_s = (dim_window_start or "").strip() if dim_window_start is not None else ""
     end_s = (dim_window_end or "").strip() if dim_window_end is not None else ""
 
     # Both start and end empty
     if not start_s and not end_s:
+        # Only toggle enable flag or clear config when both times are empty.
         try:
-            with open(device_info_path, 'r') as file:
-                device_info = json.load(file)
+            svc = get_machine_state_service()
+            if svc is None:
+                raise RuntimeError("MachineStateService not initialized")
+            cfg = {}
             if dim_window_enabled is not None:
-                # Only update the enable flag; keep existing window config
-                device_info["dim_window_enabled"] = _dim_enabled_to_bool(dim_window_enabled)
+                cfg["dim_window_enabled"] = _dim_enabled_to_bool(dim_window_enabled)
             else:
-                # Clear all dim-window keys
-                for key in ("dim_window_start", "dim_window_end", "dim_level", "dim_restore_seconds", "dim_window_enabled"):
-                    device_info.pop(key, None)
-            with open(device_info_path, 'w') as file:
-                json.dump(device_info, file)
+                # Clearing all keys: set to defaults/empty.
+                cfg = {
+                    "dim_window_enabled": False,
+                    "dim_window_start": "",
+                    "dim_window_end": "",
+                    "dim_level": 10,
+                    "dim_restore_seconds": 30,
+                }
+            svc.set_dim_window(cfg)
             return {"action": "set_dim_window", "message": "Success"}
-        except FileNotFoundError as e:
-            return handle_exception("set_dim_window", e, "Device info file not found")
-        except (json.JSONDecodeError, ValueError) as e:
-            return handle_exception("set_dim_window", e, "Failed to decode device info")
         except Exception as e:
             return handle_exception("set_dim_window", e, "Failed to set dim window")
 
@@ -229,19 +231,17 @@ def set_dim_window(dim_window_start, dim_window_end, dim_level=None, dim_restore
     enabled = _dim_enabled_to_bool(dim_window_enabled) if dim_window_enabled is not None else True
 
     try:
-        with open(device_info_path, 'r') as file:
-            device_info = json.load(file)
-        device_info["dim_window_start"] = start_s
-        device_info["dim_window_end"] = end_s
-        device_info["dim_level"] = level
-        device_info["dim_restore_seconds"] = secs
-        device_info["dim_window_enabled"] = enabled
-        with open(device_info_path, 'w') as file:
-            json.dump(device_info, file)
+        svc = get_machine_state_service()
+        if svc is None:
+            raise RuntimeError("MachineStateService not initialized")
+        cfg = {
+            "dim_window_start": start_s,
+            "dim_window_end": end_s,
+            "dim_level": level,
+            "dim_restore_seconds": secs,
+            "dim_window_enabled": enabled,
+        }
+        svc.set_dim_window(cfg)
         return {"action": "set_dim_window", "message": "Success"}
-    except FileNotFoundError as e:
-        return handle_exception("set_dim_window", e, "Device info file not found")
-    except (json.JSONDecodeError, ValueError) as e:
-        return handle_exception("set_dim_window", e, "Failed to decode device info")
     except Exception as e:
         return handle_exception("set_dim_window", e, "Failed to set dim window")

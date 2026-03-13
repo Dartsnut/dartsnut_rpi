@@ -35,6 +35,10 @@ from game_lifecycle import (
     start_game_process,
     term_game_process,
 )
+from machine_state_service import (
+    init_machine_state_service,
+    get_machine_state_service,
+)
 
 try:
     from firestore_sync_bridge import (
@@ -154,58 +158,67 @@ def _set_brightness_hardware(brightness):
 
 
 def set_brightness(brightness):
+    """
+    Public brightness setter used by the rest of the app and websocket layer.
+    Delegates persistence to MachineStateService while preserving dim-window
+    behavior and smooth transitions.
+    """
     global _brightness_before_dim
+    service = get_machine_state_service()
+
     if _currently_in_dim_window:
+        # When in dim window, only update stored brightness and Firestore; keep hardware dimmed.
         try:
-            device_info = get_device_info()
-            device_info["brightness"] = str(brightness)
-            with open("./device.json", "w") as file:
-                json.dump(device_info, file)
+            if service is not None:
+                service.set_brightness(brightness)
             _brightness_before_dim = brightness
             notify_device_state_update({"brightness": int(brightness)})
         except Exception as e:
-            print(f"Error updating device info: {e}")
+            print(f"Error updating device brightness while dimmed: {e}")
         return
-    _set_brightness_hardware(brightness)
+
+    # Outside dim window: update hardware smoothly and persist via service.
+    _start_brightness_transition(brightness)
     try:
-        device_info = get_device_info()
-        device_info["brightness"] = str(brightness)
-        with open("./device.json", "w") as file:
-            json.dump(device_info, file)
+        if service is not None:
+            service.set_brightness(brightness)
         notify_device_state_update({"brightness": int(brightness)})
     except Exception as e:
-        print(f"Error updating device info: {e}")
+        print(f"Error updating brightness: {e}")
 
 
 def set_volume(volume):
+    """
+    Public volume setter used by the rest of the app and websocket layer.
+    Delegates to MachineStateService for hardware + JSON, then notifies Firestore.
+    """
+    service = get_machine_state_service()
     try:
-        if volume == 0:
-            subprocess.run(
-                ["amixer", "-c", "0", "sset", "PCM", "mute"],
-                check=True,
-                capture_output=True,
-            )
+        if service is not None:
+            service.set_volume(volume)
         else:
-            mapped_volume = int(50 + (volume / 100) * 50)
-            subprocess.run(
-                ["amixer", "-c", "0", "sset", "PCM", "unmute"],
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                ["amixer", "-c", "0", "sset", "PCM", f"{mapped_volume}%"],
-                check=True,
-                capture_output=True,
-            )
-        device_info = get_device_info()
-        device_info["volume"] = str(volume)
-        with open("./device.json", "w") as file:
-            json.dump(device_info, file)
+            # Fallback to previous behavior if service is not initialized.
+            if volume == 0:
+                subprocess.run(
+                    ["amixer", "-c", "0", "sset", "PCM", "mute"],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                mapped_volume = int(50 + (volume / 100) * 50)
+                subprocess.run(
+                    ["amixer", "-c", "0", "sset", "PCM", "unmute"],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["amixer", "-c", "0", "sset", "PCM", f"{mapped_volume}%"],
+                    check=True,
+                    capture_output=True,
+                )
         notify_device_state_update({"volume": int(volume)})
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to set volume: {e.stderr.decode().strip()}")
     except Exception as e:
-        print(f"Error updating device info: {e}")
+        print(f"Error updating volume: {e}")
 
 
 def set_time_zone(time_zone):
@@ -237,57 +250,64 @@ _app_ctx = ctx
 
 
 def _apply_firestore_config(config: dict) -> None:
+    """
+    Apply configuration received from Firestore to the local machine state.
+
+    This now delegates to MachineStateService so that all core state changes go
+    through a single abstraction.
+    """
     if not isinstance(config, dict):
         return
+
+    service = get_machine_state_service()
+    if service is None:
+        # Fallback: do nothing if the service is not yet initialized.
+        return
+
+    # Pages
     try:
         pages = config.get("pages")
         if isinstance(pages, list):
-            apps_dir = os.path.join(os.getcwd(), "apps")
-            os.makedirs(apps_dir, exist_ok=True)
-            conf_path = os.path.join(apps_dir, "conf.json")
-            with open(conf_path, "w") as f:
-                json.dump({"pages": pages}, f)
+            service.set_pages(pages)
     except Exception as e:
         print(f"Error applying Firestore pages config: {e}")
+
+    # Brightness / volume / time zone / dim window / device name
     try:
-        device_info = get_device_info() or {}
         if "brightness" in config:
-            device_info["brightness"] = str(
-                config.get("brightness", device_info.get("brightness", "50"))
-            )
+            try:
+                brightness_val = int(config.get("brightness"))
+                service.set_brightness(brightness_val)
+            except Exception:
+                pass
+
         if "volume" in config:
-            device_info["volume"] = str(
-                config.get("volume", device_info.get("volume", "50"))
-            )
+            try:
+                volume_val = int(config.get("volume"))
+                service.set_volume(volume_val)
+            except Exception:
+                pass
+
         if "time_zone" in config:
-            device_info["time_zone"] = config.get(
-                "time_zone", device_info.get("time_zone", "")
-            )
+            # time_zone is still applied via the existing helper
+            tz = config.get("time_zone")
+            if tz:
+                set_time_zone(tz)
+
         dim_window = config.get("dim_window") or {}
         if isinstance(dim_window, dict):
-            if "dim_window_enabled" in dim_window:
-                device_info["dim_window_enabled"] = bool(
-                    dim_window.get("dim_window_enabled", False)
-                )
-            if "dim_window_start" in dim_window:
-                device_info["dim_window_start"] = dim_window.get(
-                    "dim_window_start", device_info.get("dim_window_start", "")
-                )
-            if "dim_window_end" in dim_window:
-                device_info["dim_window_end"] = dim_window.get(
-                    "dim_window_end", device_info.get("dim_window_end", "")
-                )
-            if "dim_level" in dim_window:
-                device_info["dim_level"] = dim_window.get(
-                    "dim_level", device_info.get("dim_level", 0)
-                )
-            if "dim_restore_seconds" in dim_window:
-                device_info["dim_restore_seconds"] = dim_window.get(
-                    "dim_restore_seconds", device_info.get("dim_restore_seconds", 0)
-                )
-        device_info_path = os.path.join(os.getcwd(), "device.json")
-        with open(device_info_path, "w") as f:
-            json.dump(device_info, f)
+            dim_cfg = {
+                "dim_window_enabled": dim_window.get("dim_window_enabled"),
+                "dim_window_start": dim_window.get("dim_window_start"),
+                "dim_window_end": dim_window.get("dim_window_end"),
+                "dim_level": dim_window.get("dim_level"),
+                "dim_restore_seconds": dim_window.get("dim_restore_seconds"),
+            }
+            service.set_dim_window(dim_cfg)
+
+        device_info = config.get("device_info") or {}
+        if isinstance(device_info, dict) and "name" in device_info:
+            service.set_device_name(device_info.get("name", ""))
     except Exception as e:
         print(f"Error applying Firestore device config: {e}")
 
@@ -599,6 +619,14 @@ ctx.reload_conf = False
 ctx.start_game = False
 ctx.menu_select_index = 0
 ctx.setting_select_index = 3
+
+# Initialize machine state service and widgets after context is ready.
+init_machine_state_service(
+    ctx,
+    set_brightness_hardware=_set_brightness_hardware,
+    get_device_info=get_device_info,
+    reload_pages_from_conf=reload_pages_from_conf,
+)
 init_widgets(ctx)
 
 

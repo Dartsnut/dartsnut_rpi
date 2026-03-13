@@ -231,6 +231,58 @@ def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
     _client.send_state(partial_state, full=False)
 
 
+def is_firestore_bridge_active() -> bool:
+    """Return True if the Firestore bridge client appears to be connected."""
+    return _client is not None
+
+
+def request_set_brightness(value: int) -> None:
+    """Proxy a brightness change request to Firestore when the bridge is active."""
+    try:
+        notify_device_state_update({"brightness": int(value)})
+    except Exception as e:
+        print(f"Firestore bridge: failed to request brightness update: {e}")
+
+
+def request_set_volume(value: int) -> None:
+    """Proxy a volume change request to Firestore when the bridge is active."""
+    try:
+        notify_device_state_update({"volume": int(value)})
+    except Exception as e:
+        print(f"Firestore bridge: failed to request volume update: {e}")
+
+
+def request_set_dim_window(config: Dict[str, Any]) -> None:
+    """
+    Proxy a dim-window config change to Firestore when the bridge is active.
+    Config keys should mirror _build_initial_state()['dim_window'].
+    """
+    if not isinstance(config, dict):
+        return
+    try:
+        notify_device_state_update({"dim_window": dict(config)})
+    except Exception as e:
+        print(f"Firestore bridge: failed to request dim_window update: {e}")
+
+
+def request_set_pages(pages: Any) -> None:
+    """Proxy a pages config change to Firestore when the bridge is active."""
+    if not isinstance(pages, list):
+        return
+    try:
+        notify_device_state_update({"pages": pages})
+    except Exception as e:
+        print(f"Firestore bridge: failed to request pages update: {e}")
+
+
+def request_set_device_name(name: str) -> None:
+    """Proxy a device name change to Firestore when the bridge is active."""
+    try:
+        notify_device_state_update({"device_info": {"name": name}})
+    except Exception as e:
+        print(f"Firestore bridge: failed to request device name update: {e}")
+
+
 def ensure_firestore_sync_running(
     device_info: Dict[str, Any],
     reload_config: Callable[[], None],

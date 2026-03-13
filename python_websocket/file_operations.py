@@ -13,6 +13,7 @@ from python_websocket.error_handler import (
     handle_directory_not_found,
     create_error_response,
 )
+from machine_state_service import get_machine_state_service
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 DOWNLOAD_DIR = "downloads"
@@ -150,6 +151,22 @@ def receive_file(websocket, data):
         # Save the file locally
         with open(full_save_path, "wb") as file:
             file.write(file_data)
+
+        # If we just wrote the root apps/conf.json, let MachineStateService own pages.
+        try:
+            svc = get_machine_state_service()
+            if (
+                svc is not None
+                and os.path.normpath(full_save_path)
+                == os.path.normpath(os.path.join(os.getcwd(), APPS_DIR, "conf.json"))
+            ):
+                with open(full_save_path, "r") as f:
+                    conf = json.load(f)
+                pages = conf.get("pages", [])
+                if isinstance(pages, list):
+                    svc.set_pages(pages)
+        except Exception as e:
+            print(f"Error syncing pages after conf.json upload: {e}")
 
         return {"action": "send_file", "file_name": file_name, "message": "Success"}
     except PermissionError:

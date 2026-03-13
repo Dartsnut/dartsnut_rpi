@@ -8,6 +8,7 @@ from python_websocket.error_handler import (
     handle_exception,
     handle_file_not_found,
 )
+from machine_state_service import get_machine_state_service
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 HOME_DIR = ""
@@ -67,6 +68,20 @@ def write_json_file(file_path, data):
         with open(full_save_path, "w") as file:
             json.dump(data, file)
 
+        # If this targets root apps/conf.json, let MachineStateService own pages.
+        try:
+            svc = get_machine_state_service()
+            if (
+                svc is not None
+                and os.path.normpath(full_save_path)
+                == os.path.normpath(os.path.join(os.getcwd(), APPS_DIR, "conf.json"))
+            ):
+                pages = data.get("pages", [])
+                if isinstance(pages, list):
+                    svc.set_pages(pages)
+        except Exception as e:
+            print(f"Error syncing pages after write_json conf.json: {e}")
+
         return {"action": "write_json", "file_path": file_path, "message": "Success"}
     except PermissionError:
         return handle_exception(
@@ -125,32 +140,13 @@ def get_device_info():
 
 
 def set_device_name(name):
-    device_info_path = os.path.join(os.getcwd(), HOME_DIR, "device.json")
     try:
-        # Read the existing device info
-        with open(device_info_path, "r") as file:
-            device_info = json.load(file)
-
-        # Update the device name
-        device_info["name"] = name
-
-        # Write the updated info back to the file
-        with open(device_info_path, "w") as file:
-            json.dump(device_info, file)
-
+        svc = get_machine_state_service()
+        if svc is None:
+            raise RuntimeError("MachineStateService not initialized")
+        svc.set_device_name(name)
         return {"action": "set_device_name", "device_name": name, "message": "Success"}
 
-    except FileNotFoundError as e:
-        return handle_exception(
-            "set_device_name", e, "Device info file not found", device_name=name
-        )
-    except json.JSONDecodeError as e:
-        return handle_exception(
-            "set_device_name",
-            e,
-            "Failed to decode JSON from device info file",
-            device_name=name,
-        )
     except Exception as e:
         return handle_exception(
             "set_device_name",

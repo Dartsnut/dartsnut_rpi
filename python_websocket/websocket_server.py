@@ -26,6 +26,13 @@ from python_websocket.error_handler import (
     handle_exception,
     create_error_response
 )
+from firestore_sync_bridge import (
+    is_firestore_bridge_active,
+    request_set_brightness,
+    request_set_volume,
+    request_set_dim_window,
+    request_set_device_name,
+)
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
@@ -123,7 +130,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     try:
                         brightness = int(message.get("brightness", "0"))
                         if 10 <= brightness <= 100:
-                            if websocket_endpoint.set_brightness:
+                            if is_firestore_bridge_active():
+                                await asyncio.to_thread(request_set_brightness, brightness)
+                            elif websocket_endpoint.set_brightness:
                                 await asyncio.to_thread(websocket_endpoint.set_brightness, brightness)
                             await send_response(req_id, {"action": "set_brightness", "message": "Success"})
                         else:
@@ -140,7 +149,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     try:
                         volume = int(message.get("volume", "0"))
                         if 0 <= volume <= 100:
-                            if websocket_endpoint.set_volume:
+                            if is_firestore_bridge_active():
+                                await asyncio.to_thread(request_set_volume, volume)
+                            elif websocket_endpoint.set_volume:
                                 await asyncio.to_thread(websocket_endpoint.set_volume, volume)
                             await send_response(req_id, {"action": "set_volume", "message": "Success"})
                         else:
@@ -162,8 +173,20 @@ async def websocket_endpoint(websocket: WebSocket):
                     result = await asyncio.to_thread(get_device_info)
                     await send_response(req_id, result)
                 elif action == "set_device_name":
-                    result = await asyncio.to_thread(set_device_name, message.get("device_name"))
-                    await send_response(req_id, result)
+                    device_name = message.get("device_name")
+                    if is_firestore_bridge_active():
+                        await asyncio.to_thread(request_set_device_name, device_name)
+                        await send_response(
+                            req_id,
+                            {
+                                "action": "set_device_name",
+                                "device_name": device_name,
+                                "message": "Success",
+                            },
+                        )
+                    else:
+                        result = await asyncio.to_thread(set_device_name, device_name)
+                        await send_response(req_id, result)
                 elif action == "locate_device":
                     if websocket_endpoint.locate_device:
                         await asyncio.to_thread(websocket_endpoint.locate_device)
@@ -261,17 +284,33 @@ async def websocket_endpoint(websocket: WebSocket):
                     result = await asyncio.to_thread(get_dim_window)
                     await send_response(req_id, result)
                 elif action == "set_dim_window":
-                    result = await asyncio.to_thread(
-                        set_dim_window,
-                        message.get("dim_window_start"),
-                        message.get("dim_window_end"),
-                        message.get("dim_level"),
-                        message.get("dim_restore_seconds"),
-                        message.get("dim_window_enabled"),
-                    )
-                    await send_response(req_id, result)
-                    if result.get("message") == "Success" and websocket_endpoint.trigger_dim_check:
-                        await asyncio.to_thread(websocket_endpoint.trigger_dim_check)
+                    dim_window_payload = {
+                        "dim_window_start": message.get("dim_window_start"),
+                        "dim_window_end": message.get("dim_window_end"),
+                        "dim_level": message.get("dim_level"),
+                        "dim_restore_seconds": message.get("dim_restore_seconds"),
+                        "dim_window_enabled": message.get("dim_window_enabled"),
+                    }
+                    if is_firestore_bridge_active():
+                        await asyncio.to_thread(request_set_dim_window, dim_window_payload)
+                        await send_response(
+                            req_id,
+                            {"action": "set_dim_window", "message": "Success"},
+                        )
+                        if websocket_endpoint.trigger_dim_check:
+                            await asyncio.to_thread(websocket_endpoint.trigger_dim_check)
+                    else:
+                        result = await asyncio.to_thread(
+                            set_dim_window,
+                            message.get("dim_window_start"),
+                            message.get("dim_window_end"),
+                            message.get("dim_level"),
+                            message.get("dim_restore_seconds"),
+                            message.get("dim_window_enabled"),
+                        )
+                        await send_response(req_id, result)
+                        if result.get("message") == "Success" and websocket_endpoint.trigger_dim_check:
+                            await asyncio.to_thread(websocket_endpoint.trigger_dim_check)
                 elif action == "forget_wifi":
                     await asyncio.to_thread(forget_wifi)
                 elif action == "get_version":
