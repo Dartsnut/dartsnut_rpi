@@ -32,7 +32,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 // Use long-polling instead of gRPC to avoid "Could not reach Cloud Firestore backend"
 // and "GRPC error has no .code" on some networks/runtimes (e.g. Pi).
-const db = initializeFirestore(app, { experimentalForceLongPolling: true });
+const db = initializeFirestore(app, { experimentalForceLongPolling: true }, "device");
 
 function parseArgs(): { deviceId: string; socketPath: string } {
   let deviceId = "";

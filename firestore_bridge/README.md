@@ -1,10 +1,10 @@
 # Dartsnut Firestore Bridge
 
-Bun service that talks to Firestore (Firebase JS client SDK) and to the Python app over a Unix socket. Python spawns this executable and sends device state; the bridge syncs with `devices/{deviceId}` and pushes config updates back. Firebase config is in source and is bundled into the compiled executable.
+Node.js service that talks to Firestore (Firebase JS client SDK) and to the Python app over a Unix socket. Python spawns this executable and sends device state; the bridge syncs with `devices/{deviceId}` and pushes config updates back. Firebase config is in source and is bundled into the compiled executable.
 
 ## Requirements
 
-- [Bun](https://bun.sh) (for building and development)
+- Node.js (you are using v24.x; the packaged binary embeds Node 18 via `pkg`)
 - Firebase project with Firestore enabled and security rules allowing read/write for your app
 
 ## Configuration
@@ -21,17 +21,11 @@ Python can override the bridge binary and socket path:
 From this directory:
 
 ```bash
-bun install
-bun run build
+npm install
+npm run build
 ```
 
-The executable is written to `dist/dartsnut_firestore_bridge`.
-
-For Raspberry Pi (Linux ARM64), cross-compile:
-
-```bash
-bun build ./src/index.ts --compile --target=bun-linux-arm64 --outfile ./dist/dartsnut_firestore_bridge
-```
+The executable is written to `dist/dartsnut_firestore_bridge` (Linux arm64, via `pkg` with target `node18-linux-arm64`).
 
 ## Protocol
 
@@ -43,10 +37,10 @@ bun build ./src/index.ts --compile --target=bun-linux-arm64 --outfile ./dist/dar
 
 ## Development
 
-Run without compiling (requires Bun on the host):
+Run without compiling (requires Node.js and `ts-node` on the host):
 
 ```bash
-bun run start -- --device-id=1234 --socket-path=/tmp/dartsnut-firestore-sync.sock
+npm run start -- --device-id=1234 --socket-path=/tmp/dartsnut-firestore-sync.sock
 ```
 
 Ensure Python has started first and is listening on the socket.
