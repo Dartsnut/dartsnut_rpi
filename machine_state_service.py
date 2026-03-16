@@ -187,6 +187,17 @@ class MachineStateService:
         Persist pages to ./apps/conf.json and reload pages into AppContext.
         """
         try:
+            # Normalize widgets lists so we never persist \"widgets\": null.
+            normalized_pages: List[Dict[str, Any]] = []
+            for page in pages or []:
+                if not isinstance(page, dict):
+                    continue
+                page_copy = dict(page)
+                widgets = page_copy.get("widgets")
+                if not isinstance(widgets, list):
+                    page_copy["widgets"] = []
+                normalized_pages.append(page_copy)
+
             apps_dir = os.path.join(os.getcwd(), "apps")
             os.makedirs(apps_dir, exist_ok=True)
             conf_path = os.path.join(apps_dir, "conf.json")
@@ -202,7 +213,7 @@ class MachineStateService:
                 existing = {}
 
             payload: Dict[str, Any] = dict(existing)
-            payload["pages"] = pages
+            payload["pages"] = normalized_pages
             payload["pages_updated_at"] = datetime.now(timezone.utc).isoformat()
 
             with open(conf_path, "w") as f:

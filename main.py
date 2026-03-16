@@ -13,7 +13,7 @@ import threading
 import time
 import glob
 import urllib.request
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timezone
 
 from PIL import Image
 from pydartsnut import Dartsnut
@@ -46,6 +46,8 @@ try:
         start_firestore_sync_if_available,
         notify_device_state_update,
         restart_firestore_sync,
+        request_set_game_status,
+        request_set_all_games_ready,
     )
 except ImportError:
     def start_firestore_sync_if_available(*args, **kwargs):
@@ -79,6 +81,13 @@ BRIGHTNESS_TRANSITION_DURATION = 1.0
 
 _firmware_update_in_progress = False
 _startup_firmware_version = None
+# Track whether we've already applied at least one Firestore config in this
+# process. We use this to avoid auto-starting games from any stale \"playing\"
+# status present in the very first config payload on startup.
+_has_seen_first_firestore_config = False
+# Wall-clock timestamp when this Python service started; used to treat older
+# Firestore status as stale while still honoring config changes.
+SERVICE_START_TIME = datetime.now(timezone.utc)
 
 
 def _get_current_brightness_for_transition():
@@ -267,6 +276,8 @@ def _apply_firestore_config(config: dict) -> None:
     if not isinstance(config, dict):
         return
 
+    global _has_seen_first_firestore_config
+
     service = get_machine_state_service()
     if service is None:
         # Fallback: do nothing if the service is not yet initialized.
@@ -280,7 +291,7 @@ def _apply_firestore_config(config: dict) -> None:
     except Exception as e:
         print(f"Error applying Firestore pages config: {e}")
 
-    # Brightness / volume / time zone / dim window / device name
+    # Brightness / volume / time zone / dim window / device name / games
     try:
         # Brightness can arrive under canonical "brightness" or legacy
         # capitalized "Brightness" from existing Firestore documents.
@@ -319,6 +330,57 @@ def _apply_firestore_config(config: dict) -> None:
         device_info = config.get("device_info") or {}
         if isinstance(device_info, dict) and "name" in device_info:
             service.set_device_name(device_info.get("name", ""))
+
+        # Games: if any incoming game entry has status "playing", request that
+        # game be launched via the same mechanism used by the websocket layer.
+        #
+        # To avoid auto-launching a game from stale Firestore state on startup,
+        # we ignore the games list the first time this function is called in a
+        # given process; subsequent updates (e.g. from a UI) can trigger start.
+        games_cfg = config.get("games")
+        if isinstance(games_cfg, list):
+            # Treat remote game status as stale if the document timestamp is
+            # older than when this service instance started. This prevents
+            # older \"playing\" flags from auto-launching games on boot while
+            # still allowing newer remote status changes.
+            remote_ts_str = config.get("device_updated_at") or config.get("updated_at")
+            remote_ts = None
+            try:
+                if isinstance(remote_ts_str, str) and remote_ts_str:
+                    s = remote_ts_str.strip()
+                    if s.endswith("Z"):
+                        s = s[:-1]
+                    remote_ts = datetime.fromisoformat(s)
+            except Exception:
+                remote_ts = None
+
+            is_stale_status = remote_ts is not None and remote_ts < SERVICE_START_TIME
+
+            if is_stale_status:
+                # Still mark that we've seen an initial config so that any later,
+                # fresher updates can trigger game launches if desired.
+                if not _has_seen_first_firestore_config:
+                    _has_seen_first_firestore_config = True
+            else:
+                if not _has_seen_first_firestore_config:
+                    _has_seen_first_firestore_config = True
+                else:
+                    playing_game_id = None
+                    for g in games_cfg:
+                        if not isinstance(g, dict):
+                            continue
+                        if g.get("status") == "playing" and g.get("id"):
+                            playing_game_id = str(g["id"])
+                            break
+                    if playing_game_id:
+                        # Only trigger a start if this is a new request (different from
+                        # the currently running game).
+                        current_id = None
+                        if ctx.game and isinstance(ctx.game, dict):
+                            current_id = ctx.game.get("game_id")
+                        if current_id != playing_game_id:
+                            ctx.start_game = True
+                            ctx.game_id = playing_game_id
     except Exception as e:
         print(f"Error applying Firestore device config: {e}")
 
@@ -724,6 +786,13 @@ try:
     start_firestore_sync_if_available(device_info or {}, reload_config, _apply_firestore_config)
 except Exception as e:
     print(f"Failed to start Firestore sync: {e}")
+else:
+    # On service start, proactively reset all local games to \"ready\" status in
+    # Firestore so any stale \"playing\" flags from previous runs are cleared.
+    try:
+        request_set_all_games_ready()
+    except Exception as e:
+        print(f"Error resetting Firestore game statuses to ready on startup: {e}")
 
 ctx.reload_conf = False
 ctx.start_game = False
@@ -835,6 +904,12 @@ while dartsnut.running:
             if ctx.game is not None:
                 term_widget_processes(ctx.pages)
                 ctx.transition_to(InGameState())
+                # Reflect the runtime status back to Firestore so that the
+                # launched game is marked as \"playing\".
+                try:
+                    request_set_game_status(ctx.game_id, "playing")
+                except Exception as e:
+                    print(f"Error updating Firestore game status to playing: {e}")
         else:
             ctx.current_state.update(ctx)
 

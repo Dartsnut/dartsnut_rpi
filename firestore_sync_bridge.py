@@ -422,6 +422,44 @@ def request_set_device_name(name: str) -> None:
         print(f"Firestore bridge: failed to request device name update: {e}")
 
 
+def request_set_game_status(game_id: str, status: str) -> None:
+    """
+    Update Firestore games list so that:
+    - All locally present games are reported with at least status \"ready\".
+    - The specified game_id is forced to the given status (e.g. \"playing\").
+    """
+    if not game_id or not isinstance(game_id, str):
+        return
+    try:
+        from game_lifecycle import get_games_summary
+
+        games = get_games_summary()
+        for g in games:
+            if isinstance(g, dict) and g.get("id") == game_id:
+                g["status"] = status
+        notify_device_state_update({"games": games})
+    except Exception as e:
+        print(f"Firestore bridge: failed to request game status update: {e}")
+
+
+def request_set_all_games_ready() -> None:
+    """
+    On service start, force all locally known games to status \"ready\" in
+    Firestore so any stale \"playing\" or transitional states are reset.
+    """
+    try:
+        from game_lifecycle import get_games_summary
+
+        games = get_games_summary()
+        for g in games:
+            if isinstance(g, dict):
+                g["status"] = "ready"
+        if games:
+            notify_device_state_update({"games": games})
+    except Exception as e:
+        print(f"Firestore bridge: failed to reset all game statuses to ready: {e}")
+
+
 def ensure_firestore_sync_running(
     device_info: Dict[str, Any],
     reload_config: Callable[[], None],
