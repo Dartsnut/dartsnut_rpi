@@ -114,6 +114,14 @@ def load_game_list() -> list:
                 conf = json.load(f)
             if conf.get("type") != "game":
                 continue
+            # Ensure core fields exist for downstream consumers.
+            conf_id = conf.get("id", name)
+            conf_version = conf.get("version", "")
+            conf["id"] = conf_id
+            conf["version"] = conf_version
+            # Default status for on-device list; more specific statuses (e.g. playing,
+            # downloading) can be layered on top where appropriate.
+            conf.setdefault("status", "ready")
             if "preview" in conf:
                 images = []
                 for img_b64 in conf["preview"]:
@@ -128,3 +136,29 @@ def load_game_list() -> list:
         except Exception as e:
             print(f"Error loading game config for {name}: {e}")
     return game_list
+
+
+def get_games_summary() -> list:
+    """
+    Build a lightweight games summary list for configuration / syncing.
+
+    Each entry has the shape:
+    - id: game identifier from apps/{game}/conf.json
+    - version: version string from conf.json (or empty string if missing)
+    - status: one of \"ready\", \"downloading\", \"playing\". This helper only
+      sets \"ready\" based on local presence; higher layers can refine status
+      when they have download/runtime context.
+    """
+    summary: list = []
+    for conf in load_game_list():
+        game_id = conf.get("id")
+        if not game_id:
+            continue
+        summary.append(
+            {
+                "id": game_id,
+                "version": conf.get("version", ""),
+                "status": conf.get("status", "ready"),
+            }
+        )
+    return summary

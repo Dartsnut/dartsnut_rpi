@@ -13,6 +13,8 @@ from python_websocket.error_handler import (
     handle_directory_not_found,
     create_error_response,
 )
+from datetime import datetime, timezone
+
 from machine_state_service import get_machine_state_service
 
 APPS_DIR = "apps"  # Update this to your desired save directory
@@ -152,7 +154,8 @@ def receive_file(websocket, data):
         with open(full_save_path, "wb") as file:
             file.write(file_data)
 
-        # If we just wrote the root apps/conf.json, let MachineStateService own pages.
+        # If we just wrote the root apps/conf.json, let MachineStateService own pages
+        # and ensure timestamp + Firestore sync happen through the service.
         try:
             svc = get_machine_state_service()
             if (

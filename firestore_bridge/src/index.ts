@@ -155,7 +155,9 @@ async function main(): Promise<void> {
             await setDocWithRetry(docRef, payload);
           } else {
             const data = snapshot.data() ?? {};
-            send(socket, "config", data);
+            // First config after initial_state when the document already exists.
+            // Python treats this as the merge-on-reconnect signal.
+            send(socket, "config_initial", data);
           }
           unsubscribe = onSnapshot(
             docRef,

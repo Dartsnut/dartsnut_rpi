@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app_context import AppContext
@@ -52,6 +53,13 @@ class MachineStateService:
     @classmethod
     def _write_device_info(cls, device_info: Dict[str, Any]) -> None:
         path = cls._device_json_path()
+        # Always update the device-level timestamp whenever we persist.
+        try:
+            device_info = dict(device_info)
+            device_info["updated_at"] = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            # If timestamping fails for any reason, fall back to raw write.
+            pass
         try:
             with open(path, "w") as f:
                 json.dump(device_info, f)
@@ -145,16 +153,19 @@ class MachineStateService:
                     "dim_window_end", device_info.get("dim_window_end", "")
                 )
             if "dim_level" in config:
-                device_info["dim_level"] = int(
-                    config.get("dim_level", device_info.get("dim_level", 0))
-                )
-            if "dim_restore_seconds" in config:
-                device_info["dim_restore_seconds"] = int(
-                    config.get(
-                        "dim_restore_seconds",
-                        device_info.get("dim_restore_seconds", 0),
+                raw_level = config.get("dim_level")
+                if raw_level is not None:
+                    device_info["dim_level"] = int(
+                        raw_level if raw_level != "" else device_info.get("dim_level", 0)
                     )
-                )
+            if "dim_restore_seconds" in config:
+                raw_secs = config.get("dim_restore_seconds")
+                if raw_secs is not None:
+                    device_info["dim_restore_seconds"] = int(
+                        raw_secs
+                        if raw_secs != ""
+                        else device_info.get("dim_restore_seconds", 0)
+                    )
             self._write_device_info(device_info)
         except Exception as e:
             print(f"Error updating dim window in device.json: {e}")
@@ -167,8 +178,12 @@ class MachineStateService:
             apps_dir = os.path.join(os.getcwd(), "apps")
             os.makedirs(apps_dir, exist_ok=True)
             conf_path = os.path.join(apps_dir, "conf.json")
+            payload: Dict[str, Any] = {
+                "pages": pages,
+                "pages_updated_at": datetime.now(timezone.utc).isoformat(),
+            }
             with open(conf_path, "w") as f:
-                json.dump({"pages": pages}, f)
+                json.dump(payload, f)
         except Exception as e:
             print(f"Error writing apps/conf.json: {e}")
             return

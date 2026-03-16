@@ -12,6 +12,7 @@ import socket
 import subprocess
 import threading
 import time
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 try:
@@ -98,26 +99,142 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     pages = []
+    pages_updated_at = ""
     try:
         apps_conf = os.path.join(os.getcwd(), "apps", "conf.json")
         if os.path.isfile(apps_conf):
             with open(apps_conf, "r") as f:
                 conf = json.load(f)
             pages = conf.get("pages", [])
+            pages_updated_at = conf.get("pages_updated_at", "") or ""
     except Exception:
         pass
+
+    # Lightweight games list derived from local apps/*/conf.json, if available.
+    games = []
+    try:
+        from game_lifecycle import get_games_summary
+
+        games = get_games_summary()
+    except Exception:
+        games = device_info.get("games", [])
 
     return {
         "time_zone": device_info.get("time_zone", ""),
         "volume": volume,
         "ip_address": device_info.get("ip_address", ""),
         "brightness": brightness,
-        "games": device_info.get("games", []),
+        "games": games,
         "dim_window": dim_window,
         "pages": pages,
+        "device_updated_at": device_info.get("updated_at", "") or "",
+        "pages_updated_at": pages_updated_at,
         "device_info": device_meta,
         "firmware": firmware,
     }
+
+
+def _parse_iso_ts(value: Any) -> Optional[datetime]:
+    """Best-effort parse of an ISO8601-ish timestamp string into a datetime."""
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value))
+        if isinstance(value, str):
+            s = value.strip()
+            if s.endswith("Z"):
+                s = s[:-1]
+            return datetime.fromisoformat(s)
+    except Exception:
+        return None
+    return None
+
+
+def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge Firestore config with local JSON configuration using timestamps.
+
+    - For device-level fields, compare device_updated_at (remote) vs device.json[updated_at].
+    - For pages, compare pages_updated_at (remote) vs apps/conf.json[pages_updated_at].
+    - If timestamps are missing or equal, prefer the remote config for backward compatibility.
+    """
+    # Start with a copy of remote config; we will selectively overwrite from local.
+    merged: Dict[str, Any] = dict(remote or {})
+
+    # Load local device.json
+    local_device: Dict[str, Any] = {}
+    try:
+        device_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_path, "r") as f:
+            local_device = json.load(f)
+    except Exception:
+        local_device = {}
+
+    # Load local pages + timestamp from apps/conf.json
+    local_pages_conf: Dict[str, Any] = {}
+    try:
+        apps_conf = os.path.join(os.getcwd(), "apps", "conf.json")
+        if os.path.isfile(apps_conf):
+            with open(apps_conf, "r") as f:
+                local_pages_conf = json.load(f)
+    except Exception:
+        local_pages_conf = {}
+
+    # Compute timestamps
+    local_device_ts = _parse_iso_ts(local_device.get("updated_at"))
+    remote_device_ts = _parse_iso_ts(
+        remote.get("device_updated_at") or remote.get("updated_at")
+    )
+
+    local_pages_ts = _parse_iso_ts(local_pages_conf.get("pages_updated_at"))
+    remote_pages_ts = _parse_iso_ts(remote.get("pages_updated_at"))
+
+    # Rebuild canonical local device state using existing helper.
+    local_initial = _build_initial_state(local_device or {})
+
+    # Decide device source.
+    use_local_device = False
+    if local_device_ts and remote_device_ts:
+        use_local_device = local_device_ts > remote_device_ts
+    elif local_device_ts and not remote_device_ts:
+        # Local has timestamp, remote doesn't: prefer local.
+        use_local_device = True
+    else:
+        # Missing or equal timestamps: keep remote (backward compatible).
+        use_local_device = False
+
+    if use_local_device:
+        for key in (
+            "time_zone",
+            "volume",
+            "ip_address",
+            "brightness",
+            "games",
+            "dim_window",
+            "device_info",
+            "firmware",
+        ):
+            if key in local_initial:
+                merged[key] = local_initial[key]
+        merged["device_updated_at"] = local_device.get("updated_at", "") or ""
+
+    # Decide pages source.
+    use_local_pages = False
+    if local_pages_ts and remote_pages_ts:
+        use_local_pages = local_pages_ts > remote_pages_ts
+    elif local_pages_ts and not remote_pages_ts:
+        use_local_pages = True
+    else:
+        use_local_pages = False
+
+    if use_local_pages:
+        merged["pages"] = local_pages_conf.get("pages", []) or []
+        merged["pages_updated_at"] = (
+            local_pages_conf.get("pages_updated_at", "") or ""
+        )
+
+    return merged
 
 
 class _SyncClient:
@@ -174,9 +291,23 @@ class _SyncClient:
                             payload = msg.get("payload")
                             if kind == "ready":
                                 self.send_state(self._initial_state, full=True)
-                            elif kind == "config" and isinstance(payload, dict):
+                            elif kind in ("config", "config_initial") and isinstance(
+                                payload, dict
+                            ):
+                                cfg = payload
+                                if kind == "config_initial":
+                                    try:
+                                        cfg = _merge_remote_and_local(payload)
+                                    except Exception:
+                                        cfg = payload
+                                    # Push the merged state back to Firestore so it
+                                    # becomes the new source of truth.
+                                    try:
+                                        notify_device_state_update(cfg)
+                                    except Exception:
+                                        pass
                                 try:
-                                    self._on_config_updated(payload)
+                                    self._on_config_updated(cfg)
                                 except Exception:
                                     pass
                                 try:
