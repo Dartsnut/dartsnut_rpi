@@ -100,10 +100,17 @@ def get_device_info():
         with open(os.path.join(os.getcwd(), HOME_DIR, "device.json"), "r") as file:
             device_info = json.load(file)
 
-        # Get the BLE MAC address of the device
-        with open("/sys/class/bluetooth/hci0/address", "r") as file:
-            mac_address = file.read().strip()
-        device_info["mac_address"] = mac_address
+        # Get the BLE MAC address of the device using the same adapter-based
+        # approach as python_ble (no sysfs fallback, to keep behavior consistent).
+        try:
+            from bluezero import adapter  # type: ignore
+
+            adapters = list(adapter.Adapter.available())
+            if adapters:
+                ble_mac = adapters[0].address
+                device_info["mac_address"] = ble_mac
+        except Exception:
+            pass
 
         # Get the wifi ssid of the current connection
         ssid = ""
@@ -122,7 +129,7 @@ def get_device_info():
                 _, ssid = connected_info[0].split(":")
             else:
                 ssid = ""
-        except Exception as e:
+        except Exception:
             ssid = ""
         device_info["ssid"] = ssid
 
