@@ -69,6 +69,18 @@ class MachineStateService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def set_firmware_info(self, version: str, update: bool) -> None:
+        """
+        Persist firmware metadata (version + update flag) to device.json.
+        """
+        try:
+            device_info = self._read_device_info()
+            device_info["firmware_version"] = version
+            device_info["firmware_update"] = bool(update)
+            self._write_device_info(device_info)
+        except Exception as e:
+            print(f"Error updating firmware info in device.json: {e}")
+
     def set_brightness(self, brightness: int) -> None:
         """
         Set brightness on hardware and persist to device.json.

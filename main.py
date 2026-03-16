@@ -21,6 +21,7 @@ from pydartsnut import Dartsnut
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.device_operations import _parse_hhmm, forget_wifi
+from python_websocket.git_operations import get_version, perform_update
 
 import assets
 from app_context import AppContext
@@ -75,6 +76,9 @@ _brightness_transition_target = None
 _brightness_last_set = None
 
 BRIGHTNESS_TRANSITION_DURATION = 1.0
+
+_firmware_update_in_progress = False
+_startup_firmware_version = None
 
 
 def _get_current_brightness_for_transition():
@@ -310,6 +314,78 @@ def _apply_firestore_config(config: dict) -> None:
             service.set_device_name(device_info.get("name", ""))
     except Exception as e:
         print(f"Error applying Firestore device config: {e}")
+
+    # One-shot publish of startup firmware version to Firestore once bridge is active.
+    global _startup_firmware_version
+    try:
+        if _startup_firmware_version:
+            payload = {
+                "firmware": {
+                    "version": _startup_firmware_version,
+                    "update": False,
+                }
+            }
+            try:
+                notify_device_state_update(payload)
+            except Exception as e:
+                print(f"Error notifying Firestore of startup firmware version: {e}")
+
+            try:
+                service.set_firmware_info(_startup_firmware_version, False)
+            except Exception as e:
+                print(f"Error persisting startup firmware info locally: {e}")
+
+            _startup_firmware_version = None
+    except Exception as e:
+        print(f"Error handling startup firmware version publish: {e}")
+
+    # Firmware update handling
+    global _firmware_update_in_progress
+    try:
+        firmware_cfg = config.get("firmware") or {}
+        if not isinstance(firmware_cfg, dict):
+            return
+        if not firmware_cfg.get("update"):
+            return
+        if _firmware_update_in_progress:
+            return
+        _firmware_update_in_progress = True
+
+        update_result = perform_update()
+        if isinstance(update_result, dict) and not update_result.get("error"):
+            new_version = "dev"
+            try:
+                version_result = get_version()
+                if (
+                    isinstance(version_result, dict)
+                    and not version_result.get("error")
+                    and version_result.get("version")
+                ):
+                    new_version = str(version_result.get("version"))
+            except Exception as e:
+                print(f"Error determining firmware version after update: {e}")
+
+            payload = {
+                "firmware": {
+                    "version": new_version,
+                    "update": False,
+                }
+            }
+            try:
+                notify_device_state_update(payload)
+            except Exception as e:
+                print(f"Error notifying Firestore of firmware update completion: {e}")
+
+            try:
+                service.set_firmware_info(new_version, False)
+            except Exception as e:
+                print(f"Error persisting firmware info locally after update: {e}")
+        else:
+            print(f"Firmware update requested via Firestore but perform_update failed: {update_result}")
+    except Exception as e:
+        print(f"Error handling Firestore firmware update config: {e}")
+    finally:
+        _firmware_update_in_progress = False
 
 
 def locate_device():
@@ -578,7 +654,22 @@ def check_connection_loop():
 # Startup: loading screen, device, threads, init_widgets
 # -----------------------------------------------------------------------------
 dartsnut.update_frame_buffer(assets.create_loading_image())
-device_info = get_device_info()
+device_info = get_device_info() or {}
+try:
+    version_result = get_version()
+    firmware_version = "dev"
+    if (
+        isinstance(version_result, dict)
+        and not version_result.get("error")
+        and version_result.get("version")
+    ):
+        firmware_version = str(version_result.get("version"))
+    device_info["firmware_version"] = firmware_version
+    _startup_firmware_version = firmware_version
+except Exception as e:
+    print(f"Error determining firmware version for Firestore initial state: {e}")
+if "firmware_update" not in device_info:
+    device_info["firmware_update"] = False
 set_volume(int(device_info.get("volume", "50")))
 
 ble_thread = threading.Thread(
@@ -610,8 +701,7 @@ connection_thread = threading.Thread(target=check_connection_loop, daemon=True)
 connection_thread.start()
 
 try:
-    di = get_device_info()
-    start_firestore_sync_if_available(di or {}, reload_config, _apply_firestore_config)
+    start_firestore_sync_if_available(device_info or {}, reload_config, _apply_firestore_config)
 except Exception as e:
     print(f"Failed to start Firestore sync: {e}")
 
@@ -778,8 +868,12 @@ while dartsnut.running:
         # Render widgets: update all page framebuffers from shared memory
         if ctx.pages is not None and len(ctx.pages) > 0:
             for page in ctx.pages:
+                framebuffer = page.get("framebuffer")
+                if framebuffer is None:
+                    # Skip pages that have not been fully initialized yet.
+                    continue
                 page_img = Image.frombytes(
-                    "RGB", (128, 160), bytes(page["framebuffer"])
+                    "RGB", (128, 160), bytes(framebuffer)
                 )
                 current_loading_frame_big = assets.get_current_loading_frame_big()
                 current_loading_frame = assets.get_current_loading_frame()
