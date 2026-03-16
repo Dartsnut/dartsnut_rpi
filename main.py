@@ -865,13 +865,24 @@ while dartsnut.running:
 
         ctx.current_state.handle_input(ctx, buttons)
 
-        # Render widgets: update all page framebuffers from shared memory
+        # Render widgets: update all page framebuffers from shared memory.
+        # Be defensive about page/widget structure so that transient Firestore
+        # or config issues don't crash the main loop.
         if ctx.pages is not None and len(ctx.pages) > 0:
             for page in ctx.pages:
+                if not isinstance(page, dict):
+                    continue
+
                 framebuffer = page.get("framebuffer")
                 if framebuffer is None:
                     # Skip pages that have not been fully initialized yet.
                     continue
+
+                widgets = page.get("widgets")
+                if not isinstance(widgets, list):
+                    # If widgets are missing or malformed, skip this page but keep running.
+                    continue
+
                 page_img = Image.frombytes(
                     "RGB", (128, 160), bytes(framebuffer)
                 )
@@ -881,30 +892,47 @@ while dartsnut.running:
                     current_loading_frame_big = current_loading_frame_big.convert("RGB")
                 if current_loading_frame.mode != "RGB":
                     current_loading_frame = current_loading_frame.convert("RGB")
-                for widget in page["widgets"]:
-                    widget_data = widget.get("widget")
-                    if widget_data is None:
+
+                for widget in widgets:
+                    if not isinstance(widget, dict):
                         continue
+
+                    widget_data = widget.get("widget") or widget
+                    if not isinstance(widget_data, dict):
+                        continue
+
                     widget_id = widget_data.get("id", "unknown")
-                    shm = widget.get("shm")
-                    x0, y0, x1, y1 = widget_data["position"]
+                    position = widget_data.get("position")
+                    if (
+                        not isinstance(position, (list, tuple))
+                        or len(position) != 4
+                    ):
+                        # Invalid position data; skip this widget.
+                        continue
+                    x0, y0, x1, y1 = position
+
                     widget_width = x1 - x0 + 1
                     widget_height = y1 - y0 + 1
                     widget_frame = None
+
+                    shm = widget.get("shm")
                     if shm is not None:
-                        width = x1 - x0 + 1
-                        height = y1 - y0 + 1
+                        width = widget_width
+                        height = widget_height
                         try:
-                            widget_frame = Image.frombytes(
-                                "RGB",
-                                (width, height),
-                                bytes(shm.buf[1 : 1 + width * height * 3]),
-                            )
-                            page_img.paste(widget_frame, (x0, y0))
-                            if shm.buf[0] == 0:
-                                shm.buf[0] = 1
+                            buf = getattr(shm, "buf", None)
+                            if buf is not None:
+                                widget_frame = Image.frombytes(
+                                    "RGB",
+                                    (width, height),
+                                    bytes(buf[1 : 1 + width * height * 3]),
+                                )
+                                page_img.paste(widget_frame, (x0, y0))
+                                if buf[0] == 0:
+                                    buf[0] = 1
                         except Exception as e:
                             print(f"Error reading widget frame for {widget_id}: {e}")
+
                     widget_ready = False
                     if widget_frame is not None:
                         was_not_launched = not widget.get("launched", False)
@@ -919,6 +947,7 @@ while dartsnut.running:
                                 widget["has_small_widget"] = any(
                                     byte != 0 for byte in area_bytes
                                 )
+
                     if not widget_ready:
                         if widget_height == 160:
                             page_img.paste(current_loading_frame_big, (x0, y0 + 32))
@@ -929,6 +958,7 @@ while dartsnut.running:
                             page_img.paste(current_loading_frame_big, (x0, y0 + 32))
                         elif widget_height == 32:
                             page_img.paste(current_loading_frame, (x0, y0))
+
                 page["framebuffer"] = bytearray(page_img.tobytes())
     except Exception as e:
         print(f"Error in main loop: {e}")
