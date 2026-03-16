@@ -190,10 +190,21 @@ class MachineStateService:
             apps_dir = os.path.join(os.getcwd(), "apps")
             os.makedirs(apps_dir, exist_ok=True)
             conf_path = os.path.join(apps_dir, "conf.json")
-            payload: Dict[str, Any] = {
-                "pages": pages,
-                "pages_updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+
+            # Preserve any existing top-level keys in conf.json (e.g. user/date)
+            # and only replace the pages-related fields.
+            existing: Dict[str, Any] = {}
+            try:
+                if os.path.isfile(conf_path):
+                    with open(conf_path, "r") as f:
+                        existing = json.load(f) or {}
+            except Exception:
+                existing = {}
+
+            payload: Dict[str, Any] = dict(existing)
+            payload["pages"] = pages
+            payload["pages_updated_at"] = datetime.now(timezone.utc).isoformat()
+
             with open(conf_path, "w") as f:
                 json.dump(payload, f)
         except Exception as e:

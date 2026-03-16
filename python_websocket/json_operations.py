@@ -100,10 +100,10 @@ def get_device_info():
         with open(os.path.join(os.getcwd(), HOME_DIR, "device.json"), "r") as file:
             device_info = json.load(file)
 
-        # Get the MAC address of the device
-        with open("/sys/class/net/wlan0/address", "r") as file:
+        # Get the BLE MAC address of the device
+        with open("/sys/class/bluetooth/hci0/address", "r") as file:
             mac_address = file.read().strip()
-            device_info["mac_address"] = mac_address
+        device_info["mac_address"] = mac_address
 
         # Get the wifi ssid of the current connection
         ssid = ""

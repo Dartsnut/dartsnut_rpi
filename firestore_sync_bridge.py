@@ -1,5 +1,5 @@
 """
-Optional Firestore sync bridge: spawns the Bun Firestore bridge executable and
+Optional Firestore sync bridge: spawns the Go Firestore bridge executable and
 talks to it over a Unix socket. Python derives deviceId from BLE, sends initial
 state and partial updates; receives config pushes and applies them via the
 provided callbacks. If the module is missing or the executable is not available,
@@ -25,8 +25,7 @@ SOCKET_PATH = "/tmp/dartsnut-firestore-sync.sock"
 _DEFAULT_BRIDGE_BIN = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "firestore_bridge",
-    "dist",
-    "dartsnut_firestore_bridge",
+    "bridge",
 )
 
 _client: Optional["_SyncClient"] = None
@@ -162,6 +161,11 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     # Start with a copy of remote config; we will selectively overwrite from local.
     merged: Dict[str, Any] = dict(remote or {})
 
+    # Normalize legacy capitalized fields (e.g. "Brightness" from older clients)
+    # into their canonical lowercase equivalents if the lowercase key is absent.
+    if "Brightness" in merged and "brightness" not in merged:
+        merged["brightness"] = merged["Brightness"]
+
     # Load local device.json
     local_device: Dict[str, Any] = {}
     try:
@@ -238,7 +242,7 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class _SyncClient:
-    """Holds the socket server thread and connection to the Bun bridge; sends state, receives config."""
+    """Holds the socket server thread and connection to the Firestore bridge; sends state, receives config."""
 
     def __init__(
         self,
@@ -342,9 +346,9 @@ def start_firestore_sync_if_available(
     on_config_updated: Callable[[Dict[str, Any]], None],
 ) -> None:
     """
-    Start Firestore sync by launching the Bun bridge executable and talking over a Unix socket.
+    Start Firestore sync by launching the Go bridge executable and talking over a Unix socket.
 
-    - Derives deviceId from BLE MAC suffix; passes it to the bridge.
+    - Derives deviceId from BLE MAC; passes it to the bridge.
     - Python listens on SOCKET_PATH; spawns the bridge with --device-id and --socket-path.
     - Sends initial_state (full device + pages config); receives config pushes and applies via
       on_config_updated + reload_config. Partial local updates go out via notify_device_state_update.
@@ -370,7 +374,11 @@ def is_firestore_bridge_active() -> bool:
 def request_set_brightness(value: int) -> None:
     """Proxy a brightness change request to Firestore when the bridge is active."""
     try:
-        notify_device_state_update({"brightness": int(value)})
+        v = int(value)
+        # Write both canonical "brightness" and legacy "Brightness" for
+        # compatibility with any existing dashboards that still read the
+        # capitalized field.
+        notify_device_state_update({"brightness": v, "Brightness": v})
     except Exception as e:
         print(f"Firestore bridge: failed to request brightness update: {e}")
 

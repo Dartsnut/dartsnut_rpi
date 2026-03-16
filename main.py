@@ -176,7 +176,10 @@ def set_brightness(brightness):
             if service is not None:
                 service.set_brightness(brightness)
             _brightness_before_dim = brightness
-            notify_device_state_update({"brightness": int(brightness)})
+            v = int(brightness)
+            # Maintain both canonical and legacy-capitalized fields in Firestore
+            # so dashboards reading either stay in sync.
+            notify_device_state_update({"brightness": v, "Brightness": v})
         except Exception as e:
             print(f"Error updating device brightness while dimmed: {e}")
         return
@@ -186,7 +189,8 @@ def set_brightness(brightness):
     try:
         if service is not None:
             service.set_brightness(brightness)
-        notify_device_state_update({"brightness": int(brightness)})
+        v = int(brightness)
+        notify_device_state_update({"brightness": v, "Brightness": v})
     except Exception as e:
         print(f"Error updating brightness: {e}")
 
@@ -278,9 +282,12 @@ def _apply_firestore_config(config: dict) -> None:
 
     # Brightness / volume / time zone / dim window / device name
     try:
-        if "brightness" in config:
+        # Brightness can arrive under canonical "brightness" or legacy
+        # capitalized "Brightness" from existing Firestore documents.
+        if "brightness" in config or "Brightness" in config:
             try:
-                brightness_val = int(config.get("brightness"))
+                key = "brightness" if "brightness" in config else "Brightness"
+                brightness_val = int(config.get(key))
                 service.set_brightness(brightness_val)
             except Exception:
                 pass
@@ -461,7 +468,20 @@ def _ensure_apps_conf_and_load_pages(context: AppContext) -> None:
         with open("./apps/conf.json", "w") as f:
             json.dump(default_config, f)
     with open("./apps/conf.json", "r") as f:
-        context.pages = init_pages(json.load(f))
+        raw_conf = json.load(f)
+    # Defensive normalization: ensure each page has a widgets list so that
+    # downstream code (init_pages/start_page_process) never sees None here.
+    try:
+        pages_conf = raw_conf.get("pages") if isinstance(raw_conf, dict) else None
+        if isinstance(pages_conf, list):
+            for page in pages_conf:
+                if isinstance(page, dict):
+                    widgets = page.get("widgets")
+                    if not isinstance(widgets, list):
+                        page["widgets"] = []
+    except Exception:
+        pass
+    context.pages = init_pages(raw_conf)
 
 
 # -----------------------------------------------------------------------------
