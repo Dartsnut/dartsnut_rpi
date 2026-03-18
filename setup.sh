@@ -12,7 +12,66 @@ fi
 sudo sed -i 's/dtparam=audio=on/dtparam=audio=off/g' /boot/firmware/config.txt
 sudo sed -i '/dtoverlay=vc4-kms-v3d$/ s/$/,noaudio/' /boot/firmware/config.txt
 
-# 3. Create blacklist-bcm2835.conf if it doesn't exist
+# 3. Apply additional boot configuration tweaks for early splash (Bookworm paths)
+#    - Ensure disable_splash=1 and boot_delay=0 are present in /boot/firmware/config.txt
+#    - Ensure 'quiet' is present in /boot/firmware/cmdline.txt
+if ! grep -q "^disable_splash=1" /boot/firmware/config.txt; then
+    echo "disable_splash=1" | sudo tee -a /boot/firmware/config.txt > /dev/null
+    echo "Added disable_splash=1 to /boot/firmware/config.txt"
+else
+    echo "disable_splash=1 already present in /boot/firmware/config.txt"
+fi
+
+if ! grep -q "^boot_delay=0" /boot/firmware/config.txt; then
+    echo "boot_delay=0" | sudo tee -a /boot/firmware/config.txt > /dev/null
+    echo "Added boot_delay=0 to /boot/firmware/config.txt"
+else
+    echo "boot_delay=0 already present in /boot/firmware/config.txt"
+fi
+
+if ! grep -qw "quiet" /boot/firmware/cmdline.txt; then
+    sudo sed -i 's/$/ quiet/' /boot/firmware/cmdline.txt
+    echo "Added quiet to /boot/firmware/cmdline.txt"
+else
+    echo "quiet already present in /boot/firmware/cmdline.txt"
+fi
+
+# 4. Install PixelDarts early-boot splash from local boot_splash
+BOOT_SPLASH_DIR="/home/rpi/dartsnut_rpi/boot_splash"
+
+if [ -d "${BOOT_SPLASH_DIR}" ]; then
+    if [ -f "${BOOT_SPLASH_DIR}/splash_matrix" ]; then
+        echo "Installing splash_matrix to /usr/local/bin/splash_matrix"
+        sudo install -m 0755 "${BOOT_SPLASH_DIR}/splash_matrix" /usr/local/bin/splash_matrix
+    else
+        echo "Warning: splash_matrix not found in ${BOOT_SPLASH_DIR}; skipping binary install."
+    fi
+
+    SPLASH_DEST_PPM="/boot/pixeldarts_logo.ppm"
+    if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
+        SPLASH_DEST_PPM="/boot/firmware/pixeldarts_logo.ppm"
+    fi
+
+    if [ -f "${BOOT_SPLASH_DIR}/pixeldarts_logo.ppm" ]; then
+        echo "Copying pixeldarts_logo.ppm to ${SPLASH_DEST_PPM}"
+        sudo install -m 0644 "${BOOT_SPLASH_DIR}/pixeldarts_logo.ppm" "${SPLASH_DEST_PPM}"
+    else
+        echo "Warning: pixeldarts_logo.ppm not found in ${BOOT_SPLASH_DIR}; skipping logo copy."
+    fi
+
+    if [ -f "${BOOT_SPLASH_DIR}/pixeldarts-splash.service" ]; then
+        echo "Installing pixeldarts-splash.service"
+        sudo install -m 0644 "${BOOT_SPLASH_DIR}/pixeldarts-splash.service" /etc/systemd/system/pixeldarts-splash.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable pixeldarts-splash.service
+    else
+        echo "Warning: pixeldarts-splash.service not found in ${BOOT_SPLASH_DIR}; skipping service install."
+    fi
+else
+    echo "Warning: boot_splash directory not found at ${BOOT_SPLASH_DIR}; skipping early-boot splash setup."
+fi
+
+# 5. Create blacklist-bcm2835.conf if it doesn't exist
 if [ ! -f /etc/modprobe.d/blacklist-bcm2835.conf ]; then
     echo "blacklist snd_bcm2835" | sudo tee /etc/modprobe.d/blacklist-bcm2835.conf > /dev/null
     echo "Created blacklist-bcm2835.conf"
@@ -20,7 +79,7 @@ else
     echo "blacklist-bcm2835.conf already exists"
 fi
 
-# 4. Create 99-hid.rules if it doesn't exist, then reload and trigger udev
+# 6. Create 99-hid.rules if it doesn't exist, then reload and trigger udev
 if [ ! -f /etc/udev/rules.d/99-hid.rules ]; then
     echo 'SUBSYSTEM=="hidraw",MODE="0666"' | sudo tee /etc/udev/rules.d/99-hid.rules > /dev/null
     echo "Created 99-hid.rules"
@@ -30,10 +89,10 @@ fi
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-# 5. Create a python3 venv
+# 7. Create a python3 venv
 sudo python3 -m venv venv0
 
-# 6. Install dependencies
+# 8. Install dependencies
 sudo apt-get update
 sudo apt-get install libcairo2-dev python3-cairo -y
 sudo apt-get install python3-dev -y
@@ -49,11 +108,11 @@ sudo apt-get install -y cmake ninja-build libssl-dev libcurl4-openssl-dev zlib1g
 sudo apt-get install -y libprotobuf-dev protobuf-compiler
 sudo apt-get install -y libgoogle-cloud-firestore-dev libgoogle-cloud-cpp-dev || true
 
-# 7. Install the python modules
+# 9. Install the python modules
 sudo venv0/bin/pip install --upgrade pip
 sudo venv0/bin/pip install --upgrade -r requirement.txt
 
-# 8. Set Swap Memory to 0
+# 10. Set Swap Memory to 0
 sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=0/' /etc/dphys-swapfile
 
 # If CONF_SWAPSIZE is not present, add it
@@ -61,7 +120,7 @@ if ! grep -q "^CONF_SWAPSIZE=" /etc/dphys-swapfile; then
   echo "CONF_SWAPSIZE=0" | sudo tee -a /etc/dphys-swapfile
 fi
 
-# 9. Create the services
+# 11. Create the services
 if [ ! -f /etc/systemd/system/dartsnut_matrix.service ]; then
     sudo tee /etc/systemd/system/dartsnut_matrix.service > /dev/null <<EOL
 [Unit]
@@ -112,14 +171,14 @@ sudo systemctl enable dartsnut_python.service
 
 echo "Service file creation steps complete."
 
-# 10. Edit /etc/bluetooth/main.conf: change "#ReverseServiceDiscovery = true" to "ReverseServiceDiscovery = false"
+# 12. Edit /etc/bluetooth/main.conf: change "#ReverseServiceDiscovery = true" to "ReverseServiceDiscovery = false"
 sudo sed -i 's/^#ReverseServiceDiscovery = true/ReverseServiceDiscovery = false/' /etc/bluetooth/main.conf
 echo "Updated ReverseServiceDiscovery in /etc/bluetooth/main.conf"
 
-# 11. Add safe directory for git
+# 13. Add safe directory for git
 sudo git config --global --add safe.directory /home/rpi/dartsnut_rpi
 
-# 12. Setup cron job for automatic git updates
+# 14. Setup cron job for automatic git updates
 CRON_SCHEDULE="0 3 * * *"  # 3am every day
 UPDATE_SCRIPT="/home/rpi/dartsnut_rpi/check_and_update.py"
 PYTHON_INTERPRETER="/home/rpi/dartsnut_rpi/venv0/bin/python"
