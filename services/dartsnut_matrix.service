@@ -1,0 +1,12 @@
+[Unit]
+Description=Dartsnut RGB Matrix Service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rpi/dartsnut_rpi
+ExecStart=/home/rpi/dartsnut_rpi/DartsnutRGBMatrix
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

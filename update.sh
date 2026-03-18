@@ -26,15 +26,40 @@ else
     echo "quiet already present in /boot/firmware/cmdline.txt"
 fi
 
-# Refresh PixelDarts early-boot splash from local boot_splash
-BOOT_SPLASH_DIR="/home/rpi/dartsnut_rpi/boot_splash"
+# Refresh PixelDarts early-boot splash from local services
+SERVICES_DIR="/home/rpi/dartsnut_rpi/services"
 
-if [ -d "${BOOT_SPLASH_DIR}" ]; then
-    if [ -f "${BOOT_SPLASH_DIR}/splash_matrix" ]; then
-        echo "Updating splash_matrix at /usr/local/bin/splash_matrix"
-        sudo install -m 0755 "${BOOT_SPLASH_DIR}/splash_matrix" /usr/local/bin/splash_matrix
+install_or_update_service_unit() {
+    local unit_name="$1"
+    local src="${SERVICES_DIR}/${unit_name}"
+    local dst="/etc/systemd/system/${unit_name}"
+
+    if [ ! -f "${src}" ]; then
+        echo "Warning: ${unit_name} not found in ${SERVICES_DIR}; skipping."
+        return 0
+    fi
+
+    if [ ! -f "${dst}" ] || ! cmp -s "${src}" "${dst}"; then
+        echo "Installing/updating ${unit_name}"
+        sudo install -m 0644 "${src}" "${dst}"
+        SYSTEMD_UNITS_UPDATED=1
     else
-        echo "Warning: splash_matrix not found in ${BOOT_SPLASH_DIR}; skipping binary update."
+        echo "${unit_name} already up to date, skipping."
+    fi
+}
+
+SYSTEMD_UNITS_UPDATED=0
+
+if [ -d "${SERVICES_DIR}" ]; then
+    install_or_update_service_unit "dartsnut_matrix.service"
+    install_or_update_service_unit "dartsnut_python.service"
+    install_or_update_service_unit "dartsnut_splash.service"
+
+    if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
+        echo "Updating splash_matrix at /usr/local/bin/splash_matrix"
+        sudo install -m 0755 "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix
+    else
+        echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary update."
     fi
 
     SPLASH_DEST_PPM="/boot/pixeldarts_logo.ppm"
@@ -42,22 +67,35 @@ if [ -d "${BOOT_SPLASH_DIR}" ]; then
         SPLASH_DEST_PPM="/boot/firmware/pixeldarts_logo.ppm"
     fi
 
-    if [ -f "${BOOT_SPLASH_DIR}/pixeldarts_logo.ppm" ]; then
+    if [ -f "${SERVICES_DIR}/pixeldarts_logo.ppm" ]; then
         echo "Updating pixeldarts_logo.ppm at ${SPLASH_DEST_PPM}"
-        sudo install -m 0644 "${BOOT_SPLASH_DIR}/pixeldarts_logo.ppm" "${SPLASH_DEST_PPM}"
+        sudo install -m 0644 "${SERVICES_DIR}/pixeldarts_logo.ppm" "${SPLASH_DEST_PPM}"
     else
-        echo "Warning: pixeldarts_logo.ppm not found in ${BOOT_SPLASH_DIR}; skipping logo update."
+        echo "Warning: pixeldarts_logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
     fi
 
-    if [ -f "${BOOT_SPLASH_DIR}/pixeldarts-splash.service" ]; then
-        echo "Updating pixeldarts-splash.service"
-        sudo install -m 0644 "${BOOT_SPLASH_DIR}/pixeldarts-splash.service" /etc/systemd/system/pixeldarts-splash.service
-        sudo systemctl daemon-reload
+    DEVICE_JSON_SRC="${SERVICES_DIR}/device.json"
+    DEVICE_JSON_DEST="/boot/device.json"
+    if [ -f "${DEVICE_JSON_SRC}" ]; then
+        if [ ! -f "${DEVICE_JSON_DEST}" ]; then
+            echo "Copying device.json to ${DEVICE_JSON_DEST}"
+            sudo install -m 0644 "${DEVICE_JSON_SRC}" "${DEVICE_JSON_DEST}"
+            if [ -f "${SPLASH_DEST_PPM}" ]; then
+                sudo chown --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+                sudo chmod --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+            fi
+        else
+            echo "device.json already present at ${DEVICE_JSON_DEST}"
+        fi
     else
-        echo "Warning: pixeldarts-splash.service not found in ${BOOT_SPLASH_DIR}; skipping service update."
+        echo "Warning: device.json not found in ${SERVICES_DIR}; skipping device.json copy."
+    fi
+
+    if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
+        sudo systemctl daemon-reload
     fi
 else
-    echo "Warning: boot_splash directory not found at ${BOOT_SPLASH_DIR}; skipping early-boot splash update."
+    echo "Warning: services directory not found at ${SERVICES_DIR}; skipping early-boot splash update."
 fi
 
 # Step 12: Setup cron job for automatic git updates

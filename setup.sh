@@ -36,15 +36,35 @@ else
     echo "quiet already present in /boot/firmware/cmdline.txt"
 fi
 
-# 4. Install PixelDarts early-boot splash from local boot_splash
-BOOT_SPLASH_DIR="/home/rpi/dartsnut_rpi/boot_splash"
+# 4. Install PixelDarts early-boot splash from local services
+SERVICES_DIR="/home/rpi/dartsnut_rpi/services"
+SYSTEMD_UNITS_UPDATED=0
 
-if [ -d "${BOOT_SPLASH_DIR}" ]; then
-    if [ -f "${BOOT_SPLASH_DIR}/splash_matrix" ]; then
-        echo "Installing splash_matrix to /usr/local/bin/splash_matrix"
-        sudo install -m 0755 "${BOOT_SPLASH_DIR}/splash_matrix" /usr/local/bin/splash_matrix
+install_or_update_service_unit() {
+    local unit_name="$1"
+    local src="${SERVICES_DIR}/${unit_name}"
+    local dst="/etc/systemd/system/${unit_name}"
+
+    if [ ! -f "${src}" ]; then
+        echo "Warning: ${unit_name} not found in ${SERVICES_DIR}; skipping."
+        return 0
+    fi
+
+    if [ ! -f "${dst}" ] || ! cmp -s "${src}" "${dst}"; then
+        echo "Installing/updating ${unit_name}"
+        sudo install -m 0644 "${src}" "${dst}"
+        SYSTEMD_UNITS_UPDATED=1
     else
-        echo "Warning: splash_matrix not found in ${BOOT_SPLASH_DIR}; skipping binary install."
+        echo "${unit_name} already up to date, skipping."
+    fi
+}
+
+if [ -d "${SERVICES_DIR}" ]; then
+    if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
+        echo "Installing splash_matrix to /usr/local/bin/splash_matrix"
+        sudo install -m 0755 "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix
+    else
+        echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary install."
     fi
 
     SPLASH_DEST_PPM="/boot/pixeldarts_logo.ppm"
@@ -52,23 +72,33 @@ if [ -d "${BOOT_SPLASH_DIR}" ]; then
         SPLASH_DEST_PPM="/boot/firmware/pixeldarts_logo.ppm"
     fi
 
-    if [ -f "${BOOT_SPLASH_DIR}/pixeldarts_logo.ppm" ]; then
+    if [ -f "${SERVICES_DIR}/pixeldarts_logo.ppm" ]; then
         echo "Copying pixeldarts_logo.ppm to ${SPLASH_DEST_PPM}"
-        sudo install -m 0644 "${BOOT_SPLASH_DIR}/pixeldarts_logo.ppm" "${SPLASH_DEST_PPM}"
+        sudo install -m 0644 "${SERVICES_DIR}/pixeldarts_logo.ppm" "${SPLASH_DEST_PPM}"
     else
-        echo "Warning: pixeldarts_logo.ppm not found in ${BOOT_SPLASH_DIR}; skipping logo copy."
+        echo "Warning: pixeldarts_logo.ppm not found in ${SERVICES_DIR}; skipping logo copy."
     fi
 
-    if [ -f "${BOOT_SPLASH_DIR}/pixeldarts-splash.service" ]; then
-        echo "Installing pixeldarts-splash.service"
-        sudo install -m 0644 "${BOOT_SPLASH_DIR}/pixeldarts-splash.service" /etc/systemd/system/pixeldarts-splash.service
-        sudo systemctl daemon-reload
-        sudo systemctl enable pixeldarts-splash.service
+    DEVICE_JSON_SRC="${SERVICES_DIR}/device.json"
+    DEVICE_JSON_DEST="/boot/device.json"
+    if [ -f "${DEVICE_JSON_SRC}" ]; then
+        if [ ! -f "${DEVICE_JSON_DEST}" ]; then
+            echo "Copying device.json to ${DEVICE_JSON_DEST}"
+            sudo install -m 0644 "${DEVICE_JSON_SRC}" "${DEVICE_JSON_DEST}"
+            if [ -f "${SPLASH_DEST_PPM}" ]; then
+                sudo chown --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+                sudo chmod --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+            fi
+        else
+            echo "device.json already present at ${DEVICE_JSON_DEST}"
+        fi
     else
-        echo "Warning: pixeldarts-splash.service not found in ${BOOT_SPLASH_DIR}; skipping service install."
+        echo "Warning: device.json not found in ${SERVICES_DIR}; skipping device.json copy."
     fi
+
+    install_or_update_service_unit "dartsnut_splash.service"
 else
-    echo "Warning: boot_splash directory not found at ${BOOT_SPLASH_DIR}; skipping early-boot splash setup."
+    echo "Warning: services directory not found at ${SERVICES_DIR}; skipping early-boot splash setup."
 fi
 
 # 5. Create blacklist-bcm2835.conf if it doesn't exist
@@ -120,54 +150,22 @@ if ! grep -q "^CONF_SWAPSIZE=" /etc/dphys-swapfile; then
   echo "CONF_SWAPSIZE=0" | sudo tee -a /etc/dphys-swapfile
 fi
 
-# 11. Create the services
-if [ ! -f /etc/systemd/system/dartsnut_matrix.service ]; then
-    sudo tee /etc/systemd/system/dartsnut_matrix.service > /dev/null <<EOL
-[Unit]
-Description=Dartsnut RGB Matrix Service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/home/rpi/dartsnut_rpi
-ExecStart=/home/rpi/dartsnut_rpi/DartsnutRGBMatrix
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOL
-    echo "Created dartsnut_matrix.service"
-else
-    echo "dartsnut_matrix.service already exists, skipping."
+# 11. Install the services from repo folder
+if [ ! -d "${SERVICES_DIR}" ]; then
+    echo "Error: services directory not found at ${SERVICES_DIR}; cannot install systemd units."
+    exit 1
 fi
 
-# Create dartsnut_python.service if it does not exist
-if [ ! -f /etc/systemd/system/dartsnut_python.service ]; then
-    sudo tee /etc/systemd/system/dartsnut_python.service > /dev/null <<EOL
-[Unit]
-Description=Dartsnut Python Service
-After=bluetooth.target network.target dartsnut_matrix.service
-Requires=bluetooth.target network.target dartsnut_matrix.service
+install_or_update_service_unit "dartsnut_matrix.service"
+install_or_update_service_unit "dartsnut_python.service"
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/home/rpi/dartsnut_rpi
-ExecStart=/home/rpi/dartsnut_rpi/venv0/bin/python /home/rpi/dartsnut_rpi/main.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOL
-    echo "Created dartsnut_python.service"
-else
-    echo "dartsnut_python.service already exists, skipping."
+if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
+    sudo systemctl daemon-reload
 fi
 
-# Reload systemd to recognize new services
-sudo systemctl daemon-reload
 sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
+sudo systemctl enable dartsnut_splash.service 2>/dev/null || true
 
 echo "Service file creation steps complete."
 

@@ -3,6 +3,7 @@ Description=PixelDarts Early Splash Screen
 DefaultDependencies=no
 After=local-fs.target
 Before=sysinit.target basic.target
+Conflicts=dartsnut_matrix.service
 
 [Service]
 Type=simple
