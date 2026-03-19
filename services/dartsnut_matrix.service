@@ -1,0 +1,11 @@
+[Unit]
+Description=Dartsnut RGB Matrix Service
+Conflicts=dartsnut_splash.service
+After=dartsnut_splash.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rpi/dartsnut_rpi
+ExecStart=/home/rpi/dartsnut_rpi/DartsnutRGBMatrix
+Restart=always
