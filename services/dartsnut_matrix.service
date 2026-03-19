@@ -1,5 +1,7 @@
 [Unit]
 Description=Dartsnut RGB Matrix Service
+Conflicts=dartsnut_splash.service
+After=dartsnut_splash.service
 
 [Service]
 Type=simple
