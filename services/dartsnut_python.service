@@ -1,7 +1,6 @@
 [Unit]
 Description=Dartsnut Python Service
-After=bluetooth.target network.target dartsnut_matrix.service
-Requires=bluetooth.target network.target dartsnut_matrix.service
+After=bluetooth.target network.target
 
 [Service]
 Type=simple

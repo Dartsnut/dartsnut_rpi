@@ -1,23 +1,21 @@
 [Unit]
-Description=PixelDarts Early Splash Screen
+Description=Dartsnut Splash Screen
 DefaultDependencies=no
 After=local-fs.target
 Before=sysinit.target basic.target
+# When the main dartsnut service starts, this splash service should be stopped
+# to release the LED matrix. Declaring a Conflicts= relationship ensures that
+# starting dartsnut_matrix.service will automatically stop this service.
 Conflicts=dartsnut_matrix.service
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/splash_matrix /boot/pixeldarts_logo.ppm
+ExecStop=/usr/bin/pkill -9 -x splash_matrix
+TimeoutStopSec=5
 StandardOutput=null
 StandardError=null
 OOMScoreAdjust=-1000
-# Kill the process immediately when the service is stopped.
-KillMode=control-group
-KillSignal=SIGKILL
-SendSIGKILL=yes
-TimeoutStopSec=1s
 
 [Install]
 WantedBy=sysinit.target
-
-
