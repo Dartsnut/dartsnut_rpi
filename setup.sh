@@ -125,7 +125,7 @@ sudo apt-get install -y libgoogle-cloud-firestore-dev libgoogle-cloud-cpp-dev ||
 sudo python3 -m venv "${VENV_DIR}"
 
 sudo "${VENV_PIP}" install --upgrade pip
-sudo "${VENV_PIP}" install --upgrade -r "${REPO_DIR}/requirement.txt"
+sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirement.txt"
 
 echo "== Kernel / device configuration =="
 
