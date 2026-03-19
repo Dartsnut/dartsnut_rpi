@@ -39,16 +39,16 @@ install_splash_assets_if_present() {
         echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary install."
     fi
 
-    local splash_dest_ppm="/boot/pixeldarts_logo.ppm"
+    local splash_dest_ppm="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
-        splash_dest_ppm="/boot/firmware/pixeldarts_logo.ppm"
+        splash_dest_ppm="/boot/firmware/logo.ppm"
     fi
 
-    if [ -f "${SERVICES_DIR}/pixeldarts_logo.ppm" ]; then
-        echo "Copying pixeldarts_logo.ppm to ${splash_dest_ppm}"
-        sudo install -m 0644 "${SERVICES_DIR}/pixeldarts_logo.ppm" "${splash_dest_ppm}"
+    if [ -f "${SERVICES_DIR}/logo.ppm" ]; then
+        echo "Copying logo.ppm to ${splash_dest_ppm}"
+        sudo install -m 0644 "${SERVICES_DIR}/logo.ppm" "${splash_dest_ppm}"
     else
-        echo "Warning: pixeldarts_logo.ppm not found in ${SERVICES_DIR}; skipping logo copy."
+        echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo copy."
     fi
 
     local device_json_src="${SERVICES_DIR}/device.json"
@@ -114,13 +114,9 @@ sudo apt-get install -y libgirepository1.0-dev gir1.2-glib-2.0
 sudo apt-get install -y libdbus-1-dev
 sudo apt-get install -y libbluetooth-dev
 sudo apt-get install -y libgl1
-sudo apt-get install -y git
 sudo apt-get install -y xvfb
 sudo apt-get install -y libsdl2-dev
 sudo apt-get install -y libgpiod-dev gpiod
-sudo apt-get install -y cmake ninja-build libssl-dev libcurl4-openssl-dev zlib1g-dev
-sudo apt-get install -y libprotobuf-dev protobuf-compiler
-sudo apt-get install -y libgoogle-cloud-firestore-dev libgoogle-cloud-cpp-dev || true
 
 sudo python3 -m venv "${VENV_DIR}"
 

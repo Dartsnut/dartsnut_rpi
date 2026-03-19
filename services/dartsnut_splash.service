@@ -10,7 +10,7 @@ Conflicts=dartsnut_matrix.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/splash_matrix /boot/pixeldarts_logo.ppm
+ExecStart=/usr/local/bin/splash_matrix /boot/logo.ppm
 ExecStop=/usr/bin/pkill -9 -x splash_matrix
 TimeoutStopSec=5
 StandardOutput=null

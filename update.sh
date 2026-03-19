@@ -63,16 +63,16 @@ if [ -d "${SERVICES_DIR}" ]; then
         echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary update."
     fi
 
-    SPLASH_DEST_PPM="/boot/pixeldarts_logo.ppm"
+    SPLASH_DEST_PPM="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
-        SPLASH_DEST_PPM="/boot/firmware/pixeldarts_logo.ppm"
+        SPLASH_DEST_PPM="/boot/firmware/logo.ppm"
     fi
 
-    if [ -f "${SERVICES_DIR}/pixeldarts_logo.ppm" ]; then
-        echo "Updating pixeldarts_logo.ppm at ${SPLASH_DEST_PPM}"
-        sudo install -m 0644 "${SERVICES_DIR}/pixeldarts_logo.ppm" "${SPLASH_DEST_PPM}"
+    if [ -f "${SERVICES_DIR}/logo.ppm" ]; then
+        echo "Updating logo.ppm at ${SPLASH_DEST_PPM}"
+        sudo install -m 0644 "${SERVICES_DIR}/logo.ppm" "${SPLASH_DEST_PPM}"
     else
-        echo "Warning: pixeldarts_logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
+        echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
     fi
 
     DEVICE_JSON_SRC="${SERVICES_DIR}/device.json"
