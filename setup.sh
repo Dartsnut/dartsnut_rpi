@@ -114,13 +114,9 @@ sudo apt-get install -y libgirepository1.0-dev gir1.2-glib-2.0
 sudo apt-get install -y libdbus-1-dev
 sudo apt-get install -y libbluetooth-dev
 sudo apt-get install -y libgl1
-sudo apt-get install -y git
 sudo apt-get install -y xvfb
 sudo apt-get install -y libsdl2-dev
 sudo apt-get install -y libgpiod-dev gpiod
-sudo apt-get install -y cmake ninja-build libssl-dev libcurl4-openssl-dev zlib1g-dev
-sudo apt-get install -y libprotobuf-dev protobuf-compiler
-sudo apt-get install -y libgoogle-cloud-firestore-dev libgoogle-cloud-cpp-dev || true
 
 sudo python3 -m venv "${VENV_DIR}"
 
