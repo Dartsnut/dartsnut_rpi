@@ -26,6 +26,35 @@ _DEFAULT_BRIDGE_BIN = os.path.join(
 _client: Optional["_SyncClient"] = None
 _bridge_proc: Optional[subprocess.Popen] = None
 _bridge_lock = threading.Lock()
+_firestore_connected = False
+_firestore_connected_lock = threading.Lock()
+_connectivity_callback: Optional[Callable[[bool], None]] = None
+
+
+def _set_firestore_connected(connected: bool) -> None:
+    global _firestore_connected
+    notify = False
+    with _firestore_connected_lock:
+        prev = _firestore_connected
+        _firestore_connected = bool(connected)
+        notify = prev != _firestore_connected
+    if notify:
+        cb = _connectivity_callback
+        if cb is not None:
+            try:
+                cb(_firestore_connected)
+            except Exception:
+                pass
+
+
+def is_firestore_connected() -> bool:
+    with _firestore_connected_lock:
+        return _firestore_connected
+
+
+def set_firestore_connectivity_callback(callback: Optional[Callable[[bool], None]]) -> None:
+    global _connectivity_callback
+    _connectivity_callback = callback
 
 
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -80,10 +109,9 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         games = device_info.get("games", [])
 
-    return {
+    state = {
         "time_zone": device_info.get("time_zone", ""),
         "volume": volume,
-        "ip_address": device_info.get("ip_address", ""),
         "brightness": brightness,
         "games": games,
         "dim_window": dim_window,
@@ -93,6 +121,11 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         "device_info": device_meta,
         "firmware": firmware,
     }
+    # Avoid writing transient/invalid empty IP on startup.
+    raw_ip = str(device_info.get("ip_address", "")).strip()
+    if raw_ip and raw_ip != "0.0.0.0":
+        state["ip_address"] = raw_ip
+    return state
 
 
 def _parse_iso_ts(value: Any) -> Optional[datetime]:
@@ -280,11 +313,15 @@ class _SyncClient:
                                     self._reload_config()
                                 except Exception:
                                     pass
+                            elif kind == "bridge_health" and isinstance(payload, dict):
+                                state = str(payload.get("state", "")).strip().lower()
+                                _set_firestore_connected(state == "connected")
             except Exception:
                 pass
             finally:
                 with self._conn_lock:
                     self._conn = None
+                _set_firestore_connected(False)
 
         self._reader_thread = threading.Thread(target=_server, daemon=True)
         self._reader_thread.start()
@@ -453,6 +490,7 @@ def ensure_firestore_sync_running(
         print(f"Firestore sync starting (bridge: {executable_path})")
         initial_state = _build_initial_state(device_info)
         _client = _SyncClient(socket_path, reload_config, on_config_updated, initial_state)
+        _set_firestore_connected(False)
         _client.start_server()
 
         def _launch() -> None:
@@ -510,6 +548,7 @@ def restart_firestore_sync(
             print(f"Firestore sync: error while stopping existing bridge: {e}")
 
     _client = None
+    _set_firestore_connected(False)
     ensure_firestore_sync_running(device_info, reload_config, on_config_updated)
 
 
@@ -538,3 +577,4 @@ def stop_firestore_sync() -> None:
             print(f"Firestore sync: error while stopping bridge: {e}")
 
     _client = None
+    _set_firestore_connected(False)

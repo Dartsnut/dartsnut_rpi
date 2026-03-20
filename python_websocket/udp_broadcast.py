@@ -5,12 +5,6 @@ import json
 import os
 from typing import Optional
 
-from firestore_sync_bridge import is_firestore_bridge_active, notify_device_state_update
-
-
-_last_published_ip: Optional[str] = None
-_last_published_ssid: Optional[str] = None
-
 
 def normalize_ip(ip: str) -> Optional[str]:
     """
@@ -169,34 +163,6 @@ def udp_broadcast():
 
             ip = get_ip_address()
             device_info = get_device_info()
-
-            # Update Firestore devices/{ble_mac} when bridge is active.
-            try:
-                if is_firestore_bridge_active():
-                    updates: dict = {}
-
-                    # IP address: represent invalid/local IPs as blank in Firestore.
-                    normalized_ip = normalize_ip(ip)
-                    payload_ip = normalized_ip or ""
-                    global _last_published_ip
-                    if payload_ip != _last_published_ip:
-                        updates["ip_address"] = payload_ip
-                        _last_published_ip = payload_ip
-
-                    # SSID: fetch live from nmcli; mirror same \"blank when invalid\" convention.
-                    raw_ssid = get_current_ssid()
-                    normalized_ssid = normalize_ssid(raw_ssid)
-                    payload_ssid = normalized_ssid or ""
-                    global _last_published_ssid
-                    if payload_ssid != _last_published_ssid:
-                        updates["ssid"] = payload_ssid
-                        _last_published_ssid = payload_ssid
-
-                    if updates:
-                        notify_device_state_update(updates)
-            except Exception:
-                # Firestore updates are best-effort; don't break UDP broadcast loop.
-                pass
 
             message = json.dumps(
                 {

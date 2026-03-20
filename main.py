@@ -40,6 +40,12 @@ from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.device_operations import _parse_hhmm, forget_wifi
 from python_websocket.git_operations import get_version, perform_update
+from python_websocket.udp_broadcast import (
+    get_ip_address,
+    get_current_ssid,
+    normalize_ip,
+    normalize_ssid,
+)
 
 import assets
 from app_context import AppContext
@@ -64,6 +70,8 @@ try:
         start_firestore_sync_if_available,
         notify_device_state_update,
         restart_firestore_sync,
+        is_firestore_connected,
+        set_firestore_connectivity_callback,
         request_set_game_status,
         request_set_all_games_ready,
     )
@@ -75,6 +83,12 @@ except ImportError:
         return None
 
     def restart_firestore_sync(*args, **kwargs):
+        return None
+
+    def is_firestore_connected(*args, **kwargs):
+        return False
+
+    def set_firestore_connectivity_callback(*args, **kwargs):
         return None
 
 # -----------------------------------------------------------------------------
@@ -106,6 +120,7 @@ _has_seen_first_firestore_config = False
 # Wall-clock timestamp when this Python service started; used to treat older
 # Firestore status as stale while still honoring config changes.
 SERVICE_START_TIME = datetime.now(timezone.utc)
+_network_state_refresh_event = threading.Event()
 
 
 def _get_current_brightness_for_transition():
@@ -741,6 +756,7 @@ def check_connection_loop():
                 try:
                     di = get_device_info()
                     restart_firestore_sync(di or {}, reload_config, _apply_firestore_config)
+                    request_network_state_refresh()
                 except Exception as e:
                     print(f"Error restarting Firestore sync after connectivity established: {e}")
         except Exception as e:
@@ -748,6 +764,66 @@ def check_connection_loop():
             _app_ctx.wifi_connected = False
             _app_ctx.internet_connected = False
         time.sleep(10)
+
+
+def network_state_firestore_loop():
+    """
+    Poll current IP/SSID every 30s and only push changed values to Firestore.
+    Cache tracks successfully-published values so we resend after bridge restarts.
+    """
+    poll_interval_seconds = 30
+    last_published_ip = None
+    last_published_ssid = None
+
+    while True:
+        try:
+            if _network_state_refresh_event.is_set():
+                # Force next publish after startup/reconnect, even if values are unchanged.
+                last_published_ip = None
+                last_published_ssid = None
+                _network_state_refresh_event.clear()
+
+            if is_firestore_connected():
+                updates = {}
+
+                normalized_ip = normalize_ip(get_ip_address())
+                payload_ip = normalized_ip or ""
+                should_publish_ip = payload_ip != last_published_ip
+                # Avoid writing a transient empty IP on startup/reconnect before
+                # DHCP/network is fully ready. Once we have published any value,
+                # normal change-detection behavior resumes.
+                if last_published_ip is None and payload_ip == "":
+                    should_publish_ip = False
+                if should_publish_ip:
+                    updates["ip_address"] = payload_ip
+
+                normalized_ssid = normalize_ssid(get_current_ssid())
+                payload_ssid = normalized_ssid or ""
+                if payload_ssid != last_published_ssid:
+                    updates["ssid"] = payload_ssid
+
+                if updates:
+                    notify_device_state_update(updates)
+                    if "ip_address" in updates:
+                        last_published_ip = payload_ip
+                    if "ssid" in updates:
+                        last_published_ssid = payload_ssid
+        except Exception as e:
+            print(f"Error in network Firestore poller: {e}")
+
+        _network_state_refresh_event.wait(poll_interval_seconds)
+
+
+def request_network_state_refresh():
+    """
+    Trigger an immediate poll cycle and force a republish of IP/SSID on next run.
+    """
+    _network_state_refresh_event.set()
+
+
+def _on_firestore_connectivity_changed(connected: bool) -> None:
+    if connected:
+        request_network_state_refresh()
 
 
 # -----------------------------------------------------------------------------
@@ -799,6 +875,12 @@ websocket_thread = threading.Thread(
 websocket_thread.start()
 connection_thread = threading.Thread(target=check_connection_loop, daemon=True)
 connection_thread.start()
+network_firestore_thread = threading.Thread(
+    target=network_state_firestore_loop, daemon=True
+)
+network_firestore_thread.start()
+set_firestore_connectivity_callback(_on_firestore_connectivity_changed)
+request_network_state_refresh()
 
 try:
     start_firestore_sync_if_available(device_info or {}, reload_config, _apply_firestore_config)

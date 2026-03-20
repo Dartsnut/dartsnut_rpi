@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	fsclient "github.com/dartsnut/firestore_bridge/internal/firestore/client"
@@ -30,9 +31,10 @@ func Run(ctx context.Context, deviceID, socketPath string, fs *fsclient.Client) 
 
 	writer := bufio.NewWriter(conn)
 	reader := bufio.NewScanner(conn)
+	var writerMu sync.Mutex
 
 	// Send ready.
-	if err := sendJSON(writer, "ready", map[string]any{}); err != nil {
+	if err := sendJSONLocked(&writerMu, writer, "ready", map[string]any{}); err != nil {
 		fmt.Fprintln(os.Stderr, "bridge: failed to send ready:", err)
 		return err
 	}
@@ -70,6 +72,15 @@ func Run(ctx context.Context, deviceID, socketPath string, fs *fsclient.Client) 
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				continue
 			}
+			// Ensure newly created device documents always include
+			// device_info.id = deviceID (derived from BLE MAC).
+			deviceInfo, _ := payload["device_info"].(map[string]any)
+			if deviceInfo == nil {
+				deviceInfo = map[string]any{}
+			}
+			deviceInfo["id"] = deviceID
+			payload["device_info"] = deviceInfo
+
 			docPath := fmt.Sprintf("devices/%s", deviceID)
 			doc, err := fs.GetDocument(ctx, docPath)
 			if err != nil {
@@ -86,20 +97,30 @@ func Run(ctx context.Context, deviceID, socketPath string, fs *fsclient.Client) 
 				}
 			} else {
 				data := decodeFieldsToMap(doc.GetFields())
-				if err := sendJSON(writer, "config_initial", data); err != nil {
+				if err := sendJSONLocked(&writerMu, writer, "config_initial", data); err != nil {
 					fmt.Fprintln(os.Stderr, "bridge: failed to send config_initial:", err)
 				}
 			}
 			if !listenStarted {
 				listenStarted = true
+				if err := sendBridgeHealthLocked(&writerMu, writer, "connected", ""); err != nil {
+					fmt.Fprintln(os.Stderr, "bridge: failed to send bridge_health connected:", err)
+				}
 				go func() {
 					if err := fs.ListenDocument(ctx, docPath, func(d *firestorepb.Document) {
 						data := decodeFieldsToMap(d.GetFields())
-						if err := sendJSON(writer, "config", data); err != nil {
+						if err := sendJSONLocked(&writerMu, writer, "config", data); err != nil {
 							fmt.Fprintln(os.Stderr, "bridge: failed to send config:", err)
 						}
-					}); err != nil && !errors.Is(err, context.Canceled) {
-						fmt.Fprintln(os.Stderr, "bridge: ListenDocument error:", err)
+					}); err != nil {
+						reason := "listen_context_canceled"
+						if !errors.Is(err, context.Canceled) {
+							reason = "listen_error"
+							fmt.Fprintln(os.Stderr, "bridge: ListenDocument error:", err)
+						}
+						if herr := sendBridgeHealthLocked(&writerMu, writer, "disconnected", reason); herr != nil {
+							fmt.Fprintln(os.Stderr, "bridge: failed to send bridge_health disconnected:", herr)
+						}
 					}
 				}()
 			}
@@ -117,6 +138,20 @@ func Run(ctx context.Context, deviceID, socketPath string, fs *fsclient.Client) 
 			// ignore unknown kinds
 		}
 	}
+}
+
+func sendJSONLocked(mu *sync.Mutex, w *bufio.Writer, kind string, payload any) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return sendJSON(w, kind, payload)
+}
+
+func sendBridgeHealthLocked(mu *sync.Mutex, w *bufio.Writer, state, reason string) error {
+	payload := map[string]any{"state": state}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+	return sendJSONLocked(mu, w, "bridge_health", payload)
 }
 
 func sendJSON(w *bufio.Writer, kind string, payload any) error {
