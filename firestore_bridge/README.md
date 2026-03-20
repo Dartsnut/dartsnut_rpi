@@ -29,20 +29,20 @@ The executable is written to `bridge` (Linux arm64 when built on the Pi).
 
 ## Protocol
 
-- Python listens on the Unix socket and spawns the bridge with `--device-id=<ble_suffix>` and `--socket-path=<path>`.
+- Python listens on the Unix socket and spawns the bridge with `--socket-path=<path>`.
 - Bridge connects and sends `{"kind":"ready","payload":{}}`.
 - Python sends `{"kind":"initial_state","payload":<full device state>}`.
 - Bridge checks Firestore `devices/{deviceId}`: if the doc does not exist, it creates it with the payload; if it exists, it sends the current doc as `{"kind":"config_initial","payload":<data>}`. It then subscribes with a Firestore `Listen` stream and sends `{"kind":"config","payload":<data>}` on every change.
 - Python sends `{"kind":"device_state","payload":<partial state>}` when brightness/volume/etc. change; the bridge merges into the Firestore document via a partial `Commit` update.
 
-In current versions, Python derives `deviceId` from the full BLE adapter MAC address (e.g. `aa:bb:cc:dd:ee:ff`) and passes that as `--device-id`, so Firestore documents are keyed by the BLE MAC.
+In current versions, the Go bridge derives `deviceId` from the local BLE adapter MAC address (e.g. `aa:bb:cc:dd:ee:ff`), so Firestore documents are keyed by the BLE MAC.
 
 ## Development
 
 Run the Go bridge directly (no compilation step beyond `go build`):
 
 ```bash
-go run ./cmd/bridge --device-id=1234 --socket-path=/tmp/dartsnut-firestore-sync.sock
+go run ./cmd/bridge --socket-path=/tmp/dartsnut-firestore-sync.sock
 ```
 
 Ensure Python has started first and is listening on the socket.

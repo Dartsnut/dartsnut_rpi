@@ -1,7 +1,7 @@
 """
 Optional Firestore sync bridge: spawns the Go Firestore bridge executable and
-talks to it over a Unix socket. Python derives deviceId from BLE, sends initial
-state and partial updates; receives config pushes and applies them via the
+talks to it over a Unix socket. The bridge derives deviceId from local BLE,
+sends initial state and partial updates; receives config pushes and applies them via the
 provided callbacks. If the module is missing or the executable is not available,
 sync is skipped (WS + BLE only).
 """
@@ -15,11 +15,6 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-try:
-    from bluezero import adapter as _ble_adapter  # type: ignore
-except Exception:
-    _ble_adapter = None
-
 
 SOCKET_PATH = "/tmp/dartsnut-firestore-sync.sock"
 _DEFAULT_BRIDGE_BIN = os.path.join(
@@ -31,39 +26,6 @@ _DEFAULT_BRIDGE_BIN = os.path.join(
 _client: Optional["_SyncClient"] = None
 _bridge_proc: Optional[subprocess.Popen] = None
 _bridge_lock = threading.Lock()
-
-
-def _normalize_mac(adapter_address: str) -> str:
-    """
-    Normalize a MAC address to lowercase colon-separated form
-    (e.g. 'AA:BB:CC:DD:EE:FF' -> 'aa:bb:cc:dd:ee:ff').
-    """
-    try:
-        s = adapter_address.strip().lower()
-        # If already colon-separated, just normalize case/whitespace
-        if ":" in s:
-            return s
-        # Fallback: insert colons every two hex chars
-        if len(s) == 12:
-            return ":".join(s[i : i + 2] for i in range(0, 12, 2))
-    except Exception:
-        pass
-    return ""
-
-
-def _derive_device_id_from_ble() -> Optional[str]:
-    """Derive device ID from full BLE MAC for Firestore device document id."""
-    if _ble_adapter is None:
-        return None
-    try:
-        adapters = list(_ble_adapter.Adapter.available())
-        if not adapters:
-            return None
-        adapter_address = adapters[0].address
-        normalized = _normalize_mac(adapter_address)
-        return normalized or adapter_address
-    except Exception:
-        return None
 
 
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -348,8 +310,8 @@ def start_firestore_sync_if_available(
     """
     Start Firestore sync by launching the Go bridge executable and talking over a Unix socket.
 
-    - Derives deviceId from BLE MAC; passes it to the bridge.
-    - Python listens on SOCKET_PATH; spawns the bridge with --device-id and --socket-path.
+    - Bridge derives deviceId from local BLE MAC.
+    - Python listens on SOCKET_PATH; spawns the bridge with --socket-path.
     - Sends initial_state (full device + pages config); receives config pushes and applies via
       on_config_updated + reload_config. Partial local updates go out via notify_device_state_update.
     """
@@ -479,11 +441,6 @@ def ensure_firestore_sync_running(
         if _bridge_proc is not None and _bridge_proc.poll() is None:
             return
 
-        device_id = _derive_device_id_from_ble()
-        if not device_id:
-            print("Firestore sync skipped: could not derive device ID from BLE (bluezero or no adapter)")
-            return
-
         executable_path = os.environ.get("DARTSNUT_FIRESTORE_BRIDGE", _DEFAULT_BRIDGE_BIN)
         if not os.path.isfile(executable_path):
             print(f"Firestore sync skipped: bridge binary not found at {executable_path}")
@@ -493,7 +450,7 @@ def ensure_firestore_sync_running(
             return
 
         socket_path = os.environ.get("DARTSNUT_FIRESTORE_SOCKET", SOCKET_PATH)
-        print(f"Firestore sync starting for device id {device_id} (bridge: {executable_path})")
+        print(f"Firestore sync starting (bridge: {executable_path})")
         initial_state = _build_initial_state(device_info)
         _client = _SyncClient(socket_path, reload_config, on_config_updated, initial_state)
         _client.start_server()
@@ -502,7 +459,6 @@ def ensure_firestore_sync_running(
             global _bridge_proc
             args = [
                 executable_path,
-                f"--device-id={device_id}",
                 f"--socket-path={socket_path}",
             ]
             try:

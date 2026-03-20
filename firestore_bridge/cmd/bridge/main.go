@@ -11,19 +11,24 @@ import (
 	"github.com/dartsnut/firestore_bridge/internal/auth/firebaseauth"
 	"github.com/dartsnut/firestore_bridge/internal/bridge"
 	"github.com/dartsnut/firestore_bridge/internal/config"
+	"github.com/dartsnut/firestore_bridge/internal/deviceid"
 	fsclient "github.com/dartsnut/firestore_bridge/internal/firestore/client"
 )
 
 func main() {
-	var deviceID string
 	var socketPath string
 
-	flag.StringVar(&deviceID, "device-id", "", "device identifier (e.g. BLE MAC)")
 	flag.StringVar(&socketPath, "socket-path", "", "Unix domain socket path")
 	flag.Parse()
 
-	if deviceID == "" || socketPath == "" {
-		fmt.Fprintln(os.Stderr, "Usage: bridge --device-id=<id> --socket-path=<path>")
+	if socketPath == "" {
+		fmt.Fprintln(os.Stderr, "Usage: bridge --socket-path=<path>")
+		os.Exit(1)
+	}
+
+	deviceID, err := deviceid.Resolve()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to determine local BLE MAC:", err)
 		os.Exit(1)
 	}
 
