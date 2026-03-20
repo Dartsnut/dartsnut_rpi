@@ -51,21 +51,27 @@ install_splash_assets_if_present() {
         echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo copy."
     fi
 
-    local device_json_src="${SERVICES_DIR}/device.json"
     local device_json_dest="/boot/device.json"
-    if [ -f "${device_json_src}" ]; then
-        if [ ! -f "${device_json_dest}" ]; then
-            echo "Copying device.json to ${device_json_dest}"
-            sudo install -m 0644 "${device_json_src}" "${device_json_dest}"
-            if [ -f "${splash_dest_ppm}" ]; then
-                sudo chown --reference="${splash_dest_ppm}" "${device_json_dest}"
-                sudo chmod --reference="${splash_dest_ppm}" "${device_json_dest}"
+    if [ ! -f "${device_json_dest}" ]; then
+        local repo_device_json="${REPO_DIR}/device.json"
+        if [ -f "${repo_device_json}" ]; then
+            local model
+            model=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "${repo_device_json}" | head -1 | sed 's/.*"model"[[:space:]]*:[[:space:]]*"//;s/"//')
+            if [ -n "${model}" ]; then
+                echo "Creating partial device.json at ${device_json_dest} with model=${model}"
+                echo "{\"model\": \"${model}\", \"brightness\": \"100\"}" | sudo tee "${device_json_dest}" > /dev/null
+                if [ -f "${splash_dest_ppm}" ]; then
+                    sudo chown --reference="${splash_dest_ppm}" "${device_json_dest}"
+                    sudo chmod --reference="${splash_dest_ppm}" "${device_json_dest}"
+                fi
+            else
+                echo "Warning: could not read model from ${repo_device_json}; skipping /boot/device.json creation."
             fi
         else
-            echo "device.json already present at ${device_json_dest}"
+            echo "Warning: ${repo_device_json} not found; skipping /boot/device.json creation."
         fi
     else
-        echo "Warning: device.json not found in ${SERVICES_DIR}; skipping device.json copy."
+        echo "device.json already present at ${device_json_dest}"
     fi
 }
 
