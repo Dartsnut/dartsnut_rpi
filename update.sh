@@ -75,21 +75,26 @@ if [ -d "${SERVICES_DIR}" ]; then
         echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
     fi
 
-    DEVICE_JSON_SRC="${SERVICES_DIR}/device.json"
     DEVICE_JSON_DEST="/boot/device.json"
-    if [ -f "${DEVICE_JSON_SRC}" ]; then
-        if [ ! -f "${DEVICE_JSON_DEST}" ]; then
-            echo "Copying device.json to ${DEVICE_JSON_DEST}"
-            sudo install -m 0644 "${DEVICE_JSON_SRC}" "${DEVICE_JSON_DEST}"
-            if [ -f "${SPLASH_DEST_PPM}" ]; then
-                sudo chown --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
-                sudo chmod --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+    if [ ! -f "${DEVICE_JSON_DEST}" ]; then
+        REPO_DEVICE_JSON="${REPO_DIR}/device.json"
+        if [ -f "${REPO_DEVICE_JSON}" ]; then
+            MODEL=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "${REPO_DEVICE_JSON}" | head -1 | sed 's/.*"model"[[:space:]]*:[[:space:]]*"//;s/"//')
+            if [ -n "${MODEL}" ]; then
+                echo "Creating partial device.json at ${DEVICE_JSON_DEST} with model=${MODEL}"
+                echo "{\"model\": \"${MODEL}\", \"brightness\": \"100\"}" | sudo tee "${DEVICE_JSON_DEST}" > /dev/null
+                if [ -f "${SPLASH_DEST_PPM}" ]; then
+                    sudo chown --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+                    sudo chmod --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
+                fi
+            else
+                echo "Warning: could not read model from ${REPO_DEVICE_JSON}; skipping /boot/device.json creation."
             fi
         else
-            echo "device.json already present at ${DEVICE_JSON_DEST}"
+            echo "Warning: ${REPO_DEVICE_JSON} not found; skipping /boot/device.json creation."
         fi
     else
-        echo "Warning: device.json not found in ${SERVICES_DIR}; skipping device.json copy."
+        echo "device.json already present at ${DEVICE_JSON_DEST}"
     fi
 
     if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
