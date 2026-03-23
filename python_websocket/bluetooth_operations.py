@@ -2,11 +2,77 @@ import bluetooth
 import os
 import subprocess
 import time
+from datetime import datetime, timezone
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
     handle_bluetooth_error
 )
+
+
+def _discover_filtered_devices():
+    """
+    Discover nearby Bluetooth devices and keep likely controller/audio devices.
+    Returns a list of {"address": ..., "name": ...} objects.
+    """
+    audio_keywords = ["headphone", "speaker", "audio", "controller"]
+    nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
+
+    filtered_devices = []
+    seen = set()
+    for addr, name in nearby_devices:
+        if not addr or addr in seen:
+            continue
+        lower_name = name.lower() if isinstance(name, str) else ""
+        if any(keyword in lower_name for keyword in audio_keywords):
+            filtered_devices.append({"address": addr, "name": name or ""})
+            seen.add(addr)
+    return filtered_devices
+
+
+def get_connection_status(address):
+    """
+    Return Bluetooth connection status for a device address:
+    - "connected"
+    - "disconnected"
+    """
+    if not address:
+        return "disconnected"
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "info", str(address)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and "connected: yes" in result.stdout.lower():
+            return "connected"
+    except Exception:
+        pass
+    return "disconnected"
+
+
+def build_firestore_bluetooth_list():
+    """
+    Build Firestore bluetooth.list payload entries:
+    {address, name, status}
+    """
+    devices = _discover_filtered_devices()
+    payload = []
+    for device in devices:
+        address = device.get("address", "")
+        payload.append(
+            {
+                "address": address,
+                "name": device.get("name", "") or "",
+                "status": get_connection_status(address),
+            }
+        )
+    return payload
+
+
+def current_utc_iso_timestamp():
+    return datetime.now(timezone.utc).isoformat()
 
 def scan_bluetooth_devices():
     """
@@ -14,19 +80,7 @@ def scan_bluetooth_devices():
     that are likely controllers, headphones, or Bluetooth speakers.
     """
     try:
-        # Common keywords for audio devices and controllers
-        audio_keywords = ['headphone', 'speaker', 'audio', 'controller']
-
-        nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
-        
-        filtered_devices = []
-
-        for addr, name in nearby_devices:
-            lower_name = name.lower() if name else ""
-            if any(keyword in lower_name for keyword in audio_keywords):
-                filtered_devices.append({'address': addr, 'name': name})
-
-        return {"action": "bluetooth_scan", "devices": filtered_devices}
+        return {"action": "bluetooth_scan", "devices": _discover_filtered_devices()}
     except Exception as e:
         return handle_exception("bluetooth_scan", e, "Bluetooth scan failed")
 

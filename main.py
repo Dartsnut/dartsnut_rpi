@@ -40,6 +40,11 @@ from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.device_operations import _parse_hhmm, forget_wifi
 from python_websocket.git_operations import get_version, perform_update
+from python_websocket.bluetooth_operations import (
+    build_firestore_bluetooth_list,
+    current_utc_iso_timestamp,
+)
+from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
 from python_websocket.udp_broadcast import (
     get_ip_address,
     get_current_ssid,
@@ -123,6 +128,11 @@ _awaiting_games_ready_confirmation = False
 _startup_games_ready_confirmed_at = None
 _startup_filter_playing_until_newer_update = False
 _network_state_refresh_event = threading.Event()
+_firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
+    scan_builder=build_firestore_bluetooth_list,
+    timestamp_factory=current_utc_iso_timestamp,
+    publish_update=notify_device_state_update,
+)
 
 
 def _get_current_brightness_for_transition():
@@ -352,6 +362,15 @@ def _apply_firestore_config(config: dict) -> None:
             service.set_pages(pages)
     except Exception as e:
         print(f"Error applying Firestore pages config: {e}")
+
+    # Bluetooth scan trigger from Firestore:
+    # bluetooth.is_scan == true -> run scan, publish list+timestamp, reset is_scan false.
+    try:
+        bluetooth_cfg = config.get("bluetooth")
+        if isinstance(bluetooth_cfg, dict) and bool(bluetooth_cfg.get("is_scan")):
+            _firestore_bluetooth_scan_controller.start_scan_if_requested()
+    except Exception as e:
+        print(f"Error handling Firestore bluetooth scan config: {e}")
 
     # Brightness / volume / time zone / dim window / device name / games
     try:

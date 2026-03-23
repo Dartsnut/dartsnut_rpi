@@ -29,6 +29,8 @@ _bridge_lock = threading.Lock()
 _firestore_connected = False
 _firestore_connected_lock = threading.Lock()
 _connectivity_callback: Optional[Callable[[bool], None]] = None
+_WRITE_DEBOUNCE_SECONDS = 0.20
+_ECHO_FINGERPRINT_TTL_SECONDS = 5.0
 
 
 def _set_firestore_connected(connected: bool) -> None:
@@ -143,6 +145,130 @@ def _parse_iso_ts(value: Any) -> Optional[datetime]:
     except Exception:
         return None
     return None
+
+
+def _normalize_payload(value: Any) -> Any:
+    """Convert payload values to a canonical structure for stable comparisons."""
+    if isinstance(value, dict):
+        return {str(k): _normalize_payload(v) for k, v in sorted(value.items())}
+    if isinstance(value, list):
+        return [_normalize_payload(v) for v in value]
+    if isinstance(value, tuple):
+        return [_normalize_payload(v) for v in value]
+    if isinstance(value, (bool, int, float, str)) or value is None:
+        return value
+    return str(value)
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(_normalize_payload(value), sort_keys=True, separators=(",", ":"))
+
+
+class _DeviceStateWriteCache:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_sent_per_key: Dict[str, str] = {}
+        self._pending: Dict[str, Any] = {}
+        self._flush_timer: Optional[threading.Timer] = None
+        self._flush_in_progress = False
+        self._recent_payload_fingerprints: Dict[str, float] = {}
+        self._stats = {"sent": 0, "skipped": 0, "coalesced": 0}
+
+    def queue_update(
+        self,
+        payload: Dict[str, Any],
+        sender: Callable[[Dict[str, Any]], bool],
+        debounce_seconds: float = _WRITE_DEBOUNCE_SECONDS,
+    ) -> bool:
+        if not isinstance(payload, dict) or not payload:
+            return False
+
+        changed: Dict[str, Any] = {}
+        with self._lock:
+            for key, value in payload.items():
+                key_name = str(key)
+                new_canonical = _canonical_json(value)
+                prev_canonical = self._last_sent_per_key.get(key_name)
+                pending_canonical = (
+                    _canonical_json(self._pending[key_name])
+                    if key_name in self._pending
+                    else None
+                )
+                if new_canonical == prev_canonical or new_canonical == pending_canonical:
+                    continue
+                changed[key_name] = value
+
+            if not changed:
+                self._stats["skipped"] += 1
+                return False
+
+            for key, value in changed.items():
+                if key in self._pending:
+                    self._stats["coalesced"] += 1
+                self._pending[key] = value
+
+            if self._flush_timer is None:
+                self._flush_timer = threading.Timer(
+                    debounce_seconds, self._flush_pending, args=(sender,)
+                )
+                self._flush_timer.daemon = True
+                self._flush_timer.start()
+        return True
+
+    def _flush_pending(self, sender: Callable[[Dict[str, Any]], bool]) -> None:
+        with self._lock:
+            self._flush_timer = None
+            if self._flush_in_progress or not self._pending:
+                return
+            self._flush_in_progress = True
+            payload = dict(self._pending)
+            self._pending.clear()
+
+        sent_ok = False
+        try:
+            sent_ok = bool(sender(payload))
+        finally:
+            with self._lock:
+                if sent_ok:
+                    now = time.time()
+                    for key, value in payload.items():
+                        self._last_sent_per_key[key] = _canonical_json(value)
+                    self._recent_payload_fingerprints[_canonical_json(payload)] = now
+                    self._prune_recent_fingerprints_locked(now)
+                    self._stats["sent"] += 1
+                self._flush_in_progress = False
+                if self._pending and self._flush_timer is None:
+                    self._flush_timer = threading.Timer(
+                        _WRITE_DEBOUNCE_SECONDS, self._flush_pending, args=(sender,)
+                    )
+                    self._flush_timer.daemon = True
+                    self._flush_timer.start()
+
+    def _prune_recent_fingerprints_locked(self, now: Optional[float] = None) -> None:
+        now = now if now is not None else time.time()
+        cutoff = now - _ECHO_FINGERPRINT_TTL_SECONDS
+        stale = [
+            fp
+            for fp, ts in self._recent_payload_fingerprints.items()
+            if ts < cutoff
+        ]
+        for fp in stale:
+            self._recent_payload_fingerprints.pop(fp, None)
+
+    def is_probable_echo_payload(self, payload: Dict[str, Any]) -> bool:
+        if not isinstance(payload, dict) or not payload:
+            return False
+        fingerprint = _canonical_json(payload)
+        with self._lock:
+            self._prune_recent_fingerprints_locked()
+            return fingerprint in self._recent_payload_fingerprints
+
+    def stats(self) -> Dict[str, int]:
+        with self._lock:
+            return dict(self._stats)
+
+
+_WRITE_CACHE = _DeviceStateWriteCache()
 
 
 def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
@@ -294,6 +420,10 @@ class _SyncClient:
                                 payload, dict
                             ):
                                 cfg = payload
+                                # Listener echoes for recent self-originated writes are
+                                # often no-ops locally and can trigger secondary writes.
+                                if kind == "config" and _WRITE_CACHE.is_probable_echo_payload(cfg):
+                                    continue
                                 if kind == "config_initial":
                                     try:
                                         cfg = _merge_remote_and_local(payload)
@@ -360,9 +490,19 @@ def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
     if not isinstance(partial_state, dict) or not partial_state:
         return
     global _client
-    if _client is None:
-        return
-    _client.send_state(partial_state, full=False)
+
+    def _sender(payload: Dict[str, Any]) -> bool:
+        with _bridge_lock:
+            client = _client
+        if client is None:
+            return False
+        try:
+            client.send_state(payload, full=False)
+            return True
+        except Exception:
+            return False
+
+    _WRITE_CACHE.queue_update(partial_state, _sender)
 
 
 def is_firestore_bridge_active() -> bool:
