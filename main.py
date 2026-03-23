@@ -14,6 +14,24 @@ import glob
 import urllib.request
 from datetime import datetime, time as dt_time
 
+# Start the RGB matrix explicitly when the Python service starts.
+# We keep `dartsnut_matrix.service` from auto-starting at boot so the
+# splash can appear as early as possible, and then `Conflicts=` will
+# stop the splash as soon as the matrix is up.
+subprocess.run(["systemctl", "start", "dartsnut_matrix.service"], check=False)
+
+# Wait briefly for the matrix to initialize its shared memory.
+# `Dartsnut()` will exit if shared memory isn't available.
+_matrix_ready_deadline = time.time() + 15
+while time.time() < _matrix_ready_deadline:
+    if subprocess.run(
+        ["systemctl", "is-active", "--quiet", "dartsnut_matrix.service"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0 and os.path.exists("/dev/shm/pdishm") and os.path.exists("/dev/shm/pdoshm"):
+        break
+    time.sleep(0.1)
+
 from PIL import Image
 from pydartsnut import Dartsnut
 

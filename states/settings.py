@@ -7,6 +7,7 @@ import time
 from PIL import Image, ImageDraw
 
 from app_context import AppContext
+from network_utils import get_wifi_ipv4
 from states.base import BaseState
 
 # Rate limit WiFi RSSI: refresh every ~5 seconds
@@ -43,12 +44,12 @@ def _rssi_to_color(rssi):
     """Map RSSI (int or None) to (R, G, B).
 
     - None: no WiFi RSSI available / not connected -> gray
-    - rssi >= -60: strong/acceptable WiFi -> green
+    - rssi >= -65: strong/acceptable WiFi -> green
     - otherwise: weak/poor WiFi -> red
     """
     if rssi is None:
         return (128, 128, 128)
-    if rssi >= -60:
+    if rssi >= -65:
         return (0, 255, 0)
     return (255, 0, 0)
 
@@ -167,19 +168,7 @@ class SettingsState(BaseState):
         except Exception:
             brightness = 50
             volume = 50
-        try:
-            ip_address = (
-                subprocess.run(
-                    ["hostname", "-I"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                .stdout.strip()
-                .split()[0]
-            )
-        except Exception:
-            ip_address = "0.0.0.0"
+        ip_address = get_wifi_ipv4()
         try:
             version = (
                 subprocess.run(

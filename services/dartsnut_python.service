@@ -1,0 +1,13 @@
+[Unit]
+Description=Dartsnut Python Service
+After=bluetooth.target network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rpi/dartsnut_rpi
+ExecStart=/home/rpi/dartsnut_rpi/venv0/bin/python /home/rpi/dartsnut_rpi/main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
