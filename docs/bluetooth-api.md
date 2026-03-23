@@ -1,3 +1,8 @@
+---
+title: Bluetooth API (BLE UART)
+nav_order: 2
+---
+
 ## Bluetooth API (BLE UART)
 
 This document describes how mobile apps can communicate with a Dartsnut device (PixelDart / PixelBoard) over Bluetooth Low Energy (BLE) using a simple JSON‑over‑UART protocol.

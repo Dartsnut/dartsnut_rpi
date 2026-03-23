@@ -1,3 +1,8 @@
+---
+title: Deployment Guide
+nav_order: 1
+---
+
 # Dartsnut PixelDart & PixelBoard Raspberry Pi Deployment Guide
 
 This guide explains how to deploy the Dartsnut PixelDart and PixelBoard runtime environment on a Raspberry Pi.

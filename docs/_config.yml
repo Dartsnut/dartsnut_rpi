@@ -1,0 +1,16 @@
+# Jekyll config for GitHub Pages (docs/ as source)
+# Theme: Just the Docs – sidebar nav, search, table-of-contents
+title: Dartsnut RPi Docs
+description: PixelDart & PixelBoard Raspberry Pi deployment and API docs
+remote_theme: just-the-docs/just-the-docs
+
+markdown: kramdown
+
+# Plugins (GitHub Pages supports these)
+plugins:
+  - jekyll-remote-theme
+
+# Optional: repo link in header
+aux_links:
+  "Repository":
+    - "https://github.com/Dartsnut/dartsnut_rpi"
