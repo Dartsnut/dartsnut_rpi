@@ -74,6 +74,7 @@ wifi_disconnect_icon = Image.open("./wifi_disconnect_icon.png")
 wifi_icon = Image.open("./wifi.png")
 internet_disconnect_icon = Image.open("./internet_disconnect_icon.png")
 game_select_image = Image.open("./game_sel.png")
+qrcode_image = Image.open("./qrcode.png").convert("RGB")
 
 # Fonts
 font8 = ImageFont.load("./dartsnut-6X8.pil")

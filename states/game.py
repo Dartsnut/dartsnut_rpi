@@ -16,8 +16,9 @@ class GameSelectState(BaseState):
 
     def update(self, ctx: AppContext) -> None:
         if len(ctx.game_list) == 0:
-            from states.menu import MenuState
-            ctx.transition_to(MenuState())
+            # Mirror the default empty-page experience by showing the QR code
+            # when no games are installed.
+            ctx.display.update_frame_buffer(ctx.assets.qrcode_image)
             return
         if time.time() - ctx.page_tick > 5:
             ctx.game_preview_index += 1
