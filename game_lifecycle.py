@@ -15,25 +15,34 @@ import assets
 from PIL import Image
 
 
+def ensure_game_downloaded(gameid: str) -> bool:
+    """Ensure a game exists under ./apps/<gameid>; download it if missing."""
+    game_path = os.path.join(os.getcwd(), "apps", gameid)
+    if os.path.isdir(game_path):
+        return True
+    try:
+        response = requests.get(
+            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}"
+        )
+        if response.status_code == 200:
+            data = response.json().get("data")
+            if data:
+                u = data.get("game_download_url")
+                m = data.get("game_download_md5")
+                if u and m:
+                    download_app(u, m)
+        else:
+            print(f"Failed to get download info for game {gameid}: {response.status_code}")
+    except Exception as e:
+        print(f"Error fetching game download info: {e}")
+    return os.path.isdir(game_path)
+
+
 def start_game_process(gameid: str) -> dict:
     """Start game process and return game dict (process, shm, game_id, launched, pico8_first_frame_seen) or None."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     if not os.path.isdir(game_path):
-        try:
-            response = requests.get(
-                f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}"
-            )
-            if response.status_code == 200:
-                data = response.json().get("data")
-                if data:
-                    u = data.get("game_download_url")
-                    m = data.get("game_download_md5")
-                    if u and m:
-                        download_app(u, m)
-            else:
-                print(f"Failed to get download info for game {gameid}: {response.status_code}")
-        except Exception as e:
-            print(f"Error fetching game download info: {e}")
+        ensure_game_downloaded(gameid)
     if not os.path.isdir(game_path):
         return None
     shm_name = "game_shm"

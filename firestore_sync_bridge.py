@@ -433,9 +433,13 @@ def request_set_game_status(game_id: str, status: str) -> None:
         from game_lifecycle import get_games_summary
 
         games = get_games_summary()
+        found = False
         for g in games:
             if isinstance(g, dict) and g.get("id") == game_id:
                 g["status"] = status
+                found = True
+        if not found:
+            games.append({"id": game_id, "version": "", "status": status})
         notify_device_state_update({"games": games})
     except Exception as e:
         print(f"Firestore bridge: failed to request game status update: {e}")

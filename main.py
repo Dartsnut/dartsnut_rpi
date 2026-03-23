@@ -13,7 +13,7 @@ import threading
 import time
 import glob
 import urllib.request
-from datetime import datetime, time as dt_time, timezone
+from datetime import datetime, time as dt_time
 
 # Start the RGB matrix explicitly when the Python service starts.
 # We keep `dartsnut_matrix.service` from auto-starting at boot so the
@@ -59,7 +59,9 @@ from game_lifecycle import (
     load_game_list,
     start_game_process,
     term_game_process,
+    ensure_game_downloaded,
 )
+from game_firestore_sync import handle_incoming_game_status
 from machine_state_service import (
     init_machine_state_service,
     get_machine_state_service,
@@ -113,13 +115,11 @@ BRIGHTNESS_TRANSITION_DURATION = 1.0
 
 _firmware_update_in_progress = False
 _startup_firmware_version = None
-# Track whether we've already applied at least one Firestore config in this
-# process. We use this to avoid auto-starting games from any stale \"playing\"
-# status present in the very first config payload on startup.
-_has_seen_first_firestore_config = False
-# Wall-clock timestamp when this Python service started; used to treat older
-# Firestore status as stale while still honoring config changes.
-SERVICE_START_TIME = datetime.now(timezone.utc)
+# Startup stale window for game commands:
+# 1) reset all games to ready in Firestore
+# 2) wait until Firestore config confirms all games are ready
+# 3) only then apply incoming game commands
+_awaiting_games_ready_confirmation = False
 _network_state_refresh_event = threading.Event()
 
 
@@ -295,8 +295,21 @@ ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
 ctx.reset_device = lambda: forget_wifi()
+ctx.set_game_status = request_set_game_status
 
 _app_ctx = ctx
+
+
+def _are_all_firestore_games_ready(games_cfg) -> bool:
+    if not isinstance(games_cfg, list):
+        return False
+    for g in games_cfg:
+        if not isinstance(g, dict):
+            continue
+        status = str(g.get("status", "")).strip().lower()
+        if status != "ready":
+            return False
+    return True
 
 
 def _apply_firestore_config(config: dict) -> None:
@@ -309,7 +322,7 @@ def _apply_firestore_config(config: dict) -> None:
     if not isinstance(config, dict):
         return
 
-    global _has_seen_first_firestore_config
+    global _awaiting_games_ready_confirmation
 
     service = get_machine_state_service()
     if service is None:
@@ -364,56 +377,74 @@ def _apply_firestore_config(config: dict) -> None:
         if isinstance(device_info, dict) and "name" in device_info:
             service.set_device_name(device_info.get("name", ""))
 
-        # Games: if any incoming game entry has status "playing", request that
-        # game be launched via the same mechanism used by the websocket layer.
+        # Games: handle status commands from Firestore.
+        # - "download": set "downloading", fetch game locally, then set "ready"
+        # - "playing": ensure game exists (download if needed), then launch
+        #              through the same mechanism used by the websocket layer.
         #
-        # To avoid auto-launching a game from stale Firestore state on startup,
-        # we ignore the games list the first time this function is called in a
-        # given process; subsequent updates (e.g. from a UI) can trigger start.
+        # During startup, wait for confirmation that the ready-reset has landed
+        # before acting on incoming game commands.
         games_cfg = config.get("games")
         if isinstance(games_cfg, list):
-            # Treat remote game status as stale if the document timestamp is
-            # older than when this service instance started. This prevents
-            # older \"playing\" flags from auto-launching games on boot while
-            # still allowing newer remote status changes.
-            remote_ts_str = config.get("device_updated_at") or config.get("updated_at")
-            remote_ts = None
-            try:
-                if isinstance(remote_ts_str, str) and remote_ts_str:
-                    s = remote_ts_str.strip()
-                    if s.endswith("Z"):
-                        s = s[:-1]
-                    remote_ts = datetime.fromisoformat(s)
-            except Exception:
-                remote_ts = None
-
-            is_stale_status = remote_ts is not None and remote_ts < SERVICE_START_TIME
-
-            if is_stale_status:
-                # Still mark that we've seen an initial config so that any later,
-                # fresher updates can trigger game launches if desired.
-                if not _has_seen_first_firestore_config:
-                    _has_seen_first_firestore_config = True
-            else:
-                if not _has_seen_first_firestore_config:
-                    _has_seen_first_firestore_config = True
+            if _awaiting_games_ready_confirmation:
+                if _are_all_firestore_games_ready(games_cfg):
+                    _awaiting_games_ready_confirmation = False
+                    print("Firestore game reset confirmed; enabling game command handling")
                 else:
-                    playing_game_id = None
-                    for g in games_cfg:
-                        if not isinstance(g, dict):
-                            continue
-                        if g.get("status") == "playing" and g.get("id"):
-                            playing_game_id = str(g["id"])
-                            break
-                    if playing_game_id:
-                        # Only trigger a start if this is a new request (different from
-                        # the currently running game).
-                        current_id = None
-                        if ctx.game and isinstance(ctx.game, dict):
-                            current_id = ctx.game.get("game_id")
-                        if current_id != playing_game_id:
-                            ctx.start_game = True
-                            ctx.game_id = playing_game_id
+                    return
+
+            for g in games_cfg:
+                if not isinstance(g, dict):
+                    continue
+                game_id = g.get("id")
+                status = str(g.get("status", "")).strip().lower()
+                if not game_id:
+                    continue
+                game_id = str(game_id)
+
+                def _current_game_id() -> str:
+                    if ctx.game and isinstance(ctx.game, dict):
+                        return str(ctx.game.get("game_id") or "")
+                    return ""
+
+                def _game_exists(gid: str) -> bool:
+                    return os.path.isdir(os.path.join(os.getcwd(), "apps", gid))
+
+                def _set_status(gid: str, next_status: str) -> None:
+                    try:
+                        request_set_game_status(gid, next_status)
+                    except Exception as e:
+                        print(
+                            f"Error updating Firestore game status to {next_status} for {gid}: {e}"
+                        )
+
+                def _request_launch(gid: str) -> None:
+                    if _current_game_id() != gid:
+                        ctx.start_game = True
+                        ctx.game_id = gid
+
+                def _terminate_running_game(gid: str) -> None:
+                    # Remote "ready" for the same currently-running game means
+                    # we should stop the process and leave game mode.
+                    if ctx.game and isinstance(ctx.game, dict):
+                        running_id = str(ctx.game.get("game_id") or "")
+                        if running_id == gid:
+                            term_game_process(ctx.game)
+                            ctx.game = None
+                            ctx.reload_conf = True
+
+                handle_incoming_game_status(
+                    game_id,
+                    status,
+                    current_game_id=_current_game_id(),
+                    game_exists=_game_exists,
+                    ensure_game_downloaded=ensure_game_downloaded,
+                    set_game_status=_set_status,
+                    request_launch=_request_launch,
+                    terminate_running_game=_terminate_running_game,
+                )
+                if status == "playing":
+                    break
     except Exception as e:
         print(f"Error applying Firestore device config: {e}")
 
@@ -891,6 +922,7 @@ else:
     # Firestore so any stale \"playing\" flags from previous runs are cleared.
     try:
         request_set_all_games_ready()
+        _awaiting_games_ready_confirmation = True
     except Exception as e:
         print(f"Error resetting Firestore game statuses to ready on startup: {e}")
 
