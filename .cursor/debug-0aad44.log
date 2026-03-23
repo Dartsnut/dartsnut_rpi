@@ -1,2 +1,0 @@
-{"sessionId": "0aad44", "id": "log_1773288101576", "timestamp": 1773288101576, "location": "firestore_sync_bridge:notify_device_state_update", "message": "No _doc_ref set; skipping Firestore update", "data": {"partial_keys": ["volume"]}, "runId": "initial", "hypothesisId": "H7"}
-{"sessionId": "0aad44", "id": "log_1773288101584", "timestamp": 1773288101584, "location": "firestore_sync_bridge:start_firestore_sync_if_available", "message": "google-cloud-firestore not available; skipping Firestore sync", "data": {}, "runId": "initial", "hypothesisId": "H1"}
