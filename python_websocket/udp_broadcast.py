@@ -3,13 +3,10 @@ import socket
 import time
 import json
 import os
+from network_utils import get_wifi_ipv4
 
 def get_ip_address():
-    try:
-        ips = subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip().split()
-        return ips[0] if ips else "0.0.0.0"
-    except Exception:
-        return "0.0.0.0"
+    return get_wifi_ipv4()
 
 def get_mac_address():
     try:
