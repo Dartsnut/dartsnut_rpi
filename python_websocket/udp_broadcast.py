@@ -4,6 +4,7 @@ import time
 import json
 import os
 from typing import Optional
+from network_utils import get_wifi_ipv4
 
 
 def normalize_ip(ip: str) -> Optional[str]:
@@ -45,18 +46,7 @@ def normalize_ssid(ssid: str) -> Optional[str]:
 
 
 def get_ip_address() -> str:
-    try:
-        ips = (
-            subprocess.check_output(["hostname", "-I"])
-            .decode("utf-8")
-            .strip()
-            .split()
-        )
-        raw = ips[0] if ips else "0.0.0.0"
-    except Exception:
-        raw = "0.0.0.0"
-    normalized = normalize_ip(raw)
-    return normalized or "0.0.0.0"
+    return get_wifi_ipv4()
 
 def get_mac_address():
     try:

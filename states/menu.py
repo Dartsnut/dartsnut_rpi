@@ -95,11 +95,10 @@ class MenuState(BaseState):
             if idx == 0:
                 if ctx.load_game_list:
                     ctx.game_list = ctx.load_game_list()
-                if len(ctx.game_list) > 0:
-                    ctx.game_index = 0
-                    ctx.game_preview_index = 0
-                    ctx.page_tick = time.time()
-                    ctx.transition_to(GameSelectState())
+                ctx.game_index = 0
+                ctx.game_preview_index = 0
+                ctx.page_tick = time.time()
+                ctx.transition_to(GameSelectState())
             elif idx == 1:
                 ctx.transition_to(WidgetState())
             elif idx == 2:
