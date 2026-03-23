@@ -120,6 +120,8 @@ _startup_firmware_version = None
 # 2) wait until Firestore config confirms all games are ready
 # 3) only then apply incoming game commands
 _awaiting_games_ready_confirmation = False
+_startup_games_ready_confirmed_at = None
+_startup_filter_playing_until_newer_update = False
 _network_state_refresh_event = threading.Event()
 
 
@@ -312,6 +314,20 @@ def _are_all_firestore_games_ready(games_cfg) -> bool:
     return True
 
 
+def _parse_iso_ts(value):
+    if not value:
+        return None
+    try:
+        if isinstance(value, str):
+            s = value.strip()
+            if s.endswith("Z"):
+                s = s[:-1]
+            return datetime.fromisoformat(s)
+    except Exception:
+        return None
+    return None
+
+
 def _apply_firestore_config(config: dict) -> None:
     """
     Apply configuration received from Firestore to the local machine state.
@@ -322,7 +338,7 @@ def _apply_firestore_config(config: dict) -> None:
     if not isinstance(config, dict):
         return
 
-    global _awaiting_games_ready_confirmation
+    global _awaiting_games_ready_confirmation, _startup_games_ready_confirmed_at, _startup_filter_playing_until_newer_update
 
     service = get_machine_state_service()
     if service is None:
@@ -386,9 +402,14 @@ def _apply_firestore_config(config: dict) -> None:
         # before acting on incoming game commands.
         games_cfg = config.get("games")
         if isinstance(games_cfg, list):
+            cfg_ts = _parse_iso_ts(config.get("device_updated_at") or config.get("updated_at"))
+            confirmed_in_this_call = False
             if _awaiting_games_ready_confirmation:
                 if _are_all_firestore_games_ready(games_cfg):
                     _awaiting_games_ready_confirmation = False
+                    _startup_games_ready_confirmed_at = cfg_ts
+                    _startup_filter_playing_until_newer_update = True
+                    confirmed_in_this_call = True
                     print("Firestore game reset confirmed; enabling game command handling")
                 else:
                     return
@@ -401,6 +422,20 @@ def _apply_firestore_config(config: dict) -> None:
                 if not game_id:
                     continue
                 game_id = str(game_id)
+                if (
+                    _startup_filter_playing_until_newer_update
+                    and not confirmed_in_this_call
+                    and status != "playing"
+                ):
+                    _startup_filter_playing_until_newer_update = False
+                if status == "playing" and _startup_filter_playing_until_newer_update:
+                    if (
+                        _startup_games_ready_confirmed_at is not None
+                        and cfg_ts is not None
+                        and cfg_ts <= _startup_games_ready_confirmed_at
+                    ):
+                        continue
+                    _startup_filter_playing_until_newer_update = False
 
                 def _current_game_id() -> str:
                     if ctx.game and isinstance(ctx.game, dict):
@@ -923,6 +958,8 @@ else:
     try:
         request_set_all_games_ready()
         _awaiting_games_ready_confirmation = True
+        _startup_games_ready_confirmed_at = None
+        _startup_filter_playing_until_newer_update = False
     except Exception as e:
         print(f"Error resetting Firestore game statuses to ready on startup: {e}")
 
