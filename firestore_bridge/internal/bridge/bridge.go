@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,50 @@ import (
 type message struct {
 	Kind    string          `json:"kind"`
 	Payload json.RawMessage `json:"payload"`
+}
+
+func nonEmptyString(v any) string {
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func ensureDeviceInfoMetadata(payload map[string]any, deviceID string) {
+	deviceInfo, _ := payload["device_info"].(map[string]any)
+	if deviceInfo == nil {
+		deviceInfo = map[string]any{}
+	}
+	deviceInfo["id"] = deviceID
+
+	if nonEmptyString(deviceInfo["sn"]) == "" {
+		deviceInfo["sn"] = nonEmptyString(deviceInfo["serial"])
+	}
+	payload["device_info"] = deviceInfo
+}
+
+func buildDeviceInfoRepairPayload(remote map[string]any, deviceID string, initial map[string]any) map[string]any {
+	remoteInfo, _ := remote["device_info"].(map[string]any)
+	if remoteInfo == nil {
+		remoteInfo = map[string]any{}
+	}
+	initialInfo, _ := initial["device_info"].(map[string]any)
+	if initialInfo == nil {
+		initialInfo = map[string]any{}
+	}
+
+	repairInfo := map[string]any{}
+	if nonEmptyString(remoteInfo["id"]) == "" {
+		repairInfo["id"] = deviceID
+	}
+	if nonEmptyString(remoteInfo["sn"]) == "" {
+		if sn := nonEmptyString(initialInfo["sn"]); sn != "" {
+			repairInfo["sn"] = sn
+		}
+	}
+
+	if len(repairInfo) == 0 {
+		return nil
+	}
+	return map[string]any{"device_info": repairInfo}
 }
 
 // Run starts the bridge loop for a single device over a Unix socket.
@@ -73,13 +118,8 @@ func Run(ctx context.Context, deviceID, socketPath string, fs *fsclient.Client) 
 				continue
 			}
 			// Ensure newly created device documents always include
-			// device_info.id = deviceID (derived from BLE MAC).
-			deviceInfo, _ := payload["device_info"].(map[string]any)
-			if deviceInfo == nil {
-				deviceInfo = map[string]any{}
-			}
-			deviceInfo["id"] = deviceID
-			payload["device_info"] = deviceInfo
+			// device_info.id and a non-empty device_info.sn.
+			ensureDeviceInfoMetadata(payload, deviceID)
 
 			docPath := fmt.Sprintf("devices/%s", deviceID)
 			doc, err := fs.GetDocument(ctx, docPath)
@@ -97,6 +137,25 @@ func Run(ctx context.Context, deviceID, socketPath string, fs *fsclient.Client) 
 				}
 			} else {
 				data := decodeFieldsToMap(doc.GetFields())
+				repairPayload := buildDeviceInfoRepairPayload(data, deviceID, payload)
+				if len(repairPayload) > 0 {
+					repairFields := encodeMapToFields(repairPayload)
+					if rerr := fs.CommitMerge(ctx, docPath, repairFields); rerr != nil {
+						fmt.Fprintln(os.Stderr, "bridge: device_info repair CommitMerge failed:", rerr)
+					} else {
+						// Keep local config aligned with repaired Firestore fields.
+						dataInfo, _ := data["device_info"].(map[string]any)
+						if dataInfo == nil {
+							dataInfo = map[string]any{}
+							data["device_info"] = dataInfo
+						}
+						if repairedInfo, ok := repairPayload["device_info"].(map[string]any); ok {
+							for k, v := range repairedInfo {
+								dataInfo[k] = v
+							}
+						}
+					}
+				}
 				if err := sendJSONLocked(&writerMu, writer, "config_initial", data); err != nil {
 					fmt.Fprintln(os.Stderr, "bridge: failed to send config_initial:", err)
 				}

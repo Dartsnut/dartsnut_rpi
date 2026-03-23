@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/dartsnut/firestore_bridge/internal/auth/firebaseauth"
@@ -132,11 +133,9 @@ func (c *Client) CommitMerge(ctx context.Context, docPath string, fields map[str
 		Name:   docName,
 		Fields: fields,
 	}
-	// Build update mask from field keys.
-	var paths []string
-	for k := range fields {
-		paths = append(paths, k)
-	}
+	// Build update mask from leaf field paths so nested map updates
+	// don't overwrite sibling keys (e.g. device_info.id/sn).
+	paths := buildUpdateMaskPaths(decodeFieldsToMap(fields))
 	req := &firestorepb.CommitRequest{
 		Database: c.dbName,
 		Writes: []*firestorepb.Write{
@@ -150,6 +149,75 @@ func (c *Client) CommitMerge(ctx context.Context, docPath string, fields map[str
 	}
 	_, err = c.raw.Commit(ctx, req)
 	return err
+}
+
+func buildUpdateMaskPaths(payload map[string]any) []string {
+	var paths []string
+
+	var walk func(prefix string, v any)
+	walk = func(prefix string, v any) {
+		m, ok := v.(map[string]any)
+		if !ok || m == nil {
+			if prefix != "" {
+				paths = append(paths, prefix)
+			}
+			return
+		}
+		if len(m) == 0 {
+			if prefix != "" {
+				paths = append(paths, prefix)
+			}
+			return
+		}
+		for k, child := range m {
+			next := k
+			if prefix != "" {
+				next = prefix + "." + k
+			}
+			walk(next, child)
+		}
+	}
+
+	for k, v := range payload {
+		walk(k, v)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func decodeFieldsToMap(fields map[string]*firestorepb.Value) map[string]any {
+	out := make(map[string]any, len(fields))
+	for k, v := range fields {
+		out[k] = decodeFieldValue(v)
+	}
+	return out
+}
+
+func decodeFieldValue(v *firestorepb.Value) any {
+	switch t := v.ValueType.(type) {
+	case *firestorepb.Value_NullValue:
+		return nil
+	case *firestorepb.Value_BooleanValue:
+		return t.BooleanValue
+	case *firestorepb.Value_DoubleValue:
+		return t.DoubleValue
+	case *firestorepb.Value_IntegerValue:
+		return t.IntegerValue
+	case *firestorepb.Value_StringValue:
+		return t.StringValue
+	case *firestorepb.Value_TimestampValue:
+		return t.TimestampValue.AsTime().Format(time.RFC3339Nano)
+	case *firestorepb.Value_ArrayValue:
+		var arr []any
+		for _, e := range t.ArrayValue.GetValues() {
+			arr = append(arr, decodeFieldValue(e))
+		}
+		return arr
+	case *firestorepb.Value_MapValue:
+		return decodeFieldsToMap(t.MapValue.GetFields())
+	default:
+		return nil
+	}
 }
 
 // ListenDocument starts a Listen stream for a single document and invokes the callback
