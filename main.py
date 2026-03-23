@@ -42,6 +42,7 @@ from python_websocket.device_operations import _parse_hhmm, forget_wifi
 from python_websocket.git_operations import get_version, perform_update
 from python_websocket.bluetooth_operations import (
     build_firestore_bluetooth_list,
+    connect_device_for_firestore,
     current_utc_iso_timestamp,
 )
 from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
@@ -132,6 +133,7 @@ _firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
     scan_builder=build_firestore_bluetooth_list,
     timestamp_factory=current_utc_iso_timestamp,
     publish_update=notify_device_state_update,
+    connect_device=connect_device_for_firestore,
 )
 
 
@@ -367,10 +369,16 @@ def _apply_firestore_config(config: dict) -> None:
     # bluetooth.is_scan == true -> run scan, publish list+timestamp, reset is_scan false.
     try:
         bluetooth_cfg = config.get("bluetooth")
-        if isinstance(bluetooth_cfg, dict) and bool(bluetooth_cfg.get("is_scan")):
-            _firestore_bluetooth_scan_controller.start_scan_if_requested()
+        if isinstance(bluetooth_cfg, dict):
+            if bool(bluetooth_cfg.get("is_scan")):
+                _firestore_bluetooth_scan_controller.start_scan_if_requested()
+            connect_address = bluetooth_cfg.get("connect")
+            if isinstance(connect_address, str) and connect_address.strip():
+                _firestore_bluetooth_scan_controller.start_connect_if_requested(
+                    connect_address.strip()
+                )
     except Exception as e:
-        print(f"Error handling Firestore bluetooth scan config: {e}")
+        print(f"Error handling Firestore bluetooth config: {e}")
 
     # Brightness / volume / time zone / dim window / device name / games
     try:

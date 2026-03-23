@@ -257,6 +257,27 @@ def pair_and_connect_device(address):
     except Exception as e:
         return handle_exception("bluetooth_connect", e, "Failed to connect Bluetooth device", address=address)
 
+
+def connect_device_for_firestore(address):
+    """
+    Firestore-oriented connection helper.
+    Returns (success: bool, error_message: str).
+    """
+    if not address:
+        return False, "Missing address"
+    try:
+        result = pair_and_connect_device(address)
+        if isinstance(result, dict) and not result.get("error"):
+            return True, ""
+        if isinstance(result, dict):
+            err = str(result.get("error") or "").strip()
+            if err:
+                short = err.split("(")[0].strip()
+                return False, short[:120]
+        return False, "Connection failed"
+    except Exception:
+        return False, "Connection failed"
+
 # Example usage:
 if __name__ == "__main__":
     # print(json.dumps(scan_bluetooth_devices()))
