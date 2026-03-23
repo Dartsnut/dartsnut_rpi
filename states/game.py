@@ -52,7 +52,7 @@ class GameSelectState(BaseState):
                     ctx.transition_to(InGameState())
                 else:
                     ctx.reload_conf = True
-        elif buttons.get("btn_b"):
+        elif buttons.get("btn_b") or buttons.get("btn_home"):
             from states.menu import MenuState
             ctx.transition_to(MenuState())
         elif buttons.get("btn_left"):
