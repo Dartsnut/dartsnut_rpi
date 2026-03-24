@@ -32,6 +32,7 @@ def test_notify_device_state_update_skips_duplicate_payload():
     try:
         fsb.notify_device_state_update({"volume": 10})
         fsb.notify_device_state_update({"volume": 10})
+        time.sleep(0.35)
     finally:
         fsb._client = None
 
@@ -67,3 +68,40 @@ def test_write_cache_detects_echo_payload():
         cache._recent_payload_fingerprints[key] = time.time()
     assert cache.is_probable_echo_payload(payload) is True
     assert cache.is_probable_echo_payload({"brightness": 26, "volume": 50}) is False
+
+
+def test_request_device_reset_state_sends_expected_payload(monkeypatch):
+    captured = []
+
+    def _capture(payload):
+        captured.append(payload)
+
+    monkeypatch.setattr(fsb, "notify_device_state_update", _capture)
+
+    fsb.request_device_reset_state()
+
+    assert captured == [
+        {
+            "ip_address": "",
+            "ssid": "",
+            "pages": [],
+            "games": [],
+            "dim_window": {"dim_window_enabled": False},
+        }
+    ]
+
+
+def test_normalize_config_payload_converts_null_lists_to_empty_lists():
+    payload = {
+        "ip_address": "",
+        "ssid": "",
+        "pages": None,
+        "games": None,
+        "dim_window": {"dim_window_enabled": False},
+    }
+
+    normalized = fsb._normalize_config_payload(payload)
+
+    assert normalized["pages"] == []
+    assert normalized["games"] == []
+    assert normalized["ip_address"] == ""

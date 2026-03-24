@@ -36,10 +36,18 @@ def forget_wifi():
         for line in result.splitlines():
             if "802-11-wireless" in line:
                 name = line.split(":")[0]
-                subprocess.run(["nmcli", "connection", "delete", name])
-        
-        subprocess.run(["nmcli", "radio", "wifi", "off"])
-        subprocess.run(["nmcli", "radio", "wifi", "on"])
+                # Prevent reconnection races while reset flow is running.
+                subprocess.run(
+                    ["nmcli", "connection", "modify", name, "connection.autoconnect", "no"],
+                    check=False,
+                )
+                subprocess.run(["nmcli", "connection", "delete", name], check=False)
+
+        # Ensure currently-active Wi-Fi device is dropped immediately.
+        subprocess.run(["nmcli", "device", "disconnect", "wlan0"], check=False)
+        # Refresh Wi-Fi stack state after profile deletion/disconnect.
+        subprocess.run(["nmcli", "radio", "wifi", "off"], check=False)
+        subprocess.run(["nmcli", "radio", "wifi", "on"], check=False)
     except Exception as e:
         print(f"Error forgetting wifi: {e}")
 

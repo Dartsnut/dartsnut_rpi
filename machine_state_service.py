@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -237,6 +238,54 @@ class MachineStateService:
             self._write_device_info(device_info)
         except Exception as e:
             print(f"Error setting device name in device.json: {e}")
+
+    def clear_apps_directory_contents(self) -> None:
+        """
+        Remove all files and directories inside ./apps while keeping ./apps itself.
+        Preserve apps/conf.json and rewrite it to an empty config with pages=[].
+        """
+        apps_dir = os.path.join(os.getcwd(), "apps")
+        try:
+            os.makedirs(apps_dir, exist_ok=True)
+            for entry in os.listdir(apps_dir):
+                target = os.path.join(apps_dir, entry)
+                if entry == "conf.json":
+                    continue
+                if os.path.isdir(target) and not os.path.islink(target):
+                    shutil.rmtree(target, ignore_errors=True)
+                else:
+                    try:
+                        os.remove(target)
+                    except FileNotFoundError:
+                        pass
+            conf_path = os.path.join(apps_dir, "conf.json")
+            with open(conf_path, "w", encoding="utf-8") as f:
+                json.dump({"user": "", "date": "", "pages": []}, f)
+        except Exception as e:
+            print(f"Error clearing apps directory contents: {e}")
+
+    def reset_device_to_factory_fields(self) -> None:
+        """
+        Rewrite device.json with only required factory fields:
+        name, serial, model, brightness, volume.
+        """
+        try:
+            existing = self._read_device_info() or {}
+            model = str(existing.get("model", "") or "")
+            serial = str(existing.get("serial", "") or "")
+            payload = {
+                "name": model,
+                "serial": serial,
+                "model": model,
+                "brightness": 100,
+                "volume": 100,
+            }
+            # Use direct write to keep output fields strict (no extra timestamp).
+            path = self._device_json_path()
+            with open(path, "w") as f:
+                json.dump(payload, f)
+        except Exception as e:
+            print(f"Error resetting device.json to factory fields: {e}")
 
 
 _service: Optional[MachineStateService] = None

@@ -82,6 +82,7 @@ try:
         set_firestore_connectivity_callback,
         request_set_game_status,
         request_set_all_games_ready,
+        request_device_reset_state,
     )
 except ImportError:
     def start_firestore_sync_if_available(*args, **kwargs):
@@ -97,6 +98,9 @@ except ImportError:
         return False
 
     def set_firestore_connectivity_callback(*args, **kwargs):
+        return None
+
+    def request_device_reset_state(*args, **kwargs):
         return None
 
 # -----------------------------------------------------------------------------
@@ -129,6 +133,9 @@ _awaiting_games_ready_confirmation = False
 _startup_games_ready_confirmed_at = None
 _startup_filter_playing_until_newer_update = False
 _network_state_refresh_event = threading.Event()
+_reset_in_progress = False
+_reset_lock = threading.Lock()
+_reset_firestore_confirm_event = threading.Event()
 _firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
     scan_builder=build_firestore_bluetooth_list,
     timestamp_factory=current_utc_iso_timestamp,
@@ -308,7 +315,6 @@ ctx.load_game_list = load_game_list
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
-ctx.reset_device = lambda: forget_wifi()
 ctx.set_game_status = request_set_game_status
 
 _app_ctx = ctx
@@ -340,6 +346,77 @@ def _parse_iso_ts(value):
     return None
 
 
+def _is_reset_in_progress() -> bool:
+    with _reset_lock:
+        return _reset_in_progress
+
+
+def _set_reset_in_progress(value: bool) -> None:
+    global _reset_in_progress
+    with _reset_lock:
+        _reset_in_progress = bool(value)
+
+
+def _is_firestore_reset_confirmed(config: dict) -> bool:
+    if not isinstance(config, dict):
+        return False
+    if config.get("ip_address") != "":
+        return False
+    if "ssid" in config and config.get("ssid") != "":
+        return False
+    pages = config.get("pages")
+    if pages is not None and (not isinstance(pages, list) or len(pages) != 0):
+        return False
+    games = config.get("games")
+    if games is not None and (not isinstance(games, list) or len(games) != 0):
+        return False
+    dim_window = config.get("dim_window")
+    if not isinstance(dim_window, dict):
+        return False
+    return bool(dim_window.get("dim_window_enabled")) is False
+
+
+def _run_device_reset_sequence() -> None:
+    service = get_machine_state_service()
+    if service is None:
+        print("Reset aborted: MachineStateService is not initialized")
+        return
+    if _is_reset_in_progress():
+        return
+    _set_reset_in_progress(True)
+    _reset_firestore_confirm_event.clear()
+    _network_state_refresh_event.clear()
+    try:
+        request_device_reset_state()
+        _reset_firestore_confirm_event.wait()
+        forget_wifi()
+        try:
+            term_widget_processes(ctx.pages)
+        except Exception as e:
+            print(f"Error terminating widget processes during reset: {e}")
+        try:
+            if ctx.game:
+                term_game_process(ctx.game)
+                ctx.game = None
+        except Exception as e:
+            print(f"Error terminating game process during reset: {e}")
+        service.clear_apps_directory_contents()
+        service.reset_device_to_factory_fields()
+    except Exception as e:
+        print(f"Error during device reset sequence: {e}")
+    finally:
+        _set_reset_in_progress(False)
+
+
+def _start_device_reset() -> None:
+    if _is_reset_in_progress():
+        return
+    threading.Thread(target=_run_device_reset_sequence, daemon=True).start()
+
+
+ctx.reset_device = _start_device_reset
+
+
 def _apply_firestore_config(config: dict) -> None:
     """
     Apply configuration received from Firestore to the local machine state.
@@ -351,6 +428,9 @@ def _apply_firestore_config(config: dict) -> None:
         return
 
     global _awaiting_games_ready_confirmation, _startup_games_ready_confirmed_at, _startup_filter_playing_until_newer_update
+
+    if _is_reset_in_progress() and _is_firestore_reset_confirmed(config):
+        _reset_firestore_confirm_event.set()
 
     service = get_machine_state_service()
     if service is None:
@@ -876,7 +956,7 @@ def network_state_firestore_loop():
                 last_published_ssid = None
                 _network_state_refresh_event.clear()
 
-            if is_firestore_connected():
+            if not _is_reset_in_progress() and is_firestore_connected():
                 updates = {}
 
                 normalized_ip = normalize_ip(get_ip_address())
@@ -915,7 +995,7 @@ def request_network_state_refresh():
 
 
 def _on_firestore_connectivity_changed(connected: bool) -> None:
-    if connected:
+    if connected and not _is_reset_in_progress():
         request_network_state_refresh()
 
 

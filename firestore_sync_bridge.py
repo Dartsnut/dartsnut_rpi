@@ -164,6 +164,42 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(_normalize_payload(value), sort_keys=True, separators=(",", ":"))
 
 
+def _normalize_config_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize incoming Firestore config payload to stable shapes expected by app.
+    Keep list-based fields as lists (not null).
+    """
+    if not isinstance(cfg, dict):
+        return {}
+    normalized = dict(cfg)
+    for key in ("pages", "games"):
+        if key in normalized and normalized.get(key) is None:
+            normalized[key] = []
+    return normalized
+
+
+def _looks_like_reset_confirmation_payload(payload: Dict[str, Any]) -> bool:
+    """
+    Detect the reset-confirmation payload shape so we don't suppress it as an echo.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("ip_address") != "":
+        return False
+    if "ssid" in payload and payload.get("ssid") != "":
+        return False
+    pages = payload.get("pages")
+    if not isinstance(pages, list) or len(pages) != 0:
+        return False
+    games = payload.get("games")
+    if not isinstance(games, list) or len(games) != 0:
+        return False
+    dim_window = payload.get("dim_window")
+    if not isinstance(dim_window, dict):
+        return False
+    return bool(dim_window.get("dim_window_enabled")) is False
+
+
 class _DeviceStateWriteCache:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -419,10 +455,14 @@ class _SyncClient:
                             elif kind in ("config", "config_initial") and isinstance(
                                 payload, dict
                             ):
-                                cfg = payload
+                                cfg = _normalize_config_payload(payload)
                                 # Listener echoes for recent self-originated writes are
                                 # often no-ops locally and can trigger secondary writes.
-                                if kind == "config" and _WRITE_CACHE.is_probable_echo_payload(cfg):
+                                if (
+                                    kind == "config"
+                                    and _WRITE_CACHE.is_probable_echo_payload(cfg)
+                                    and not _looks_like_reset_confirmation_payload(cfg)
+                                ):
                                     continue
                                 if kind == "config_initial":
                                     try:
@@ -583,6 +623,24 @@ def request_set_game_status(game_id: str, status: str) -> None:
         notify_device_state_update({"games": games})
     except Exception as e:
         print(f"Firestore bridge: failed to request game status update: {e}")
+
+
+def request_device_reset_state() -> None:
+    """
+    Request Firestore device-reset fields in a single payload.
+    """
+    try:
+        notify_device_state_update(
+            {
+                "ip_address": "",
+                "ssid": "",
+                "pages": [],
+                "games": [],
+                "dim_window": {"dim_window_enabled": False},
+            }
+        )
+    except Exception as e:
+        print(f"Firestore bridge: failed to request device reset state: {e}")
 
 
 def request_set_all_games_ready() -> None:
