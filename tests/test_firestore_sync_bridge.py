@@ -58,6 +58,30 @@ def test_notify_device_state_update_coalesces_burst_updates():
     assert sent_payload == {"brightness": 20, "volume": 30}
 
 
+def test_notify_device_state_update_coerces_null_pages_games_to_empty_lists():
+    _reset_write_cache()
+    fake = _FakeClient()
+    fsb._client = fake
+    try:
+        fsb.notify_device_state_update({"pages": None, "games": None})
+        time.sleep(0.35)
+    finally:
+        fsb._client = None
+
+    assert len(fake.sent) == 1
+    sent_payload, _ = fake.sent[0]
+    assert sent_payload == {"pages": [], "games": []}
+
+
+def test_merge_remote_and_local_coerces_null_pages_games(monkeypatch):
+    # Avoid reading workspace apps/conf.json or device.json so merge reflects remote nulls.
+    monkeypatch.setattr(fsb.os.path, "isfile", lambda _p: False)
+
+    merged = fsb._merge_remote_and_local({"pages": None, "games": None})
+    assert merged["pages"] == []
+    assert merged["games"] == []
+
+
 def test_write_cache_detects_echo_payload():
     cache = fsb._DeviceStateWriteCache()
     payload = {"brightness": 25, "volume": 50}

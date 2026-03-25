@@ -1,8 +1,43 @@
-from game_firestore_sync import handle_incoming_game_status
+from game_firestore_sync import handle_incoming_game_status, are_firestore_playing_games_cleared
 from states.game import InGameState
 
 
-def test_handle_download_status_sets_downloading_then_ready():
+def test_are_firestore_playing_games_cleared_ignores_downloading_entries():
+    assert are_firestore_playing_games_cleared(
+        [
+            {"id": "chess", "status": "downloading"},
+            {"id": "pong", "status": "ready"},
+        ]
+    )
+
+
+def test_are_firestore_playing_games_cleared_false_when_any_playing():
+    assert not are_firestore_playing_games_cleared(
+        [
+            {"id": "chess", "status": "ready"},
+            {"id": "pong", "status": "playing"},
+        ]
+    )
+
+
+def test_handle_downloading_status_sets_downloading_then_ready():
+    events = []
+
+    handle_incoming_game_status(
+        "chess",
+        "downloading",
+        current_game_id="",
+        game_exists=lambda _gid: False,
+        ensure_game_downloaded=lambda _gid: True,
+        set_game_status=lambda gid, status: events.append((gid, status)),
+        request_launch=lambda _gid: events.append(("launch", "called")),
+        terminate_running_game=lambda _gid: events.append(("terminate", "called")),
+    )
+
+    assert events == [("chess", "downloading"), ("chess", "ready")]
+
+
+def test_handle_download_status_is_ignored():
     events = []
 
     handle_incoming_game_status(
@@ -16,7 +51,7 @@ def test_handle_download_status_sets_downloading_then_ready():
         terminate_running_game=lambda _gid: events.append(("terminate", "called")),
     )
 
-    assert events == [("chess", "downloading"), ("chess", "ready")]
+    assert events == []
 
 
 def test_handle_playing_status_downloads_then_requests_launch_when_missing():

@@ -9,10 +9,41 @@ import subprocess
 import requests
 
 from core.helpers import set_pdeathsig, get_user_data_store_path
-from python_websocket.user_data_operations import start_game_tracking, stop_game_tracking
+from python_websocket.user_data_operations import (
+    start_game_tracking,
+    stop_game_tracking,
+    _load_user_data,
+)
 from widget_lifecycle import download_app
 import assets
 from PIL import Image
+
+
+def get_local_game_version(gameid: str) -> str:
+    """Read local game version from ./apps/<gameid>/conf.json."""
+    game_path = os.path.join(os.getcwd(), "apps", gameid)
+    if not os.path.isdir(game_path):
+        return ""
+    conf_path = os.path.join(game_path, "conf.json")
+    if not os.path.isfile(conf_path):
+        return ""
+    try:
+        with open(conf_path, "r") as f:
+            conf = json.load(f)
+        return str(conf.get("version") or "").strip()
+    except Exception:
+        return ""
+
+
+def local_game_version_matches(gameid: str, remote_version: str) -> bool:
+    """Return True only when local game exists and versions match exactly."""
+    expected = str(remote_version or "").strip()
+    if not expected:
+        return False
+    game_path = os.path.join(os.getcwd(), "apps", gameid)
+    if not os.path.isdir(game_path):
+        return False
+    return get_local_game_version(gameid) == expected
 
 
 def ensure_game_downloaded(gameid: str) -> bool:
@@ -145,6 +176,39 @@ def load_game_list() -> list:
         except Exception as e:
             print(f"Error loading game config for {name}: {e}")
     return game_list
+
+
+def load_menu_game_list(ctx) -> list:
+    """
+    Games for the on-device picker: intersect with Firestore-ready ids when known,
+    else local entries marked ready; sort by playtime descending then name.
+    """
+    all_games = load_game_list()
+    ready_ids = getattr(ctx, "firestore_menu_ready_game_ids", None)
+    if ready_ids is None:
+        filtered = [
+            c
+            for c in all_games
+            if str(c.get("status", "ready")).strip().lower() == "ready"
+        ]
+    elif len(ready_ids) == 0:
+        filtered = []
+    else:
+        filtered = [c for c in all_games if str(c.get("id")) in ready_ids]
+
+    playtimes = _load_user_data().get("game_playtimes", {})
+
+    def _sort_key(conf: dict):
+        gid = str(conf.get("id"))
+        pt = playtimes.get(gid, 0)
+        try:
+            pt = int(pt)
+        except (TypeError, ValueError):
+            pt = 0
+        name = (conf.get("name") or "").lower()
+        return (-pt, name)
+
+    return sorted(filtered, key=_sort_key)
 
 
 def get_games_summary() -> list:

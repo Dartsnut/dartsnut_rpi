@@ -99,6 +99,28 @@ def _save_user_data(data):
         raise Exception(f"Failed to save user data: {str(e)}")
 
 
+def reset_user_data_file() -> None:
+    """Reset persistent user data to defaults and remove in-progress playtime temp file."""
+    try:
+        if not _ensure_data_directory():
+            raise PermissionError("Cannot create data directory")
+        _save_user_data(
+            {
+                "user_id": "",
+                "jwt_token": "",
+                "refresh_token": "",
+                "game_playtimes": {},
+            }
+        )
+    except Exception as e:
+        print(f"Error resetting user data file: {e}")
+    try:
+        if os.path.exists(TEMP_GAME_START_FILE):
+            os.remove(TEMP_GAME_START_FILE)
+    except OSError:
+        pass
+
+
 def get_user_data():
     """Get all user data from persistent storage."""
     try:

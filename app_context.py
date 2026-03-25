@@ -1,6 +1,6 @@
 """Application context: display, assets, device, and all mutable app state."""
 # Optional type hint for current_state (avoids circular import at runtime)
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, FrozenSet
 
 if TYPE_CHECKING:
     from states.base import BaseState
@@ -48,6 +48,8 @@ class AppContext:
         self.reload_conf = False
         self.reload_pages = False
         self.game_preview_index = 0
+        # Firestore games with status "ready"; None until first games list applied
+        self.firestore_menu_ready_game_ids: Optional[FrozenSet[str]] = None
 
         # Current state (object, not string)
         self.current_state: "BaseState" = None

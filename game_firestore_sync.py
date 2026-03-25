@@ -3,6 +3,19 @@
 from typing import Callable, Optional
 
 
+def are_firestore_playing_games_cleared(games_cfg) -> bool:
+    """True when there are no Firestore game entries currently marked playing."""
+    if not isinstance(games_cfg, list):
+        return False
+    for g in games_cfg:
+        if not isinstance(g, dict):
+            continue
+        status = str(g.get("status", "")).strip().lower()
+        if status == "playing":
+            return False
+    return True
+
+
 def handle_incoming_game_status(
     game_id: str,
     status: str,
@@ -19,7 +32,7 @@ def handle_incoming_game_status(
         return
 
     normalized = str(status or "").strip().lower()
-    if normalized == "download":
+    if normalized == "downloading":
         set_game_status(game_id, "downloading")
         if ensure_game_downloaded(game_id):
             set_game_status(game_id, "ready")

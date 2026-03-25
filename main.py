@@ -62,12 +62,14 @@ from widget_lifecycle import (
     check_widget_ready,
 )
 from game_lifecycle import (
-    load_game_list,
+    load_menu_game_list,
     start_game_process,
     term_game_process,
     ensure_game_downloaded,
+    local_game_version_matches,
 )
-from game_firestore_sync import handle_incoming_game_status
+from python_websocket.user_data_operations import reset_user_data_file
+from game_firestore_sync import handle_incoming_game_status, are_firestore_playing_games_cleared
 from machine_state_service import (
     init_machine_state_service,
     get_machine_state_service,
@@ -311,25 +313,13 @@ ctx = AppContext(
     set_volume=set_volume,
     set_brightness_hardware=_set_brightness_hardware,
 )
-ctx.load_game_list = load_game_list
+ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
 ctx.set_game_status = request_set_game_status
 
 _app_ctx = ctx
-
-
-def _are_all_firestore_games_ready(games_cfg) -> bool:
-    if not isinstance(games_cfg, list):
-        return False
-    for g in games_cfg:
-        if not isinstance(g, dict):
-            continue
-        status = str(g.get("status", "")).strip().lower()
-        if status != "ready":
-            return False
-    return True
 
 
 def _parse_iso_ts(value):
@@ -400,6 +390,10 @@ def _run_device_reset_sequence() -> None:
                 ctx.game = None
         except Exception as e:
             print(f"Error terminating game process during reset: {e}")
+        try:
+            reset_user_data_file()
+        except Exception as e:
+            print(f"Error resetting user data during device reset: {e}")
         service.clear_apps_directory_contents()
         service.reset_device_to_factory_fields()
     except Exception as e:
@@ -431,6 +425,16 @@ def _apply_firestore_config(config: dict) -> None:
 
     if _is_reset_in_progress() and _is_firestore_reset_confirmed(config):
         _reset_firestore_confirm_event.set()
+
+    games_cfg = config.get("games")
+    if isinstance(games_cfg, list):
+        ctx.firestore_menu_ready_game_ids = frozenset(
+            str(g["id"])
+            for g in games_cfg
+            if isinstance(g, dict)
+            and g.get("id")
+            and str(g.get("status", "")).strip().lower() == "ready"
+        )
 
     service = get_machine_state_service()
     if service is None:
@@ -501,7 +505,7 @@ def _apply_firestore_config(config: dict) -> None:
             service.set_device_name(device_info.get("name", ""))
 
         # Games: handle status commands from Firestore.
-        # - "download": set "downloading", fetch game locally, then set "ready"
+        # - "downloading": fetch game locally, then set "ready"
         # - "playing": ensure game exists (download if needed), then launch
         #              through the same mechanism used by the websocket layer.
         #
@@ -512,7 +516,7 @@ def _apply_firestore_config(config: dict) -> None:
             cfg_ts = _parse_iso_ts(config.get("device_updated_at") or config.get("updated_at"))
             confirmed_in_this_call = False
             if _awaiting_games_ready_confirmation:
-                if _are_all_firestore_games_ready(games_cfg):
+                if are_firestore_playing_games_cleared(games_cfg):
                     _awaiting_games_ready_confirmation = False
                     _startup_games_ready_confirmed_at = cfg_ts
                     _startup_filter_playing_until_newer_update = True
@@ -526,6 +530,7 @@ def _apply_firestore_config(config: dict) -> None:
                     continue
                 game_id = g.get("id")
                 status = str(g.get("status", "")).strip().lower()
+                expected_version = str(g.get("version") or "").strip()
                 if not game_id:
                     continue
                 game_id = str(game_id)
@@ -574,6 +579,10 @@ def _apply_firestore_config(config: dict) -> None:
                             term_game_process(ctx.game)
                             ctx.game = None
                             ctx.reload_conf = True
+
+                if status == "downloading" and local_game_version_matches(game_id, expected_version):
+                    _set_status(game_id, "ready")
+                    continue
 
                 handle_incoming_game_status(
                     game_id,

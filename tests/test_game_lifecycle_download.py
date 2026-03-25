@@ -1,4 +1,4 @@
-from game_lifecycle import ensure_game_downloaded
+from game_lifecycle import ensure_game_downloaded, local_game_version_matches
 
 
 def test_ensure_game_downloaded_returns_true_when_game_already_exists(monkeypatch):
@@ -50,3 +50,24 @@ def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
 
     assert ensure_game_downloaded("chess") is True
     assert calls["download"] == [("https://example.com/chess.zip", "abc123")]
+
+
+def test_local_game_version_matches_true_when_versions_equal(monkeypatch):
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/chess"))
+    monkeypatch.setattr("game_lifecycle.get_local_game_version", lambda _gid: "1.2.3")
+
+    assert local_game_version_matches("chess", "1.2.3") is True
+
+
+def test_local_game_version_matches_false_when_remote_version_empty(monkeypatch):
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/chess"))
+    monkeypatch.setattr("game_lifecycle.get_local_game_version", lambda _gid: "1.2.3")
+
+    assert local_game_version_matches("chess", "") is False
+
+
+def test_local_game_version_matches_false_when_versions_differ(monkeypatch):
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/chess"))
+    monkeypatch.setattr("game_lifecycle.get_local_game_version", lambda _gid: "1.2.3")
+
+    assert local_game_version_matches("chess", "2.0.0") is False
