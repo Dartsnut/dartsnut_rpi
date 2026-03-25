@@ -130,3 +130,58 @@ def test_normalize_config_payload_converts_null_lists_to_empty_lists():
     assert normalized["pages"] == []
     assert normalized["games"] == []
     assert normalized["ip_address"] == ""
+
+
+def test_build_initial_state_includes_dim_window_fields(monkeypatch):
+    # Avoid filesystem-dependent page/game loading for deterministic assertions.
+    monkeypatch.setattr(fsb.os.path, "isfile", lambda _p: False)
+
+    state = fsb._build_initial_state(
+        {
+            "dim_window_enabled": True,
+            "dim_window_start": "22:30",
+            "dim_window_end": "07:00",
+            "dim_level": 15,
+            "dim_restore_seconds": 45,
+            "brightness": "80",
+            "volume": "60",
+        }
+    )
+
+    assert state["dim_window"] == {
+        "dim_window_enabled": True,
+        "dim_window_start": "22:30",
+        "dim_window_end": "07:00",
+        "dim_level": 15,
+        "dim_restore_seconds": 45,
+    }
+
+
+def test_request_set_dim_window_sends_expected_payload(monkeypatch):
+    captured = []
+
+    monkeypatch.setattr(
+        fsb, "notify_device_state_update", lambda payload: captured.append(payload)
+    )
+
+    fsb.request_set_dim_window(
+        {
+            "dim_window_enabled": True,
+            "dim_window_start": "23:00",
+            "dim_window_end": "06:00",
+            "dim_level": 20,
+            "dim_restore_seconds": 30,
+        }
+    )
+
+    assert captured == [
+        {
+            "dim_window": {
+                "dim_window_enabled": True,
+                "dim_window_start": "23:00",
+                "dim_window_end": "06:00",
+                "dim_level": 20,
+                "dim_restore_seconds": 30,
+            }
+        }
+    ]
