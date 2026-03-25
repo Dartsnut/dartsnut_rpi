@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 from app_context import AppContext
 from states.base import BaseState
 import assets
+import machine_api
 
 
 class GameSelectState(BaseState):
@@ -95,8 +96,7 @@ class InGameState(BaseState):
         if game["process"].poll() is not None:
             game_id = game.get("game_id")
             try:
-                from python_websocket.user_data_operations import stop_game_tracking
-                stop_game_tracking()
+                machine_api.stop_game_tracking()
             except Exception as e:
                 print(f"Warning: Failed to stop game tracking: {e}")
             try:

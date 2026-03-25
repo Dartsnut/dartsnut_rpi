@@ -54,6 +54,23 @@ def test_handle_download_status_is_ignored():
     assert events == []
 
 
+def test_handle_playing_status_requests_launch_when_game_already_exists():
+    events = []
+
+    handle_incoming_game_status(
+        "chess",
+        "playing",
+        current_game_id="",
+        game_exists=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid: True,
+        set_game_status=lambda gid, status: events.append((gid, status)),
+        request_launch=lambda gid: events.append(("launch", gid)),
+        terminate_running_game=lambda _gid: events.append(("terminate", "called")),
+    )
+
+    assert events == [("launch", "chess")]
+
+
 def test_handle_playing_status_downloads_then_requests_launch_when_missing():
     events = []
 

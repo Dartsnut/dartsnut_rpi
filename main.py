@@ -6,15 +6,12 @@ import base64
 import io
 import json
 import os
-import signal
 import struct
 import subprocess
 import threading
 import time
 import glob
 import urllib.request
-from datetime import datetime, time as dt_time
-
 # Start the RGB matrix explicitly when the Python service starts.
 # We keep `dartsnut_matrix.service` from auto-starting at boot so the
 # splash can appear as early as possible, and then `Conflicts=` will
@@ -68,54 +65,31 @@ from game_lifecycle import (
     ensure_game_downloaded,
     local_game_version_matches,
 )
-from python_websocket.user_data_operations import reset_user_data_file
-from game_firestore_sync import handle_incoming_game_status, are_firestore_playing_games_cleared
+import machine_api
 from machine_state_service import (
     init_machine_state_service,
     get_machine_state_service,
 )
-
-try:
-    from firestore_sync_bridge import (
-        start_firestore_sync_if_available,
-        notify_device_state_update,
-        restart_firestore_sync,
-        is_firestore_connected,
-        set_firestore_connectivity_callback,
-        request_set_game_status,
-        request_set_all_games_ready,
-        request_device_reset_state,
-    )
-except ImportError:
-    def start_firestore_sync_if_available(*args, **kwargs):
-        return None
-
-    def notify_device_state_update(*args, **kwargs):
-        return None
-
-    def restart_firestore_sync(*args, **kwargs):
-        return None
-
-    def is_firestore_connected(*args, **kwargs):
-        return False
-
-    def set_firestore_connectivity_callback(*args, **kwargs):
-        return None
-
-    def request_device_reset_state(*args, **kwargs):
-        return None
+from remote_device_config import (
+    RemoteConfigRuntimeState,
+    RemoteDeviceConfigApplier,
+    RemoteDeviceConfigDependencies,
+)
+from remote_sync_port import (
+    create_default_remote_sync,
+    get_remote_sync,
+    set_remote_sync,
+)
+from display_loop import DimWindowRuntime, run_main_loop
+from app_bootstrap import start_background_subsystems
 
 # -----------------------------------------------------------------------------
 # Display and device (used by context and dim logic)
 # -----------------------------------------------------------------------------
 dartsnut = Dartsnut()
 
-# Dim window state (used in main loop)
-_currently_in_dim_window = False
-_brightness_before_dim = None
-_last_dim_check_time = 0
-_dim_force_normal_brightness = False
-_dim_force_normal_start_time = None
+# Dim window state (shared with set_brightness and display loop)
+dim_rt = DimWindowRuntime()
 
 # Smooth brightness transition (1 second to target)
 _brightness_transition_start_time = None
@@ -125,24 +99,19 @@ _brightness_last_set = None
 
 BRIGHTNESS_TRANSITION_DURATION = 1.0
 
-_firmware_update_in_progress = False
-_startup_firmware_version = None
-# Startup stale window for game commands:
-# 1) reset all games to ready in Firestore
-# 2) wait until Firestore config confirms all games are ready
-# 3) only then apply incoming game commands
-_awaiting_games_ready_confirmation = False
-_startup_games_ready_confirmed_at = None
-_startup_filter_playing_until_newer_update = False
-_startup_ready_retry_last_at = 0.0
+# Remote config / Firestore game startup coordination (see RemoteConfigRuntimeState).
+_remote_config_runtime = RemoteConfigRuntimeState()
 _network_state_refresh_event = threading.Event()
 _reset_in_progress = False
 _reset_lock = threading.Lock()
 _reset_firestore_confirm_event = threading.Event()
+
+set_remote_sync(create_default_remote_sync())
+
 _firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
     scan_builder=build_firestore_bluetooth_list,
     timestamp_factory=current_utc_iso_timestamp,
-    publish_update=notify_device_state_update,
+    publish_update=lambda p: get_remote_sync().publish_partial_state(p),
     connect_device=connect_device_for_firestore,
 )
 
@@ -233,19 +202,18 @@ def set_brightness(brightness):
     Delegates persistence to MachineStateService while preserving dim-window
     behavior and smooth transitions.
     """
-    global _brightness_before_dim
     service = get_machine_state_service()
 
-    if _currently_in_dim_window:
+    if dim_rt.currently_in_dim_window:
         # When in dim window, only update stored brightness and Firestore; keep hardware dimmed.
         try:
             if service is not None:
                 service.set_brightness(brightness)
-            _brightness_before_dim = brightness
+            dim_rt.brightness_before_dim = brightness
             v = int(brightness)
             # Maintain both canonical and legacy-capitalized fields in Firestore
             # so dashboards reading either stay in sync.
-            notify_device_state_update({"brightness": v, "Brightness": v})
+            get_remote_sync().publish_partial_state({"brightness": v, "Brightness": v})
         except Exception as e:
             print(f"Error updating device brightness while dimmed: {e}")
         return
@@ -256,7 +224,7 @@ def set_brightness(brightness):
         if service is not None:
             service.set_brightness(brightness)
         v = int(brightness)
-        notify_device_state_update({"brightness": v, "Brightness": v})
+        get_remote_sync().publish_partial_state({"brightness": v, "Brightness": v})
     except Exception as e:
         print(f"Error updating brightness: {e}")
 
@@ -290,7 +258,7 @@ def set_volume(volume):
                     check=True,
                     capture_output=True,
                 )
-        notify_device_state_update({"volume": int(volume)})
+        get_remote_sync().publish_partial_state({"volume": int(volume)})
     except Exception as e:
         print(f"Error updating volume: {e}")
 
@@ -330,23 +298,9 @@ ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
-ctx.set_game_status = request_set_game_status
+ctx.set_game_status = lambda gid, st: get_remote_sync().request_set_game_status(gid, st)
 
 _app_ctx = ctx
-
-
-def _parse_iso_ts(value):
-    if not value:
-        return None
-    try:
-        if isinstance(value, str):
-            s = value.strip()
-            if s.endswith("Z"):
-                s = s[:-1]
-            return datetime.fromisoformat(s)
-    except Exception:
-        return None
-    return None
 
 
 def _is_reset_in_progress() -> bool:
@@ -360,25 +314,6 @@ def _set_reset_in_progress(value: bool) -> None:
         _reset_in_progress = bool(value)
 
 
-def _is_firestore_reset_confirmed(config: dict) -> bool:
-    if not isinstance(config, dict):
-        return False
-    if config.get("ip_address") != "":
-        return False
-    if "ssid" in config and config.get("ssid") != "":
-        return False
-    pages = config.get("pages")
-    if pages is not None and (not isinstance(pages, list) or len(pages) != 0):
-        return False
-    games = config.get("games")
-    if games is not None and (not isinstance(games, list) or len(games) != 0):
-        return False
-    dim_window = config.get("dim_window")
-    if not isinstance(dim_window, dict):
-        return False
-    return bool(dim_window.get("dim_window_enabled")) is False
-
-
 def _run_device_reset_sequence() -> None:
     service = get_machine_state_service()
     if service is None:
@@ -390,7 +325,7 @@ def _run_device_reset_sequence() -> None:
     _reset_firestore_confirm_event.clear()
     _network_state_refresh_event.clear()
     try:
-        request_device_reset_state()
+        get_remote_sync().request_device_reset_state()
         _reset_firestore_confirm_event.wait()
         forget_wifi()
         try:
@@ -404,7 +339,7 @@ def _run_device_reset_sequence() -> None:
         except Exception as e:
             print(f"Error terminating game process during reset: {e}")
         try:
-            reset_user_data_file()
+            machine_api.reset_user_data_file()
         except Exception as e:
             print(f"Error resetting user data during device reset: {e}")
         service.clear_apps_directory_contents()
@@ -424,274 +359,32 @@ def _start_device_reset() -> None:
 ctx.reset_device = _start_device_reset
 
 
+_remote_config_applier = RemoteDeviceConfigApplier(
+    RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=get_machine_state_service,
+        bluetooth_scan_controller=_firestore_bluetooth_scan_controller,
+        publish_partial_state=lambda p: get_remote_sync().publish_partial_state(p),
+        request_set_game_status=lambda gid, s: get_remote_sync().request_set_game_status(
+            gid, s
+        ),
+        request_set_all_games_ready=lambda: get_remote_sync().request_set_all_games_ready(),
+        set_time_zone=set_time_zone,
+        term_game_process=term_game_process,
+        ensure_game_downloaded=ensure_game_downloaded,
+        local_game_version_matches=local_game_version_matches,
+        perform_update=perform_update,
+        get_version=get_version,
+        is_reset_in_progress=_is_reset_in_progress,
+        on_reset_confirmed=_reset_firestore_confirm_event.set,
+    ),
+    _remote_config_runtime,
+)
+
+
 def _apply_firestore_config(config: dict) -> None:
-    """
-    Apply configuration received from Firestore to the local machine state.
-
-    This now delegates to MachineStateService so that all core state changes go
-    through a single abstraction.
-    """
-    if not isinstance(config, dict):
-        return
-
-    global _awaiting_games_ready_confirmation, _startup_games_ready_confirmed_at, _startup_filter_playing_until_newer_update, _startup_ready_retry_last_at
-
-    if _is_reset_in_progress() and _is_firestore_reset_confirmed(config):
-        _reset_firestore_confirm_event.set()
-
-    games_cfg = config.get("games")
-    if isinstance(games_cfg, list):
-        ctx.firestore_menu_ready_game_ids = frozenset(
-            str(g["id"])
-            for g in games_cfg
-            if isinstance(g, dict)
-            and g.get("id")
-            and str(g.get("status", "")).strip().lower() == "ready"
-        )
-
-    service = get_machine_state_service()
-    if service is None:
-        # Fallback: do nothing if the service is not yet initialized.
-        return
-
-    # Pages: persist config now, but defer page reload to the main loop
-    # to mirror websocket reload behavior and avoid cross-thread ctx mutation.
-    try:
-        pages = config.get("pages")
-        if isinstance(pages, list):
-            service.set_pages(pages, reload_pages=False)
-            _app_ctx.reload_pages = True
-    except Exception as e:
-        print(f"Error applying Firestore pages config: {e}")
-
-    # Bluetooth scan trigger from Firestore:
-    # bluetooth.is_scan == true -> run scan, publish list+timestamp, reset is_scan false.
-    try:
-        bluetooth_cfg = config.get("bluetooth")
-        if isinstance(bluetooth_cfg, dict):
-            if bool(bluetooth_cfg.get("is_scan")):
-                _firestore_bluetooth_scan_controller.start_scan_if_requested()
-            connect_address = bluetooth_cfg.get("connect")
-            if isinstance(connect_address, str) and connect_address.strip():
-                _firestore_bluetooth_scan_controller.start_connect_if_requested(
-                    connect_address.strip()
-                )
-    except Exception as e:
-        print(f"Error handling Firestore bluetooth config: {e}")
-
-    # Brightness / volume / time zone / dim window / device name / games
-    try:
-        # Brightness can arrive under canonical "brightness" or legacy
-        # capitalized "Brightness" from existing Firestore documents.
-        if "brightness" in config or "Brightness" in config:
-            try:
-                key = "brightness" if "brightness" in config else "Brightness"
-                brightness_val = int(config.get(key))
-                service.set_brightness(brightness_val)
-            except Exception:
-                pass
-
-        if "volume" in config:
-            try:
-                volume_val = int(config.get("volume"))
-                service.set_volume(volume_val)
-            except Exception:
-                pass
-
-        if "time_zone" in config:
-            # time_zone is still applied via the existing helper
-            tz = config.get("time_zone")
-            if tz:
-                set_time_zone(tz)
-
-        dim_window = config.get("dim_window") or {}
-        if isinstance(dim_window, dict):
-            dim_cfg = {
-                "dim_window_enabled": dim_window.get("dim_window_enabled"),
-                "dim_window_start": dim_window.get("dim_window_start"),
-                "dim_window_end": dim_window.get("dim_window_end"),
-                "dim_level": dim_window.get("dim_level"),
-                "dim_restore_seconds": dim_window.get("dim_restore_seconds"),
-            }
-            service.set_dim_window(dim_cfg)
-
-        device_info = config.get("device_info") or {}
-        if isinstance(device_info, dict) and "name" in device_info:
-            service.set_device_name(device_info.get("name", ""))
-
-        # Games: handle status commands from Firestore.
-        # - "downloading": fetch game locally, then set "ready"
-        # - "playing": ensure game exists (download if needed), then launch
-        #              through the same mechanism used by the websocket layer.
-        #
-        # During startup, wait for confirmation that the ready-reset has landed
-        # before acting on incoming game commands.
-        games_cfg = config.get("games")
-        if isinstance(games_cfg, list):
-            cfg_ts = _parse_iso_ts(config.get("device_updated_at") or config.get("updated_at"))
-            confirmed_in_this_call = False
-            if _awaiting_games_ready_confirmation:
-                if are_firestore_playing_games_cleared(games_cfg):
-                    _awaiting_games_ready_confirmation = False
-                    _startup_games_ready_confirmed_at = cfg_ts
-                    _startup_filter_playing_until_newer_update = True
-                    confirmed_in_this_call = True
-                    print("Firestore game reset confirmed; enabling game command handling")
-                else:
-                    now = time.time()
-                    if (now - float(_startup_ready_retry_last_at)) >= 2.0:
-                        _startup_ready_retry_last_at = now
-                        try:
-                            request_set_all_games_ready()
-                        except Exception:
-                            pass
-                    return
-
-            for g in games_cfg:
-                if not isinstance(g, dict):
-                    continue
-                game_id = g.get("id")
-                status = str(g.get("status", "")).strip().lower()
-                expected_version = str(g.get("version") or "").strip()
-                if not game_id:
-                    continue
-                game_id = str(game_id)
-                if (
-                    _startup_filter_playing_until_newer_update
-                    and not confirmed_in_this_call
-                    and status != "playing"
-                ):
-                    _startup_filter_playing_until_newer_update = False
-                if status == "playing" and _startup_filter_playing_until_newer_update:
-                    if (
-                        _startup_games_ready_confirmed_at is not None
-                        and cfg_ts is not None
-                        and cfg_ts <= _startup_games_ready_confirmed_at
-                    ):
-                        continue
-                    _startup_filter_playing_until_newer_update = False
-
-                def _current_game_id() -> str:
-                    if ctx.game and isinstance(ctx.game, dict):
-                        return str(ctx.game.get("game_id") or "")
-                    return ""
-
-                def _game_exists(gid: str) -> bool:
-                    return os.path.isdir(os.path.join(os.getcwd(), "apps", gid))
-
-                def _set_status(gid: str, next_status: str) -> None:
-                    try:
-                        request_set_game_status(gid, next_status)
-                    except Exception as e:
-                        print(
-                            f"Error updating Firestore game status to {next_status} for {gid}: {e}"
-                        )
-
-                def _request_launch(gid: str) -> None:
-                    if _current_game_id() != gid:
-                        ctx.start_game = True
-                        ctx.game_id = gid
-
-                def _terminate_running_game(gid: str) -> None:
-                    # Remote "ready" for the same currently-running game means
-                    # we should stop the process and leave game mode.
-                    if ctx.game and isinstance(ctx.game, dict):
-                        running_id = str(ctx.game.get("game_id") or "")
-                        if running_id == gid:
-                            term_game_process(ctx.game)
-                            ctx.game = None
-                            ctx.reload_conf = True
-
-                if status == "downloading" and local_game_version_matches(game_id, expected_version):
-                    _set_status(game_id, "ready")
-                    continue
-
-                handle_incoming_game_status(
-                    game_id,
-                    status,
-                    current_game_id=_current_game_id(),
-                    game_exists=_game_exists,
-                    ensure_game_downloaded=ensure_game_downloaded,
-                    set_game_status=_set_status,
-                    request_launch=_request_launch,
-                    terminate_running_game=_terminate_running_game,
-                )
-                if status == "playing":
-                    break
-    except Exception as e:
-        print(f"Error applying Firestore device config: {e}")
-
-    # One-shot publish of startup firmware version to Firestore once bridge is active.
-    global _startup_firmware_version
-    try:
-        if _startup_firmware_version:
-            payload = {
-                "firmware": {
-                    "version": _startup_firmware_version,
-                    "update": False,
-                }
-            }
-            try:
-                notify_device_state_update(payload)
-            except Exception as e:
-                print(f"Error notifying Firestore of startup firmware version: {e}")
-
-            try:
-                service.set_firmware_info(_startup_firmware_version, False)
-            except Exception as e:
-                print(f"Error persisting startup firmware info locally: {e}")
-
-            _startup_firmware_version = None
-    except Exception as e:
-        print(f"Error handling startup firmware version publish: {e}")
-
-    # Firmware update handling
-    global _firmware_update_in_progress
-    try:
-        firmware_cfg = config.get("firmware") or {}
-        if not isinstance(firmware_cfg, dict):
-            return
-        if not firmware_cfg.get("update"):
-            return
-        if _firmware_update_in_progress:
-            return
-        _firmware_update_in_progress = True
-
-        update_result = perform_update()
-        if isinstance(update_result, dict) and not update_result.get("error"):
-            new_version = "dev"
-            try:
-                version_result = get_version()
-                if (
-                    isinstance(version_result, dict)
-                    and not version_result.get("error")
-                    and version_result.get("version")
-                ):
-                    new_version = str(version_result.get("version"))
-            except Exception as e:
-                print(f"Error determining firmware version after update: {e}")
-
-            payload = {
-                "firmware": {
-                    "version": new_version,
-                    "update": False,
-                }
-            }
-            try:
-                notify_device_state_update(payload)
-            except Exception as e:
-                print(f"Error notifying Firestore of firmware update completion: {e}")
-
-            try:
-                service.set_firmware_info(new_version, False)
-            except Exception as e:
-                print(f"Error persisting firmware info locally after update: {e}")
-        else:
-            print(f"Firmware update requested via Firestore but perform_update failed: {update_result}")
-    except Exception as e:
-        print(f"Error handling Firestore firmware update config: {e}")
-    finally:
-        _firmware_update_in_progress = False
+    """Apply remote (Firestore-shaped) configuration; implementation in remote_device_config."""
+    _remote_config_applier.apply(config)
 
 
 def locate_device():
@@ -959,7 +652,9 @@ def check_connection_loop():
             ):
                 try:
                     di = get_device_info()
-                    restart_firestore_sync(di or {}, reload_config, _apply_firestore_config)
+                    get_remote_sync().restart_sync(
+                        di or {}, reload_config, _apply_firestore_config
+                    )
                     request_network_state_refresh()
                 except Exception as e:
                     print(f"Error restarting Firestore sync after connectivity established: {e}")
@@ -987,7 +682,7 @@ def network_state_firestore_loop():
                 last_published_ssid = None
                 _network_state_refresh_event.clear()
 
-            if not _is_reset_in_progress() and is_firestore_connected():
+            if not _is_reset_in_progress() and get_remote_sync().is_connected():
                 updates = {}
 
                 normalized_ip = normalize_ip(get_ip_address())
@@ -1007,7 +702,7 @@ def network_state_firestore_loop():
                     updates["ssid"] = payload_ssid
 
                 if updates:
-                    notify_device_state_update(updates)
+                    get_remote_sync().publish_partial_state(updates)
                     if "ip_address" in updates:
                         last_published_ip = payload_ip
                     if "ssid" in updates:
@@ -1030,76 +725,32 @@ def _on_firestore_connectivity_changed(connected: bool) -> None:
         request_network_state_refresh()
 
 
-# -----------------------------------------------------------------------------
-# Startup: loading screen, device, threads, init_widgets
-# -----------------------------------------------------------------------------
-dartsnut.update_frame_buffer(assets.create_loading_image())
-device_info = get_device_info() or {}
-try:
-    version_result = get_version()
-    firmware_version = "dev"
-    if (
-        isinstance(version_result, dict)
-        and not version_result.get("error")
-        and version_result.get("version")
-    ):
-        firmware_version = str(version_result.get("version"))
-    device_info["firmware_version"] = firmware_version
-    _startup_firmware_version = firmware_version
-except Exception as e:
-    print(f"Error determining firmware version for Firestore initial state: {e}")
-if "firmware_update" not in device_info:
-    device_info["firmware_update"] = False
-set_volume(int(device_info.get("volume", "50")))
-
-ble_thread = threading.Thread(
-    target=start_ble_server, args=(locate_device,), daemon=True
-)
-ble_thread.start()
-
-
 def trigger_dim_check():
     _app_ctx.trigger_dim_check = True
 
 
-websocket_thread = threading.Thread(
-    target=start_websocket_server,
-    args=(
-        set_brightness,
-        locate_device,
-        reload_config,
-        set_time_zone,
-        get_widgets_framebuffer,
-        start_game_from_websocket,
-        set_volume,
-        trigger_dim_check,
-    ),
-    daemon=True,
+device_info = get_device_info() or {}
+start_background_subsystems(
+    dartsnut=dartsnut,
+    device_info=device_info,
+    get_version=get_version,
+    set_volume=set_volume,
+    start_ble_server=start_ble_server,
+    locate_device=locate_device,
+    start_websocket_server=start_websocket_server,
+    set_brightness=set_brightness,
+    reload_config=reload_config,
+    set_time_zone=set_time_zone,
+    get_widgets_framebuffer=get_widgets_framebuffer,
+    start_game_from_websocket=start_game_from_websocket,
+    trigger_dim_check=trigger_dim_check,
+    check_connection_loop=check_connection_loop,
+    network_state_firestore_loop=network_state_firestore_loop,
+    apply_remote_config=_apply_firestore_config,
+    on_remote_connectivity_changed=_on_firestore_connectivity_changed,
+    request_network_state_refresh=request_network_state_refresh,
+    remote_config_runtime=_remote_config_runtime,
 )
-websocket_thread.start()
-connection_thread = threading.Thread(target=check_connection_loop, daemon=True)
-connection_thread.start()
-network_firestore_thread = threading.Thread(
-    target=network_state_firestore_loop, daemon=True
-)
-network_firestore_thread.start()
-set_firestore_connectivity_callback(_on_firestore_connectivity_changed)
-request_network_state_refresh()
-
-try:
-    start_firestore_sync_if_available(device_info or {}, reload_config, _apply_firestore_config)
-except Exception as e:
-    print(f"Failed to start Firestore sync: {e}")
-else:
-    # On service start, proactively reset all local games to \"ready\" status in
-    # Firestore so any stale \"playing\" flags from previous runs are cleared.
-    try:
-        request_set_all_games_ready()
-        _awaiting_games_ready_confirmation = True
-        _startup_games_ready_confirmed_at = None
-        _startup_filter_playing_until_newer_update = False
-    except Exception as e:
-        print(f"Error resetting Firestore game statuses to ready on startup: {e}")
 
 ctx.reload_conf = False
 ctx.start_game = False
@@ -1116,251 +767,22 @@ init_machine_state_service(
 init_widgets(ctx)
 
 
-# -----------------------------------------------------------------------------
-# Main loop
-# -----------------------------------------------------------------------------
-while dartsnut.running:
-    try:
-        time.sleep(1 / 30)
-        assets.get_current_loading_frame()
-
-        _update_brightness_transition()
-
-        if ctx.trigger_dim_check:
-            ctx.trigger_dim_check = False
-            _last_dim_check_time = 0
-
-        # Dim window: 60s check
-        if (time.time() - _last_dim_check_time) >= 60 or _last_dim_check_time == 0:
-            _last_dim_check_time = time.time()
-            di = get_device_info()
-            enabled = str(di.get("dim_window_enabled", "false")).lower() == "true"
-            start_s = (di.get("dim_window_start") or "").strip()
-            end_s = (di.get("dim_window_end") or "").strip()
-            dim_lvl = int(di.get("dim_level", 10))
-            if not enabled or not start_s or not end_s:
-                if _currently_in_dim_window:
-                    restore = (
-                        _brightness_before_dim
-                        if _brightness_before_dim is not None
-                        else int(di.get("brightness", 50))
-                    )
-                    _start_brightness_transition(restore)
-                    _currently_in_dim_window = False
-                    _dim_force_normal_brightness = False
-                    _dim_force_normal_start_time = None
-            else:
-                start_hm = _parse_hhmm(start_s)
-                end_hm = _parse_hhmm(end_s)
-                if start_hm is None or end_hm is None:
-                    if _currently_in_dim_window:
-                        restore = (
-                            _brightness_before_dim
-                            if _brightness_before_dim is not None
-                            else int(di.get("brightness", 50))
-                        )
-                        _start_brightness_transition(restore)
-                        _currently_in_dim_window = False
-                        _dim_force_normal_brightness = False
-                        _dim_force_normal_start_time = None
-                else:
-                    now = datetime.now().time()
-                    start_t = dt_time(start_hm[0], start_hm[1])
-                    end_t = dt_time(end_hm[0], end_hm[1])
-                    in_window = (start_t <= end_t and start_t <= now <= end_t) or (
-                        start_t > end_t and (now >= start_t or now < end_t)
-                    )
-                    if in_window:
-                        if (
-                            ctx.current_state.name() != "in_game"
-                            and ctx.current_state.name() != "game_select"
-                            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
-                            and not _dim_force_normal_brightness
-                        ):
-                            if not _currently_in_dim_window:
-                                _brightness_before_dim = int(di.get("brightness", 50))
-                            _start_brightness_transition(dim_lvl)
-                            _currently_in_dim_window = True
-                    else:
-                        if _currently_in_dim_window:
-                            restore = (
-                                _brightness_before_dim
-                                if _brightness_before_dim is not None
-                                else int(di.get("brightness", 50))
-                            )
-                            _start_brightness_transition(restore)
-                            _currently_in_dim_window = False
-                            _dim_force_normal_brightness = False
-                            _dim_force_normal_start_time = None
-
-        ctx.state_str = ctx.current_state.name()
-
-        if ctx.locate_device_intv:
-            dartsnut.update_frame_buffer(assets.identify_image)
-            ctx.locate_device_intv -= 1
-        elif ctx.reload_conf:
-            ctx.reload_conf = False
-            init_widgets(ctx)
-        elif getattr(ctx, "reload_pages", False):
-            ctx.reload_pages = False
-            reload_pages_from_conf(ctx)
-        elif ctx.start_game:
-            ctx.start_game = False
-            term_game_process(ctx.game)
-            ctx.game = start_game_process(ctx.game_id)
-            if ctx.game is not None:
-                term_widget_processes(ctx.pages)
-                ctx.transition_to(InGameState())
-                # Reflect the runtime status back to Firestore so that the
-                # launched game is marked as \"playing\".
-                try:
-                    request_set_game_status(ctx.game_id, "playing")
-                except Exception as e:
-                    print(f"Error updating Firestore game status to playing: {e}")
-        else:
-            ctx.current_state.update(ctx)
-
-        buttons = get_buttons_pressed(ctx)
-        ctx.current_button_state = dict(get_buttons_pressed.old_buttons)
-
-        # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
-        if (
-            ctx.current_state.name() != "in_game"
-            and ctx.current_state.name() != "game_select"
-            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
-            and _currently_in_dim_window
-        ):
-            di = get_device_info()
-            dim_lvl = int(di.get("dim_level", 10))
-            # Remove force after dim_restore_seconds
-            if (
-                _dim_force_normal_brightness
-                and _dim_force_normal_start_time is not None
-            ):
-                secs = max(5, min(300, int(di.get("dim_restore_seconds", 30))))
-                if time.time() - _dim_force_normal_start_time >= secs:
-                    _dim_force_normal_brightness = False
-                    _dim_force_normal_start_time = None
-                    _start_brightness_transition(dim_lvl)
-            if _dim_force_normal_brightness and buttons.get("btn_b"):
-                # Let B go to state when it has a meaning: menu exit overlay (end game), game_select (back to menu), or settings reset overlay (dismiss)
-                btn_b_handled_by_state = (
-                    ctx.current_state.is_showing_exit_game_overlay(ctx)
-                    or ctx.current_state.name() == "game_select"
-                    or ctx.current_state.consumes_btn_b_for_overlay(ctx)
-                )
-                if not btn_b_handled_by_state:
-                    _dim_force_normal_brightness = False
-                    _dim_force_normal_start_time = None
-                    _start_brightness_transition(dim_lvl)
-                    buttons["btn_b"] = False
-            elif not _dim_force_normal_brightness and buttons.get("btn_a"):
-                _dim_force_normal_brightness = True
-                _dim_force_normal_start_time = time.time()
-                restore = (
-                    _brightness_before_dim
-                    if _brightness_before_dim is not None
-                    else int(di.get("brightness", 50))
-                )
-                _start_brightness_transition(restore)
-                buttons["btn_a"] = False
-
-        ctx.current_state.handle_input(ctx, buttons)
-
-        # Render widgets: update all page framebuffers from shared memory.
-        # Be defensive about page/widget structure so that transient Firestore
-        # or config issues don't crash the main loop.
-        if ctx.pages is not None and len(ctx.pages) > 0:
-            for page in ctx.pages:
-                if not isinstance(page, dict):
-                    continue
-
-                framebuffer = page.get("framebuffer")
-                if framebuffer is None:
-                    # Skip pages that have not been fully initialized yet.
-                    continue
-
-                widgets = page.get("widgets")
-                if not isinstance(widgets, list):
-                    # If widgets are missing or malformed, skip this page but keep running.
-                    continue
-
-                page_img = Image.frombytes(
-                    "RGB", (128, 160), bytes(framebuffer)
-                )
-                current_loading_frame_big = assets.get_current_loading_frame_big()
-                current_loading_frame = assets.get_current_loading_frame()
-                if current_loading_frame_big.mode != "RGB":
-                    current_loading_frame_big = current_loading_frame_big.convert("RGB")
-                if current_loading_frame.mode != "RGB":
-                    current_loading_frame = current_loading_frame.convert("RGB")
-
-                for widget in widgets:
-                    if not isinstance(widget, dict):
-                        continue
-
-                    widget_data = widget.get("widget") or widget
-                    if not isinstance(widget_data, dict):
-                        continue
-
-                    widget_id = widget_data.get("id", "unknown")
-                    position = widget_data.get("position")
-                    if (
-                        not isinstance(position, (list, tuple))
-                        or len(position) != 4
-                    ):
-                        # Invalid position data; skip this widget.
-                        continue
-                    x0, y0, x1, y1 = position
-
-                    widget_width = x1 - x0 + 1
-                    widget_height = y1 - y0 + 1
-                    widget_frame = None
-
-                    shm = widget.get("shm")
-                    if shm is not None:
-                        width = widget_width
-                        height = widget_height
-                        try:
-                            buf = getattr(shm, "buf", None)
-                            if buf is not None:
-                                widget_frame = Image.frombytes(
-                                    "RGB",
-                                    (width, height),
-                                    bytes(buf[1 : 1 + width * height * 3]),
-                                )
-                                page_img.paste(widget_frame, (x0, y0))
-                                if buf[0] == 0:
-                                    buf[0] = 1
-                        except Exception as e:
-                            print(f"Error reading widget frame for {widget_id}: {e}")
-
-                    widget_ready = False
-                    if widget_frame is not None:
-                        was_not_launched = not widget.get("launched", False)
-                        widget_ready = check_widget_ready(widget_frame)
-                        if widget_ready:
-                            widget["launched"] = True
-                            if widget_height == 160 and was_not_launched:
-                                small_widget_area = widget_frame.crop(
-                                    (0, 128, widget_width, 160)
-                                )
-                                area_bytes = small_widget_area.tobytes()
-                                widget["has_small_widget"] = any(
-                                    byte != 0 for byte in area_bytes
-                                )
-
-                    if not widget_ready:
-                        if widget_height == 160:
-                            page_img.paste(current_loading_frame_big, (x0, y0 + 32))
-                            has_small_widget = widget.get("has_small_widget", None)
-                            if has_small_widget is not False:
-                                page_img.paste(current_loading_frame, (x0, y0 + 128))
-                        elif widget_height == 128:
-                            page_img.paste(current_loading_frame_big, (x0, y0 + 32))
-                        elif widget_height == 32:
-                            page_img.paste(current_loading_frame, (x0, y0))
-
-                page["framebuffer"] = bytearray(page_img.tobytes())
-    except Exception as e:
-        print(f"Error in main loop: {e}")
+run_main_loop(
+    dim_rt=dim_rt,
+    dartsnut=dartsnut,
+    ctx=ctx,
+    assets=assets,
+    get_device_info=get_device_info,
+    parse_hhmm=_parse_hhmm,
+    update_brightness_transition=_update_brightness_transition,
+    start_brightness_transition=_start_brightness_transition,
+    init_widgets=init_widgets,
+    reload_pages_from_conf=reload_pages_from_conf,
+    term_game_process=term_game_process,
+    start_game_process=start_game_process,
+    term_widget_processes=term_widget_processes,
+    get_buttons_pressed=get_buttons_pressed,
+    check_widget_ready=check_widget_ready,
+    in_game_state_cls=InGameState,
+    get_remote_sync=get_remote_sync,
+)

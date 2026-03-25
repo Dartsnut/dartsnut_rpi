@@ -9,7 +9,7 @@ from python_websocket.error_handler import (
     handle_file_not_found,
 )
 from machine_state_service import get_machine_state_service
-from firestore_sync_bridge import is_firestore_connected
+from remote_sync_port import get_remote_sync
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 HOME_DIR = ""
@@ -133,7 +133,7 @@ def get_device_info():
         except Exception:
             ssid = ""
         device_info["ssid"] = ssid
-        device_info["firestore_connected"] = bool(is_firestore_connected())
+        device_info["firestore_connected"] = bool(get_remote_sync().is_connected())
 
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:

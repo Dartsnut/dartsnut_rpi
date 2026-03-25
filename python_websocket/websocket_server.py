@@ -25,7 +25,6 @@ from python_websocket.error_handler import (
     handle_exception,
     create_error_response
 )
-from firestore_sync_bridge import is_firestore_bridge_active
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
