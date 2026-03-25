@@ -183,9 +183,19 @@ class MachineStateService:
         except Exception as e:
             print(f"Error updating dim window in device.json: {e}")
 
-    def set_pages(self, pages: List[Dict[str, Any]]) -> None:
+    def set_pages(
+        self,
+        pages: List[Dict[str, Any]],
+        *,
+        reload_pages: bool = True,
+    ) -> None:
         """
-        Persist pages to ./apps/conf.json and reload pages into AppContext.
+        Persist pages to ./apps/conf.json.
+
+        When reload_pages is True (default), immediately reload pages into
+        AppContext. Callers that need websocket-style deferred reload behavior
+        can pass reload_pages=False and trigger ctx.reload_pages in the main
+        loop instead.
         """
         try:
             # Normalize widgets lists so we never persist \"widgets\": null.
@@ -221,6 +231,9 @@ class MachineStateService:
                 json.dump(payload, f)
         except Exception as e:
             print(f"Error writing apps/conf.json: {e}")
+            return
+
+        if not reload_pages:
             return
 
         try:

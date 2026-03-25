@@ -454,11 +454,13 @@ def _apply_firestore_config(config: dict) -> None:
         # Fallback: do nothing if the service is not yet initialized.
         return
 
-    # Pages
+    # Pages: persist config now, but defer page reload to the main loop
+    # to mirror websocket reload behavior and avoid cross-thread ctx mutation.
     try:
         pages = config.get("pages")
         if isinstance(pages, list):
-            service.set_pages(pages)
+            service.set_pages(pages, reload_pages=False)
+            _app_ctx.reload_pages = True
     except Exception as e:
         print(f"Error applying Firestore pages config: {e}")
 
