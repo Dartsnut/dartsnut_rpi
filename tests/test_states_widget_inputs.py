@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import time as _time
+
+import states.widget as swidget
+from states.widget import WidgetState
+
+
+class _Ctx:
+    def __init__(self, pages, page_index):
+        self.pages = pages
+        self.page_index = page_index
+        self.page_freeze = False
+        self.page_tick = 0.0
+        self.transitions = []
+        self._device_info = {"model": "PixelDart"}
+
+    def get_device_info(self):
+        return dict(self._device_info)
+
+    def transition_to(self, state):
+        self.transitions.append(type(state).__name__)
+
+
+def test_widget_btn_a_toggles_freeze_and_updates_tick(monkeypatch):
+    pages = []
+    ctx = _Ctx(pages=pages, page_index=0)
+    monkeypatch.setattr(swidget.time, "time", lambda: 123.0)
+
+    WidgetState().handle_input(ctx, {"btn_a": True})
+    assert ctx.page_freeze is True
+    assert ctx.page_tick == 123.0
+
+
+def test_widget_left_right_selects_enabled_non_qr_pages(monkeypatch):
+    pages = [
+        {"uuid": "0", "enabled": True, "widgets": []},
+        {"uuid": "a", "enabled": True, "widgets": []},
+        {"uuid": "b", "enabled": False, "widgets": []},
+        {"uuid": "c", "enabled": True, "widgets": []},
+    ]
+    ctx = _Ctx(pages=pages, page_index=1)  # at "a"
+    monkeypatch.setattr(swidget.time, "time", lambda: 10.0)
+
+    WidgetState().handle_input(ctx, {"btn_left": True})
+    assert ctx.page_index == 3  # "c"
+    assert ctx.page_tick == 10.0
+
+    monkeypatch.setattr(swidget.time, "time", lambda: 11.0)
+    WidgetState().handle_input(ctx, {"btn_right": True})
+    assert ctx.page_index == 1  # back to "a" skipping uuid "0"
+    assert ctx.page_tick == 11.0
+
+
+def test_widget_btn_home_pixelboard_toggles_freeze(monkeypatch):
+    pages = [{"uuid": "0", "enabled": True, "widgets": []}]
+    ctx = _Ctx(pages=pages, page_index=0)
+    ctx._device_info["model"] = "PixelBoard"
+    monkeypatch.setattr(swidget.time, "time", lambda: 42.0)
+
+    WidgetState().handle_input(ctx, {"btn_home": True})
+    assert ctx.page_freeze is True
+    assert ctx.transitions == []
+    assert ctx.page_tick == 42.0
+
+
+def test_widget_btn_home_other_model_transitions_to_menu(monkeypatch):
+    pages = [{"uuid": "0", "enabled": True, "widgets": []}]
+    ctx = _Ctx(pages=pages, page_index=0)
+    ctx._device_info["model"] = "PixelDart"
+    monkeypatch.setattr(swidget.time, "time", lambda: 1.0)
+
+    WidgetState().handle_input(ctx, {"btn_home": True})
+    assert ctx.transitions[-1] == "MenuState"
+
