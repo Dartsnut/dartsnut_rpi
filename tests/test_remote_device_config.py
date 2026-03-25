@@ -4,8 +4,8 @@ import json
 import os
 from unittest.mock import MagicMock
 
-from app_context import AppContext
-from remote_device_config import (
+from domain.app_context import AppContext
+from runtime.remote_device_config import (
     RemoteConfigRuntimeState,
     RemoteDeviceConfigApplier,
     RemoteDeviceConfigDependencies,

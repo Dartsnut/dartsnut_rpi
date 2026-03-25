@@ -38,7 +38,7 @@ from python_websocket.websocket_server import start_websocket_server
 from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
 
 import assets
-from app_context import AppContext
+from domain.app_context import AppContext
 from states import MenuState, WidgetState, GameSelectState, InGameState, SettingsState
 from widget_lifecycle import (
     init_pages,
@@ -52,23 +52,23 @@ from game_lifecycle import (
     ensure_game_downloaded,
     local_game_version_matches,
 )
-import machine_api
+import runtime.machine_api as machine_api
 from machine_state_service import (
     init_machine_state_service,
     get_machine_state_service,
 )
-from remote_device_config import (
+from runtime.remote_device_config import (
     RemoteConfigRuntimeState,
     RemoteDeviceConfigApplier,
     RemoteDeviceConfigDependencies,
 )
-from remote_sync_port import (
+from runtime.remote_sync_port import (
     create_default_remote_sync,
     get_remote_sync,
     set_remote_sync,
 )
-from display_loop import DimWindowRuntime, run_main_loop
-from app_bootstrap import start_background_subsystems
+from runtime.display_loop import DimWindowRuntime, run_main_loop
+from runtime.bootstrap import start_background_subsystems
 
 # -----------------------------------------------------------------------------
 # Display and device (used by context and dim logic)

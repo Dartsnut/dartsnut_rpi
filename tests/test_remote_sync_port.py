@@ -1,4 +1,4 @@
-import remote_sync_port as rsp
+import runtime.remote_sync_port as rsp
 
 
 def test_create_default_remote_sync_matches_bridge_availability():

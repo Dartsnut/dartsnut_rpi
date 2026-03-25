@@ -1,7 +1,7 @@
 import sys
 import types
 
-import machine_api
+import runtime.machine_api as machine_api
 
 
 def test_user_data_wrappers_delegate(monkeypatch):

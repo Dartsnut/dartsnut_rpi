@@ -1,4 +1,4 @@
-from game_firestore_sync import handle_incoming_game_status, are_firestore_playing_games_cleared
+from domain.game_firestore_sync import handle_incoming_game_status, are_firestore_playing_games_cleared
 from states.game import InGameState
 
 

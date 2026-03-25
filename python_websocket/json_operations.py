@@ -9,7 +9,7 @@ from python_websocket.error_handler import (
     handle_file_not_found,
 )
 from machine_state_service import get_machine_state_service
-from remote_sync_port import get_remote_sync
+from runtime.remote_sync_port import get_remote_sync
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 HOME_DIR = ""

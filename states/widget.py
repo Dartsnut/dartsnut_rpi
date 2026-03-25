@@ -4,7 +4,7 @@ import signal
 import time
 from PIL import Image
 
-from app_context import AppContext
+from domain.app_context import AppContext
 from states.base import BaseState
 from widget_lifecycle import (
     check_page_widget_updates,

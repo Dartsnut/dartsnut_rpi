@@ -3,10 +3,10 @@ import signal
 import time
 from PIL import Image, ImageDraw
 
-from app_context import AppContext
+from domain.app_context import AppContext
 from states.base import BaseState
 import assets
-import machine_api
+import runtime.machine_api as machine_api
 
 
 class GameSelectState(BaseState):

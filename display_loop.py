@@ -13,7 +13,7 @@ from typing import Any, Callable, Type
 
 from PIL import Image
 
-from app_context import AppContext
+from domain.app_context import AppContext
 
 
 @dataclass

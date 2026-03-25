@@ -6,7 +6,7 @@ import os
 import pytest
 
 import machine_state_service as mss_mod
-from app_context import AppContext
+from domain.app_context import AppContext
 from python_websocket import json_operations
 
 

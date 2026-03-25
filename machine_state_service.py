@@ -19,7 +19,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from app_context import AppContext
+from domain.app_context import AppContext
 
 
 class MachineStateService:

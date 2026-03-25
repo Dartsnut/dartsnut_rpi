@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-from app_context import AppContext
-from game_firestore_sync import (
+from domain.app_context import AppContext
+from domain.game_firestore_sync import (
     are_firestore_playing_games_cleared,
     handle_incoming_game_status,
 )
