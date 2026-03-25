@@ -296,8 +296,20 @@ def set_volume(volume):
 
 
 def set_time_zone(time_zone):
+    tz = str(time_zone or "").strip()
+    if not tz:
+        return None
     try:
-        subprocess.run(["sudo", "timedatectl", "set-timezone", time_zone], check=True)
+        current_tz_result = subprocess.run(
+            ["timedatectl", "show", "--property=Timezone", "--value"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        current_tz = (current_tz_result.stdout or "").strip()
+        if current_tz == tz:
+            return None
+        subprocess.run(["sudo", "timedatectl", "set-timezone", tz], check=True)
     except subprocess.CalledProcessError as e:
         print(f"Failed to set time zone: {e}")
     return None
