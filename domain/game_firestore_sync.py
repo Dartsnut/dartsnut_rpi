@@ -1,3 +1,51 @@
-"""Domain-facing game firestore sync module."""
+"""Helpers for reconciling incoming Firestore game status commands."""
 
-from game_firestore_sync import *  # noqa: F401,F403
+from typing import Callable, Optional
+
+
+def are_firestore_playing_games_cleared(games_cfg) -> bool:
+    """True when there are no Firestore game entries currently marked playing."""
+    if not isinstance(games_cfg, list):
+        return False
+    for g in games_cfg:
+        if not isinstance(g, dict):
+            continue
+        status = str(g.get("status", "")).strip().lower()
+        if status == "playing":
+            return False
+    return True
+
+
+def handle_incoming_game_status(
+    game_id: str,
+    status: str,
+    *,
+    current_game_id: Optional[str],
+    game_exists: Callable[[str], bool],
+    ensure_game_downloaded: Callable[[str], bool],
+    set_game_status: Callable[[str, str], None],
+    request_launch: Callable[[str], None],
+    terminate_running_game: Callable[[str], None],
+) -> None:
+    """Apply one incoming game status command from Firestore."""
+    if not game_id:
+        return
+
+    normalized = str(status or "").strip().lower()
+    if normalized == "downloading":
+        set_game_status(game_id, "downloading")
+        if ensure_game_downloaded(game_id):
+            set_game_status(game_id, "ready")
+        return
+
+    if normalized == "playing":
+        if not game_exists(game_id):
+            set_game_status(game_id, "downloading")
+            if not ensure_game_downloaded(game_id):
+                return
+        request_launch(game_id)
+        return
+
+    if normalized == "ready" and current_game_id == game_id:
+        terminate_running_game(game_id)
+        set_game_status(game_id, "ready")
