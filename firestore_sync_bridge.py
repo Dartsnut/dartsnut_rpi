@@ -31,37 +31,6 @@ _firestore_connected_lock = threading.Lock()
 _connectivity_callback: Optional[Callable[[bool], None]] = None
 _WRITE_DEBOUNCE_SECONDS = 0.20
 _ECHO_FINGERPRINT_TTL_SECONDS = 5.0
-_AGENT_DEBUG_LOG_PATH = "/home/rpi/dartsnut_rpi/.cursor/debug-be4914.log"
-
-
-def _agent_debug_log(
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: Dict[str, Any],
-    run_id: str = "pre-fix",
-) -> None:
-    # #region agent log
-    try:
-        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as _f:
-            _f.write(
-                json.dumps(
-                    {
-                        "sessionId": "be4914",
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                        "runId": run_id,
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
 
 
 def _set_firestore_connected(connected: bool) -> None:
@@ -317,15 +286,6 @@ class _DeviceStateWriteCache:
         try:
             sent_ok = bool(sender(payload))
         finally:
-            # #region agent log
-            glen = len(payload.get("games") or []) if isinstance(payload.get("games"), list) else -1
-            _agent_debug_log(
-                "H2",
-                "firestore_sync_bridge._flush_pending",
-                "flush result",
-                {"sent_ok": sent_ok, "payload_keys": sorted(payload.keys()), "games_len": glen},
-            )
-            # #endregion
             with self._lock:
                 if sent_ok:
                     now = time.time()
@@ -334,6 +294,10 @@ class _DeviceStateWriteCache:
                     self._recent_payload_fingerprints[_canonical_json(payload)] = now
                     self._prune_recent_fingerprints_locked(now)
                     self._stats["sent"] += 1
+                else:
+                    # Preserve failed payload for retry after transient disconnects.
+                    for key, value in payload.items():
+                        self._pending[key] = value
                 self._flush_in_progress = False
                 if self._pending and self._flush_timer is None:
                     self._flush_timer = threading.Timer(
@@ -538,7 +502,11 @@ class _SyncClient:
                                     # Push the merged state back to Firestore so it
                                     # becomes the new source of truth.
                                     try:
-                                        notify_device_state_update(cfg)
+                                        publish_cfg = dict(cfg)
+                                        # Runtime game status is transient and should not
+                                        # be replayed from config_initial merge results.
+                                        publish_cfg.pop("games", None)
+                                        notify_device_state_update(publish_cfg)
                                     except Exception:
                                         pass
                                 try:
@@ -562,26 +530,19 @@ class _SyncClient:
         self._reader_thread = threading.Thread(target=_server, daemon=True)
         self._reader_thread.start()
 
-    def send_state(self, payload: Dict[str, Any], *, full: bool = False) -> None:
+    def send_state(self, payload: Dict[str, Any], *, full: bool = False) -> bool:
         payload = _coerce_pages_games_lists(dict(payload))
         kind = "initial_state" if full else "device_state"
         data = (json.dumps({"kind": kind, "payload": payload}) + "\n").encode("utf-8")
         with self._conn_lock:
             conn = self._conn
         if conn is None:
-            # #region agent log
-            _agent_debug_log(
-                "H2",
-                "firestore_sync_bridge._SyncClient.send_state",
-                "no socket conn; drop outbound",
-                {"kind": "initial_state" if full else "device_state", "has_games": "games" in payload},
-            )
-            # #endregion
-            return
+            return False
         try:
             conn.sendall(data)
+            return True
         except Exception:
-            return
+            return False
 
 
 def start_firestore_sync_if_available(
@@ -611,18 +572,9 @@ def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
         with _bridge_lock:
             client = _client
         if client is None:
-            # #region agent log
-            _agent_debug_log(
-                "H2",
-                "firestore_sync_bridge.notify_device_state_update._sender",
-                "client is None",
-                {"keys": sorted(payload.keys())},
-            )
-            # #endregion
             return False
         try:
-            client.send_state(payload, full=False)
-            return True
+            return bool(client.send_state(payload, full=False))
         except Exception:
             return False
 
@@ -739,15 +691,6 @@ def request_set_all_games_ready() -> None:
         for g in games:
             if isinstance(g, dict):
                 g["status"] = "ready"
-        # #region agent log
-        ids = [str(x.get("id", "")) for x in games if isinstance(x, dict)]
-        _agent_debug_log(
-            "H1",
-            "firestore_sync_bridge.request_set_all_games_ready",
-            "built ready summary",
-            {"n_games": len(games), "ids": ids[:20], "will_notify": bool(games)},
-        )
-        # #endregion
         if games:
             notify_device_state_update({"games": games})
     except Exception as e:

@@ -134,6 +134,7 @@ _startup_firmware_version = None
 _awaiting_games_ready_confirmation = False
 _startup_games_ready_confirmed_at = None
 _startup_filter_playing_until_newer_update = False
+_startup_ready_retry_last_at = 0.0
 _network_state_refresh_event = threading.Event()
 _reset_in_progress = False
 _reset_lock = threading.Lock()
@@ -421,7 +422,7 @@ def _apply_firestore_config(config: dict) -> None:
     if not isinstance(config, dict):
         return
 
-    global _awaiting_games_ready_confirmation, _startup_games_ready_confirmed_at, _startup_filter_playing_until_newer_update
+    global _awaiting_games_ready_confirmation, _startup_games_ready_confirmed_at, _startup_filter_playing_until_newer_update, _startup_ready_retry_last_at
 
     if _is_reset_in_progress() and _is_firestore_reset_confirmed(config):
         _reset_firestore_confirm_event.set()
@@ -523,6 +524,13 @@ def _apply_firestore_config(config: dict) -> None:
                     confirmed_in_this_call = True
                     print("Firestore game reset confirmed; enabling game command handling")
                 else:
+                    now = time.time()
+                    if (now - float(_startup_ready_retry_last_at)) >= 2.0:
+                        _startup_ready_retry_last_at = now
+                        try:
+                            request_set_all_games_ready()
+                        except Exception:
+                            pass
                     return
 
             for g in games_cfg:

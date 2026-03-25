@@ -13,6 +13,7 @@ class _FakeClient:
     def send_state(self, payload, *, full=False):
         with self.lock:
             self.sent.append((payload, full))
+        return True
 
 
 def _reset_write_cache():
