@@ -35,20 +35,7 @@ from pydartsnut import Dartsnut
 
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
-from python_websocket.device_operations import _parse_hhmm, forget_wifi
-from python_websocket.git_operations import get_version, perform_update
-from python_websocket.bluetooth_operations import (
-    build_firestore_bluetooth_list,
-    connect_device_for_firestore,
-    current_utc_iso_timestamp,
-)
 from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
-from python_websocket.udp_broadcast import (
-    get_ip_address,
-    get_current_ssid,
-    normalize_ip,
-    normalize_ssid,
-)
 
 import assets
 from app_context import AppContext
@@ -109,10 +96,10 @@ _reset_firestore_confirm_event = threading.Event()
 set_remote_sync(create_default_remote_sync())
 
 _firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
-    scan_builder=build_firestore_bluetooth_list,
-    timestamp_factory=current_utc_iso_timestamp,
+    scan_builder=machine_api.build_firestore_bluetooth_list,
+    timestamp_factory=machine_api.current_utc_iso_timestamp,
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
-    connect_device=connect_device_for_firestore,
+    connect_device=machine_api.connect_device_for_firestore,
 )
 
 
@@ -327,7 +314,7 @@ def _run_device_reset_sequence() -> None:
     try:
         get_remote_sync().request_device_reset_state()
         _reset_firestore_confirm_event.wait()
-        forget_wifi()
+        machine_api.forget_wifi()
         try:
             term_widget_processes(ctx.pages)
         except Exception as e:
@@ -373,8 +360,8 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         term_game_process=term_game_process,
         ensure_game_downloaded=ensure_game_downloaded,
         local_game_version_matches=local_game_version_matches,
-        perform_update=perform_update,
-        get_version=get_version,
+        perform_update=machine_api.perform_update,
+        get_version=machine_api.get_version,
         is_reset_in_progress=_is_reset_in_progress,
         on_reset_confirmed=_reset_firestore_confirm_event.set,
     ),
@@ -685,7 +672,7 @@ def network_state_firestore_loop():
             if not _is_reset_in_progress() and get_remote_sync().is_connected():
                 updates = {}
 
-                normalized_ip = normalize_ip(get_ip_address())
+                normalized_ip = machine_api.normalize_ip(machine_api.get_ip_address())
                 payload_ip = normalized_ip or ""
                 should_publish_ip = payload_ip != last_published_ip
                 # Avoid writing a transient empty IP on startup/reconnect before
@@ -696,7 +683,7 @@ def network_state_firestore_loop():
                 if should_publish_ip:
                     updates["ip_address"] = payload_ip
 
-                normalized_ssid = normalize_ssid(get_current_ssid())
+                normalized_ssid = machine_api.normalize_ssid(machine_api.get_current_ssid())
                 payload_ssid = normalized_ssid or ""
                 if payload_ssid != last_published_ssid:
                     updates["ssid"] = payload_ssid
@@ -733,7 +720,7 @@ device_info = get_device_info() or {}
 start_background_subsystems(
     dartsnut=dartsnut,
     device_info=device_info,
-    get_version=get_version,
+    get_version=machine_api.get_version,
     set_volume=set_volume,
     start_ble_server=start_ble_server,
     locate_device=locate_device,
@@ -773,7 +760,7 @@ run_main_loop(
     ctx=ctx,
     assets=assets,
     get_device_info=get_device_info,
-    parse_hhmm=_parse_hhmm,
+    parse_hhmm=machine_api.parse_hhmm,
     update_brightness_transition=_update_brightness_transition,
     start_brightness_transition=_start_brightness_transition,
     init_widgets=init_widgets,

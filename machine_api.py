@@ -8,14 +8,82 @@ call those modules from here when adding new presentation-layer entry points.
 
 from __future__ import annotations
 
+import importlib
+
 
 def stop_game_tracking() -> None:
-    from python_websocket import user_data_operations as udo
+    udo = importlib.import_module("python_websocket.user_data_operations")
 
     udo.stop_game_tracking()
 
 
 def reset_user_data_file() -> None:
-    from python_websocket import user_data_operations as udo
+    udo = importlib.import_module("python_websocket.user_data_operations")
 
     udo.reset_user_data_file()
+
+
+def parse_hhmm(value: str):
+    devops = importlib.import_module("python_websocket.device_operations")
+
+    return devops._parse_hhmm(value)
+
+
+def forget_wifi() -> None:
+    devops = importlib.import_module("python_websocket.device_operations")
+
+    devops.forget_wifi()
+
+
+def get_version():
+    gitops = importlib.import_module("python_websocket.git_operations")
+
+    return gitops.get_version()
+
+
+def perform_update():
+    gitops = importlib.import_module("python_websocket.git_operations")
+
+    return gitops.perform_update()
+
+
+def build_firestore_bluetooth_list():
+    btops = importlib.import_module("python_websocket.bluetooth_operations")
+
+    return btops.build_firestore_bluetooth_list()
+
+
+def connect_device_for_firestore(address: str):
+    btops = importlib.import_module("python_websocket.bluetooth_operations")
+
+    return btops.connect_device_for_firestore(address)
+
+
+def current_utc_iso_timestamp() -> str:
+    btops = importlib.import_module("python_websocket.bluetooth_operations")
+
+    return btops.current_utc_iso_timestamp()
+
+
+def get_ip_address():
+    udp = importlib.import_module("python_websocket.udp_broadcast")
+
+    return udp.get_ip_address()
+
+
+def get_current_ssid():
+    udp = importlib.import_module("python_websocket.udp_broadcast")
+
+    return udp.get_current_ssid()
+
+
+def normalize_ip(value):
+    udp = importlib.import_module("python_websocket.udp_broadcast")
+
+    return udp.normalize_ip(value)
+
+
+def normalize_ssid(value):
+    udp = importlib.import_module("python_websocket.udp_broadcast")
+
+    return udp.normalize_ssid(value)
