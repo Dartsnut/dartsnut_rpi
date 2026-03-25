@@ -277,11 +277,3 @@ def connect_device_for_firestore(address):
         return False, "Connection failed"
     except Exception:
         return False, "Connection failed"
-
-# Example usage:
-if __name__ == "__main__":
-    # print(json.dumps(scan_bluetooth_devices()))
-    # pair_and_connect_device("58:10:31:2D:12:52")
-    # print(list_paired_devices())
-    # disconnect_and_unpair_device("58:10:31:2D:12:52")
-    pass
