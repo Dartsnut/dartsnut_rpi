@@ -69,6 +69,7 @@ from runtime.remote_sync_port import (
 )
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
+from runtime.websocket_service_registry import build_default_websocket_registry
 
 # -----------------------------------------------------------------------------
 # Display and device (used by context and dim logic)
@@ -101,6 +102,7 @@ _firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
     connect_device=machine_api.connect_device_for_firestore,
 )
+_websocket_service_registry = build_default_websocket_registry()
 
 
 def _get_current_brightness_for_transition():
@@ -737,6 +739,7 @@ start_background_subsystems(
     on_remote_connectivity_changed=_on_firestore_connectivity_changed,
     request_network_state_refresh=request_network_state_refresh,
     remote_config_runtime=_remote_config_runtime,
+    websocket_service_registry=_websocket_service_registry,
 )
 
 ctx.reload_conf = False

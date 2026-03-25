@@ -10,6 +10,11 @@ from python_websocket.error_handler import (
 )
 from machine_state_service import get_machine_state_service
 
+
+def _device_info_path() -> str:
+    return os.path.join(os.getcwd(), "device.json")
+
+
 def get_wifi_rssi():
     try:
         # Run the command to get signal level
@@ -82,13 +87,11 @@ def stop_ssh():
 
 def get_brightness():
     try:
-        # Read the device.json file
-        device_info_path = os.path.join(os.getcwd(), "device.json")
-        with open(device_info_path, 'r') as file:
+        with open(_device_info_path(), "r") as file:
             device_info = json.load(file)
         
         # Extract brightness value, default to 50 if missing
-        brightness = int(device_info.get('brightness', '50'))
+        brightness = int(device_info.get("brightness", "50"))
         return {"action": "get_brightness", "brightness": brightness}
     except FileNotFoundError as e:
         return handle_exception("get_brightness", e, "Device info file not found")
@@ -99,13 +102,11 @@ def get_brightness():
 
 def get_volume():
     try:
-        # Read the device.json file
-        device_info_path = os.path.join(os.getcwd(), "device.json")
-        with open(device_info_path, 'r') as file:
+        with open(_device_info_path(), "r") as file:
             device_info = json.load(file)
         
         # Extract volume value, default to 50 if missing
-        volume = int(device_info.get('volume', '50'))
+        volume = int(device_info.get("volume", "50"))
         return {"action": "get_volume", "volume": volume}
     except FileNotFoundError as e:
         return handle_exception("get_volume", e, "Device info file not found")
@@ -141,8 +142,7 @@ def _dim_enabled_to_bool(x):
 
 def get_dim_window():
     try:
-        device_info_path = os.path.join(os.getcwd(), "device.json")
-        with open(device_info_path, 'r') as file:
+        with open(_device_info_path(), "r") as file:
             device_info = json.load(file)
         return {
             "action": "get_dim_window",

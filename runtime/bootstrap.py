@@ -32,6 +32,7 @@ def start_background_subsystems(
     on_remote_connectivity_changed: Callable[[bool], None],
     request_network_state_refresh: Callable[[], None],
     remote_config_runtime: Any,
+    websocket_service_registry: Any = None,
 ) -> None:
     dartsnut.update_frame_buffer(assets.create_loading_image())
     try:
@@ -66,6 +67,7 @@ def start_background_subsystems(
             start_game_from_websocket,
             set_volume,
             trigger_dim_check,
+            websocket_service_registry,
         ),
         daemon=True,
     ).start()

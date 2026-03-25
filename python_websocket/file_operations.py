@@ -13,7 +13,6 @@ from python_websocket.error_handler import (
     handle_directory_not_found,
     create_error_response,
 )
-from datetime import datetime, timezone
 
 from machine_state_service import get_machine_state_service
 
@@ -31,6 +30,25 @@ _DOWNLOAD_KEYS_LOCK = threading.Lock()
 _MISSING = object()
 
 
+def _apps_path(*parts):
+    return os.path.join(os.getcwd(), APPS_DIR, *parts)
+
+
+def _normalize_relative_path(path_value):
+    if os.path.isabs(path_value):
+        return path_value.lstrip("/")
+    return path_value
+
+
+def _not_found_progress_entry(game_id):
+    return {
+        "game_id": game_id,
+        "progress": 0,
+        "status": "not_found",
+        "error": None,
+    }
+
+
 def _is_game_download_active(game_id):
     """Return True if a download for game_id is currently active (pending/initializing/downloading/extracting)."""
     entry = DOWNLOAD_PROGRESS.get(game_id)
@@ -40,7 +58,7 @@ def _is_game_download_active(game_id):
 def _read_version_from_conf(game_id):
     """Read conf.json["version"] from apps_dir/{game_id}/conf.json. Returns None on any error."""
     try:
-        path = os.path.join(os.getcwd(), APPS_DIR, game_id, "conf.json")
+        path = _apps_path(game_id, "conf.json")
         if not os.path.isfile(path):
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -92,12 +110,7 @@ def get_download_progress(game_id):
         for gid in game_id:
             entry = DOWNLOAD_PROGRESS.get(gid)
             if not entry:
-                progresses[gid] = {
-                    "game_id": gid,
-                    "progress": 0,
-                    "status": "not_found",
-                    "error": None,
-                }
+                progresses[gid] = _not_found_progress_entry(gid)
             else:
                 progresses[gid] = dict(entry)
 
@@ -109,13 +122,7 @@ def get_download_progress(game_id):
     # Handle single game_id (backward compatibility)
     entry = DOWNLOAD_PROGRESS.get(game_id)
     if not entry:
-        return {
-            "action": "get_download_progress",
-            "game_id": game_id,
-            "progress": 0,
-            "status": "not_found",
-            "error": None,
-        }
+        return {"action": "get_download_progress", **_not_found_progress_entry(game_id)}
 
     result = dict(entry)
     result["action"] = "get_download_progress"
@@ -135,9 +142,8 @@ def receive_file(websocket, data):
                 file_name=file_name,
             )
 
-        if os.path.isabs(file_name):
-            file_name = file_name.lstrip("/")
-        full_save_path = os.path.join(os.getcwd(), APPS_DIR, file_name)
+        file_name = _normalize_relative_path(file_name)
+        full_save_path = _apps_path(file_name)
 
         # Decode the Base64 file data
         try:
@@ -160,8 +166,7 @@ def receive_file(websocket, data):
             svc = get_machine_state_service()
             if (
                 svc is not None
-                and os.path.normpath(full_save_path)
-                == os.path.normpath(os.path.join(os.getcwd(), APPS_DIR, "conf.json"))
+                and os.path.normpath(full_save_path) == os.path.normpath(_apps_path("conf.json"))
             ):
                 with open(full_save_path, "r") as f:
                     conf = json.load(f)
@@ -188,7 +193,7 @@ def receive_file(websocket, data):
 def send_file(websocket, data):
     try:
         file_name = data.get("file_name")
-        full_file_path = os.path.join(os.getcwd(), APPS_DIR, file_name)
+        full_file_path = _apps_path(file_name)
 
         if not os.path.isfile(full_file_path):
             return handle_file_not_found("get_file", file_name)
@@ -216,7 +221,7 @@ def send_file(websocket, data):
 
 
 def get_file_md5(websocket, file_name):
-    full_file_path = os.path.join(os.getcwd(), APPS_DIR, file_name)
+    full_file_path = _apps_path(file_name)
 
     if not os.path.isfile(full_file_path):
         return handle_file_not_found("get_file_md5", file_name)
@@ -244,10 +249,9 @@ def get_file_md5(websocket, file_name):
 
 
 def remove_directory(websocket, dir_name):
-    if os.path.isabs(dir_name):
-        dir_name = dir_name.lstrip("/")
+    dir_name = _normalize_relative_path(dir_name)
 
-    full_dir_path = os.path.join(os.getcwd(), APPS_DIR, dir_name)
+    full_dir_path = _apps_path(dir_name)
 
     if not os.path.isdir(full_dir_path):
         return handle_directory_not_found("remove_directory", dir_name)
@@ -277,10 +281,9 @@ def remove_directory(websocket, dir_name):
 
 
 def create_directory(websocket, dir_name):
-    if os.path.isabs(dir_name):
-        dir_name = dir_name.lstrip("/")
+    dir_name = _normalize_relative_path(dir_name)
 
-    full_dir_path = os.path.join(os.getcwd(), APPS_DIR, dir_name)
+    full_dir_path = _apps_path(dir_name)
 
     if os.path.exists(full_dir_path):
         return create_error_response(
@@ -314,9 +317,8 @@ def create_directory(websocket, dir_name):
 def get_file_list(directory):
     try:
         # List all files in the specified directory
-        if os.path.isabs(directory):
-            directory = directory.lstrip("/")
-        full_dir_path = os.path.join(os.getcwd(), APPS_DIR, directory)
+        directory = _normalize_relative_path(directory)
+        full_dir_path = _apps_path(directory)
         if not os.path.isdir(full_dir_path):
             return handle_directory_not_found("list_files", directory)
         return {
@@ -393,7 +395,7 @@ def download_app(url, md5):
 
         # Extract tar.gz using system console
         extract_cmd = (
-            f"tar -xzf '{download_path}' -C '{os.path.join(os.getcwd(), APPS_DIR)}'"
+            f"tar -xzf '{download_path}' -C '{_apps_path()}'"
         )
         extract_result = os.system(extract_cmd)
         if extract_result != 0:
@@ -530,7 +532,7 @@ def _download_game_worker(game_id):
                 return
 
             # Extract tar.gz using tarfile (Python stdlib)
-            apps_dir = os.path.join(os.getcwd(), APPS_DIR)
+            apps_dir = _apps_path()
             try:
                 with tarfile.open(download_path, "r:gz") as tar:
                     tar.extractall(apps_dir)
@@ -644,7 +646,7 @@ def _download_game_worker_with_url(game_id, url, md5):
             return
 
         # Extract tar.gz using tarfile (Python stdlib)
-        apps_dir = os.path.join(os.getcwd(), APPS_DIR)
+        apps_dir = _apps_path()
         try:
             with tarfile.open(download_path, "r:gz") as tar:
                 tar.extractall(apps_dir)
@@ -779,7 +781,7 @@ def start_game_download_async_with_url(game_id, url, md5):
 def get_app_list():
     try:
         # List all directories in the apps directory
-        apps_dir = os.path.join(os.getcwd(), APPS_DIR)
+        apps_dir = _apps_path()
 
         app_list = []
         for name in os.listdir(apps_dir):

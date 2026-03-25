@@ -1,5 +1,4 @@
 import bluetooth
-import os
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -142,7 +141,9 @@ def disconnect_and_unpair_device(address):
         process.communicate()
         return {"action": "bluetooth_remove", "address": address, "message": "Success"}
     except Exception as e:
-        return handle_exception("bluetooth_remove", e, "Failed to remove Bluetooth device", address=address)
+        return handle_exception(
+            "bluetooth_remove", e, "Failed to remove Bluetooth device", address=address
+        )
 
 def pair_and_connect_device(address):
     """
@@ -255,7 +256,12 @@ def pair_and_connect_device(address):
         return {"action": "bluetooth_connect", "address": address, "message": "Success"}
 
     except Exception as e:
-        return handle_exception("bluetooth_connect", e, "Failed to connect Bluetooth device", address=address)
+        return handle_exception(
+            "bluetooth_connect",
+            e,
+            "Failed to connect Bluetooth device",
+            address=address,
+        )
 
 
 def connect_device_for_firestore(address):

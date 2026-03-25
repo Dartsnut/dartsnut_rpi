@@ -9,7 +9,6 @@ import time
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
-    handle_file_not_found,
     create_error_response
 )
 
@@ -25,6 +24,14 @@ DEFAULT_USER_DATA = {
     "refresh_token": "",
     "game_playtimes": {}
 }
+
+
+def _remove_temp_game_start_file():
+    try:
+        if os.path.exists(TEMP_GAME_START_FILE):
+            os.remove(TEMP_GAME_START_FILE)
+    except OSError:
+        pass
 
 
 def _ensure_data_directory():
@@ -115,9 +122,8 @@ def reset_user_data_file() -> None:
     except Exception as e:
         print(f"Error resetting user data file: {e}")
     try:
-        if os.path.exists(TEMP_GAME_START_FILE):
-            os.remove(TEMP_GAME_START_FILE)
-    except OSError:
+        _remove_temp_game_start_file()
+    except Exception:
         pass
 
 
@@ -280,10 +286,7 @@ def stop_game_tracking():
                 start_data = json.load(f)
         except json.JSONDecodeError:
             # Clean up corrupted temp file
-            try:
-                os.remove(TEMP_GAME_START_FILE)
-            except:
-                pass
+            _remove_temp_game_start_file()
             return create_error_response(
                 "stop_game_tracking",
                 ErrorCode.INVALID_JSON,
@@ -296,10 +299,7 @@ def stop_game_tracking():
         
         if not game_id or start_time is None:
             # Clean up invalid temp file
-            try:
-                os.remove(TEMP_GAME_START_FILE)
-            except:
-                pass
+            _remove_temp_game_start_file()
             return create_error_response(
                 "stop_game_tracking",
                 ErrorCode.INVALID_INPUT,
@@ -315,10 +315,7 @@ def stop_game_tracking():
         result = add_game_playtime(game_id, duration_seconds)
         
         # Clean up temp file
-        try:
-            os.remove(TEMP_GAME_START_FILE)
-        except:
-            pass
+        _remove_temp_game_start_file()
         
         # Return result with duration info
         if "error" in result:

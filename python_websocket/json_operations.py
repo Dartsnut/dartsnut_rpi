@@ -12,24 +12,37 @@ from machine_state_service import get_machine_state_service
 from runtime.remote_sync_port import get_remote_sync
 
 APPS_DIR = "apps"  # Update this to your desired save directory
-HOME_DIR = ""
+
+
+def _apps_path(*parts):
+    return os.path.join(os.getcwd(), APPS_DIR, *parts)
+
+
+def _normalize_relative_path(path_value):
+    if os.path.isabs(path_value):
+        return path_value.lstrip("/")
+    return path_value
+
+
+def _truncate_long_string_fields(data, limit=100):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, str) and len(value) > limit:
+                data[key] = value[:limit]
+    return data
 
 
 def read_json_file(file_path):
     try:
-        if os.path.isabs(file_path):
-            file_path = file_path.lstrip("/")
-        full_save_path = os.path.join(os.getcwd(), APPS_DIR, file_path)
+        file_path = _normalize_relative_path(file_path)
+        full_save_path = _apps_path(file_path)
 
         if not Path(full_save_path).is_file():
             return handle_file_not_found("read_json", file_path)
 
         with open(full_save_path, "r") as file:
-            # if any field in the json is a string and longer than 100 characters, strip it to 100 characters
             data = json.load(file)
-            for key, value in data.items():
-                if isinstance(value, str) and len(value) > 100:
-                    data[key] = value[:100]
+            data = _truncate_long_string_fields(data, limit=100)
             return {
                 "action": "read_json",
                 "file_path": file_path,
@@ -53,9 +66,8 @@ def read_json_file(file_path):
 
 def write_json_file(file_path, data):
     try:
-        if os.path.isabs(file_path):
-            file_path = file_path.lstrip("/")
-        full_save_path = os.path.join(os.getcwd(), APPS_DIR, file_path)
+        file_path = _normalize_relative_path(file_path)
+        full_save_path = _apps_path(file_path)
 
         # Decode the data with base64 before writing
         if isinstance(data, str):
@@ -75,7 +87,7 @@ def write_json_file(file_path, data):
             if (
                 svc is not None
                 and os.path.normpath(full_save_path)
-                == os.path.normpath(os.path.join(os.getcwd(), APPS_DIR, "conf.json"))
+                == os.path.normpath(_apps_path("conf.json"))
             ):
                 pages = data.get("pages", [])
                 if isinstance(pages, list):
@@ -98,7 +110,7 @@ def get_device_info():
     device_info = {}
     try:
         # Read the device.json file
-        with open(os.path.join(os.getcwd(), HOME_DIR, "device.json"), "r") as file:
+        with open(os.path.join(os.getcwd(), "device.json"), "r") as file:
             device_info = json.load(file)
 
         # Get the BLE MAC address of the device using the same adapter-based
