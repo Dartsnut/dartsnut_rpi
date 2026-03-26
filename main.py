@@ -35,6 +35,7 @@ from pydartsnut import Dartsnut
 
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
+from python_websocket.udp_broadcast import udp_broadcast
 from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
 
 import assets
@@ -724,6 +725,7 @@ start_background_subsystems(
     get_version=machine_api.get_version,
     set_volume=set_volume,
     start_ble_server=start_ble_server,
+    start_udp_broadcast=udp_broadcast,
     locate_device=locate_device,
     start_websocket_server=start_websocket_server,
     set_brightness=set_brightness,
