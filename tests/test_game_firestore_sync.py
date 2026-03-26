@@ -26,9 +26,10 @@ def test_handle_downloading_status_sets_downloading_then_ready():
     handle_incoming_game_status(
         "chess",
         "downloading",
+        expected_version="",
         current_game_id="",
         game_exists=lambda _gid: False,
-        ensure_game_downloaded=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
         set_game_status=lambda gid, status: events.append((gid, status)),
         request_launch=lambda _gid: events.append(("launch", "called")),
         terminate_running_game=lambda _gid: events.append(("terminate", "called")),
@@ -37,15 +38,34 @@ def test_handle_downloading_status_sets_downloading_then_ready():
     assert events == [("chess", "downloading"), ("chess", "ready")]
 
 
+def test_handle_downloading_passes_expected_version_to_downloader():
+    calls = []
+
+    handle_incoming_game_status(
+        "chess",
+        "downloading",
+        expected_version="2.0.0",
+        current_game_id="",
+        game_exists=lambda _gid: False,
+        ensure_game_downloaded=lambda gid, ver: calls.append((gid, ver)) or True,
+        set_game_status=lambda _gid, _status: None,
+        request_launch=lambda _gid: None,
+        terminate_running_game=lambda _gid: None,
+    )
+
+    assert calls == [("chess", "2.0.0")]
+
+
 def test_handle_download_status_is_ignored():
     events = []
 
     handle_incoming_game_status(
         "chess",
         "download",
+        expected_version="",
         current_game_id="",
         game_exists=lambda _gid: False,
-        ensure_game_downloaded=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
         set_game_status=lambda gid, status: events.append((gid, status)),
         request_launch=lambda _gid: events.append(("launch", "called")),
         terminate_running_game=lambda _gid: events.append(("terminate", "called")),
@@ -60,9 +80,10 @@ def test_handle_playing_status_requests_launch_when_game_already_exists():
     handle_incoming_game_status(
         "chess",
         "playing",
+        expected_version="",
         current_game_id="",
         game_exists=lambda _gid: True,
-        ensure_game_downloaded=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
         set_game_status=lambda gid, status: events.append((gid, status)),
         request_launch=lambda gid: events.append(("launch", gid)),
         terminate_running_game=lambda _gid: events.append(("terminate", "called")),
@@ -77,9 +98,10 @@ def test_handle_playing_status_downloads_then_requests_launch_when_missing():
     handle_incoming_game_status(
         "chess",
         "playing",
+        expected_version="",
         current_game_id="",
         game_exists=lambda _gid: False,
-        ensure_game_downloaded=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
         set_game_status=lambda gid, status: events.append((gid, status)),
         request_launch=lambda gid: events.append(("launch", gid)),
         terminate_running_game=lambda _gid: events.append(("terminate", "called")),
@@ -94,9 +116,10 @@ def test_handle_ready_status_terminates_matching_running_game():
     handle_incoming_game_status(
         "chess",
         "ready",
+        expected_version="",
         current_game_id="chess",
         game_exists=lambda _gid: True,
-        ensure_game_downloaded=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
         set_game_status=lambda gid, status: events.append((gid, status)),
         request_launch=lambda _gid: events.append(("launch", "called")),
         terminate_running_game=lambda gid: events.append(("terminate", gid)),

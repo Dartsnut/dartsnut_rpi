@@ -72,7 +72,7 @@ class RemoteDeviceConfigDependencies:
     request_set_all_games_ready: Callable[[], None]
     set_time_zone: Callable[[str], Any]
     term_game_process: Callable[[Any], None]
-    ensure_game_downloaded: Callable[[str], bool]
+    ensure_game_downloaded: Callable[[str, str], bool]
     local_game_version_matches: Callable[[str, str], bool]
     perform_update: Callable[[], dict]
     get_version: Callable[[], dict]
@@ -264,6 +264,7 @@ class RemoteDeviceConfigApplier:
                     handle_incoming_game_status(
                         game_id,
                         status,
+                        expected_version=expected_version,
                         current_game_id=_current_game_id(),
                         game_exists=_game_exists,
                         ensure_game_downloaded=deps.ensure_game_downloaded,

@@ -20,9 +20,10 @@ def handle_incoming_game_status(
     game_id: str,
     status: str,
     *,
+    expected_version: str = "",
     current_game_id: Optional[str],
     game_exists: Callable[[str], bool],
-    ensure_game_downloaded: Callable[[str], bool],
+    ensure_game_downloaded: Callable[[str, str], bool],
     set_game_status: Callable[[str, str], None],
     request_launch: Callable[[str], None],
     terminate_running_game: Callable[[str], None],
@@ -34,14 +35,14 @@ def handle_incoming_game_status(
     normalized = str(status or "").strip().lower()
     if normalized == "downloading":
         set_game_status(game_id, "downloading")
-        if ensure_game_downloaded(game_id):
+        if ensure_game_downloaded(game_id, expected_version):
             set_game_status(game_id, "ready")
         return
 
     if normalized == "playing":
         if not game_exists(game_id):
             set_game_status(game_id, "downloading")
-            if not ensure_game_downloaded(game_id):
+            if not ensure_game_downloaded(game_id, expected_version):
                 return
         request_launch(game_id)
         return

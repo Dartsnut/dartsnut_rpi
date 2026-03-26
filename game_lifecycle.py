@@ -46,11 +46,20 @@ def local_game_version_matches(gameid: str, remote_version: str) -> bool:
     return get_local_game_version(gameid) == expected
 
 
-def ensure_game_downloaded(gameid: str) -> bool:
-    """Ensure a game exists under ./apps/<gameid>; download it if missing."""
+def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
+    """Ensure local game exists and matches remote_version when provided."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
+    expected_version = str(remote_version or "").strip()
     if os.path.isdir(game_path):
-        return True
+        if not expected_version:
+            return True
+        local_version = get_local_game_version(gameid)
+        if local_version == expected_version:
+            return True
+        print(
+            f"Game {gameid} local version {local_version or '(empty)'} does not match target "
+            f"{expected_version}; downloading update"
+        )
     try:
         response = requests.get(
             f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}"
@@ -66,6 +75,8 @@ def ensure_game_downloaded(gameid: str) -> bool:
             print(f"Failed to get download info for game {gameid}: {response.status_code}")
     except Exception as e:
         print(f"Error fetching game download info: {e}")
+    if expected_version:
+        return get_local_game_version(gameid) == expected_version
     return os.path.isdir(game_path)
 
 

@@ -52,6 +52,36 @@ def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
     assert calls["download"] == [("https://example.com/chess.zip", "abc123")]
 
 
+def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
+    calls = {"download": []}
+    state = {"version": "1.0.0"}
+
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda _p: True)
+    monkeypatch.setattr("game_lifecycle.get_local_game_version", lambda _gid: state["version"])
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_download_url": "https://example.com/chess.zip",
+                    "game_download_md5": "abc123",
+                }
+            }
+
+    def _download_app(url, md5):
+        calls["download"].append((url, md5))
+        state["version"] = "2.0.0"
+
+    monkeypatch.setattr("game_lifecycle.requests.get", lambda url: _Resp())
+    monkeypatch.setattr("game_lifecycle.download_app", _download_app)
+
+    assert ensure_game_downloaded("chess", "2.0.0") is True
+    assert calls["download"] == [("https://example.com/chess.zip", "abc123")]
+
+
 def test_local_game_version_matches_true_when_versions_equal(monkeypatch):
     monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/chess"))
     monkeypatch.setattr("game_lifecycle.get_local_game_version", lambda _gid: "1.2.3")
