@@ -17,13 +17,13 @@ class _FakeClient:
 
 
 def _reset_write_cache():
-    cache = fsb._WRITE_CACHE
-    with cache._lock:
-        cache._last_sent_per_key.clear()
-        cache._pending = {}
-        cache._flush_timer = None
-        cache._flush_in_progress = False
-        cache._stats = {"sent": 0, "skipped": 0, "coalesced": 0}
+    for cache in (fsb._WRITE_CACHE, fsb._AV_WRITE_CACHE):
+        with cache._lock:
+            cache._last_sent_per_key.clear()
+            cache._pending = {}
+            cache._flush_timer = None
+            cache._flush_in_progress = False
+            cache._stats = {"sent": 0, "skipped": 0, "coalesced": 0}
 
 
 def test_notify_device_state_update_skips_duplicate_payload():
@@ -33,7 +33,7 @@ def test_notify_device_state_update_skips_duplicate_payload():
     try:
         fsb.notify_device_state_update({"volume": 10})
         fsb.notify_device_state_update({"volume": 10})
-        time.sleep(0.35)
+        time.sleep(1.15)
     finally:
         fsb._client = None
 
@@ -49,7 +49,7 @@ def test_notify_device_state_update_coalesces_burst_updates():
     try:
         fsb.notify_device_state_update({"brightness": 20})
         fsb.notify_device_state_update({"volume": 30})
-        time.sleep(0.35)
+        time.sleep(1.15)
     finally:
         fsb._client = None
 
@@ -72,6 +72,39 @@ def test_notify_device_state_update_coerces_null_pages_games_to_empty_lists():
     assert len(fake.sent) == 1
     sent_payload, _ = fake.sent[0]
     assert sent_payload == {"pages": [], "games": []}
+
+
+def test_notify_device_state_update_non_av_keys_keep_default_debounce():
+    _reset_write_cache()
+    fake = _FakeClient()
+    fsb._client = fake
+    try:
+        fsb.notify_device_state_update({"ip_address": "192.168.1.2"})
+        time.sleep(0.35)
+    finally:
+        fsb._client = None
+
+    assert len(fake.sent) == 1
+    assert fake.sent[0][0] == {"ip_address": "192.168.1.2"}
+
+
+def test_notify_device_state_update_mixed_payload_sends_non_av_first():
+    _reset_write_cache()
+    fake = _FakeClient()
+    fsb._client = fake
+    try:
+        fsb.notify_device_state_update({"brightness": 30, "ip_address": "10.0.0.2"})
+        time.sleep(0.35)
+        with fake.lock:
+            early_count = len(fake.sent)
+        time.sleep(0.9)
+    finally:
+        fsb._client = None
+
+    assert early_count == 1
+    assert len(fake.sent) == 2
+    assert fake.sent[0][0] == {"ip_address": "10.0.0.2"}
+    assert fake.sent[1][0] == {"brightness": 30}
 
 
 def test_merge_remote_and_local_coerces_null_pages_games(monkeypatch):

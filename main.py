@@ -207,11 +207,12 @@ def set_brightness(brightness):
             print(f"Error updating device brightness while dimmed: {e}")
         return
 
-    # Outside dim window: update hardware smoothly and persist via service.
-    _start_brightness_transition(brightness)
+    # Outside dim window: apply immediately and persist via service.
     try:
         if service is not None:
             service.set_brightness(brightness)
+        else:
+            _set_brightness_hardware(int(brightness))
         v = int(brightness)
         get_remote_sync().publish_partial_state({"brightness": v, "Brightness": v})
     except Exception as e:

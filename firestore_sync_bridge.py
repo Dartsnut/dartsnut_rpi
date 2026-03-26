@@ -30,6 +30,7 @@ _firestore_connected = False
 _firestore_connected_lock = threading.Lock()
 _connectivity_callback: Optional[Callable[[bool], None]] = None
 _WRITE_DEBOUNCE_SECONDS = 0.20
+_AV_WRITE_DEBOUNCE_SECONDS = 1.00
 _ECHO_FINGERPRINT_TTL_SECONDS = 5.0
 
 
@@ -331,6 +332,7 @@ class _DeviceStateWriteCache:
 
 
 _WRITE_CACHE = _DeviceStateWriteCache()
+_AV_WRITE_CACHE = _DeviceStateWriteCache()
 
 
 def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
@@ -490,7 +492,10 @@ class _SyncClient:
                                 # often no-ops locally and can trigger secondary writes.
                                 if (
                                     kind == "config"
-                                    and _WRITE_CACHE.is_probable_echo_payload(cfg)
+                                    and (
+                                        _WRITE_CACHE.is_probable_echo_payload(cfg)
+                                        or _AV_WRITE_CACHE.is_probable_echo_payload(cfg)
+                                    )
                                     and not _looks_like_reset_confirmation_payload(cfg)
                                 ):
                                     continue
@@ -578,7 +583,24 @@ def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
         except Exception:
             return False
 
-    _WRITE_CACHE.queue_update(partial_state, _sender)
+    av_keys = {"brightness", "Brightness", "volume"}
+    av_payload = {k: v for k, v in partial_state.items() if str(k) in av_keys}
+    other_payload = {k: v for k, v in partial_state.items() if str(k) not in av_keys}
+
+    # Keep non-A/V updates responsive while reducing Firestore write bursts for
+    # brightness/volume controls.
+    if other_payload:
+        _WRITE_CACHE.queue_update(
+            other_payload,
+            _sender,
+            debounce_seconds=_WRITE_DEBOUNCE_SECONDS,
+        )
+    if av_payload:
+        _AV_WRITE_CACHE.queue_update(
+            av_payload,
+            _sender,
+            debounce_seconds=_AV_WRITE_DEBOUNCE_SECONDS,
+        )
 
 
 def is_firestore_bridge_active() -> bool:
