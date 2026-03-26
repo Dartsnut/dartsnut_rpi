@@ -583,7 +583,7 @@ def notify_device_state_update(partial_state: Dict[str, Any]) -> None:
         except Exception:
             return False
 
-    av_keys = {"brightness", "Brightness", "volume"}
+    av_keys = {"brightness", "volume"}
     av_payload = {k: v for k, v in partial_state.items() if str(k) in av_keys}
     other_payload = {k: v for k, v in partial_state.items() if str(k) not in av_keys}
 
@@ -612,10 +612,7 @@ def request_set_brightness(value: int) -> None:
     """Proxy a brightness change request to Firestore when the bridge is active."""
     try:
         v = int(value)
-        # Write both canonical "brightness" and legacy "Brightness" for
-        # compatibility with any existing dashboards that still read the
-        # capitalized field.
-        notify_device_state_update({"brightness": v, "Brightness": v})
+        notify_device_state_update({"brightness": v})
     except Exception as e:
         print(f"Firestore bridge: failed to request brightness update: {e}")
 

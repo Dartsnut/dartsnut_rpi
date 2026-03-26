@@ -200,9 +200,7 @@ def set_brightness(brightness):
                 service.set_brightness(brightness)
             dim_rt.brightness_before_dim = brightness
             v = int(brightness)
-            # Maintain both canonical and legacy-capitalized fields in Firestore
-            # so dashboards reading either stay in sync.
-            get_remote_sync().publish_partial_state({"brightness": v, "Brightness": v})
+            get_remote_sync().publish_partial_state({"brightness": v})
         except Exception as e:
             print(f"Error updating device brightness while dimmed: {e}")
         return
@@ -214,7 +212,7 @@ def set_brightness(brightness):
         else:
             _set_brightness_hardware(int(brightness))
         v = int(brightness)
-        get_remote_sync().publish_partial_state({"brightness": v, "Brightness": v})
+        get_remote_sync().publish_partial_state({"brightness": v})
     except Exception as e:
         print(f"Error updating brightness: {e}")
 
