@@ -35,6 +35,18 @@ chmod +x ./bridge
 - `DARTSNUT_SUPABASE_BRIDGE` (optional bridge executable override)
 - `DARTSNUT_SUPABASE_SOCKET` (optional socket override)
 
+## Realtime inbound config
+
+- The Rust bridge subscribes to Supabase Realtime (`postgres_changes`) on `public.remote_devices`.
+- Subscription is filtered to this device only: `device_id=eq.<BLE_MAC_UPPER>`.
+- Inbound rows where `last_update_source = 'supabase_bridge'` are ignored to prevent self-echo loops.
+- Bridge auto-reconnects with backoff and emits `bridge_health` state over the Unix socket.
+
+## Device ID behavior
+
+- Supabase bridge resolves `device_id` from BLE adapter MAC in Rust.
+- Stored and published in uppercase with `:` separators (for example `AA:BB:CC:DD:EE:FF`).
+
 ## OSS strip boundary
 
 Remove these paths before publishing:

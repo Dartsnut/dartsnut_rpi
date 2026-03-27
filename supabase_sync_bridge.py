@@ -8,6 +8,7 @@ import socket
 import subprocess
 import threading
 import time
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 SOCKET_PATH = "/tmp/dartsnut-supabase-sync.sock"
@@ -16,6 +17,7 @@ _DEFAULT_BRIDGE_BIN = os.path.join(
     "supabase_bridge",
     "bridge",
 )
+_DOTENV_CANDIDATES = (".env", ".env.local")
 
 _client: Optional["_SyncClient"] = None
 _bridge_proc: Optional[subprocess.Popen] = None
@@ -49,6 +51,182 @@ def set_supabase_connectivity_callback(
 ) -> None:
     global _connectivity_callback
     _connectivity_callback = callback
+
+
+def _parse_iso_ts(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value))
+        if isinstance(value, str):
+            s = value.strip()
+            if s.endswith("Z"):
+                s = s[:-1]
+            return datetime.fromisoformat(s)
+    except Exception:
+        return None
+    return None
+
+
+def _normalize_config_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(cfg, dict):
+        return {}
+    normalized = dict(cfg)
+    for key in ("pages", "games"):
+        if key in normalized and normalized.get(key) is None:
+            normalized[key] = []
+    return normalized
+
+
+def _coerce_pages_games_lists(payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(payload)
+    for key in ("pages", "games"):
+        if key not in out:
+            continue
+        v = out[key]
+        if v is None or not isinstance(v, list):
+            out[key] = []
+    return out
+
+
+def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
+    brightness_raw = device_info.get("brightness")
+    volume_raw = device_info.get("volume")
+    try:
+        brightness = int(brightness_raw)
+    except Exception:
+        brightness = 0
+    try:
+        volume = int(volume_raw)
+    except Exception:
+        volume = 0
+
+    dim_window = {
+        "dim_window_enabled": bool(device_info.get("dim_window_enabled", False)),
+        "dim_window_start": device_info.get("dim_window_start", ""),
+        "dim_window_end": device_info.get("dim_window_end", ""),
+        "dim_level": device_info.get("dim_level", 0),
+        "dim_restore_seconds": device_info.get("dim_restore_seconds", 0),
+    }
+    device_meta = {
+        "sn": device_info.get("serial", ""),
+        "model": device_info.get("model", ""),
+        "name": device_info.get("name", ""),
+    }
+    firmware = {
+        "version": device_info.get("firmware_version", ""),
+        "update": bool(device_info.get("firmware_update", False)),
+    }
+
+    pages = []
+    pages_updated_at = ""
+    try:
+        apps_conf = os.path.join(os.getcwd(), "apps", "conf.json")
+        if os.path.isfile(apps_conf):
+            with open(apps_conf, "r", encoding="utf-8") as f:
+                conf = json.load(f)
+            pages = conf.get("pages", [])
+            if pages is None or not isinstance(pages, list):
+                pages = []
+            pages_updated_at = conf.get("pages_updated_at", "") or ""
+    except Exception:
+        pass
+
+    games = []
+    try:
+        from game_lifecycle import get_games_summary
+
+        games = get_games_summary()
+    except Exception:
+        games = device_info.get("games", [])
+    if games is None or not isinstance(games, list):
+        games = []
+
+    state: Dict[str, Any] = {
+        "device_id": str(device_info.get("device_id", "") or ""),
+        "time_zone": device_info.get("time_zone", ""),
+        "volume": volume,
+        "brightness": brightness,
+        "games": games,
+        "dim_window": dim_window,
+        "pages": pages,
+        "device_updated_at": device_info.get("updated_at", "") or "",
+        "pages_updated_at": pages_updated_at,
+        "device_info": device_meta,
+        "firmware": firmware,
+    }
+    raw_ip = str(device_info.get("ip_address", "")).strip()
+    if raw_ip and raw_ip != "0.0.0.0":
+        state["ip_address"] = raw_ip
+    return state
+
+
+def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(remote or {})
+
+    local_device: Dict[str, Any] = {}
+    try:
+        device_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_path, "r", encoding="utf-8") as f:
+            local_device = json.load(f)
+    except Exception:
+        local_device = {}
+
+    local_pages_conf: Dict[str, Any] = {}
+    try:
+        apps_conf = os.path.join(os.getcwd(), "apps", "conf.json")
+        if os.path.isfile(apps_conf):
+            with open(apps_conf, "r", encoding="utf-8") as f:
+                local_pages_conf = json.load(f)
+    except Exception:
+        local_pages_conf = {}
+
+    local_device_ts = _parse_iso_ts(local_device.get("updated_at"))
+    remote_device_ts = _parse_iso_ts(
+        remote.get("device_updated_at") or remote.get("updated_at")
+    )
+    local_pages_ts = _parse_iso_ts(local_pages_conf.get("pages_updated_at"))
+    remote_pages_ts = _parse_iso_ts(remote.get("pages_updated_at"))
+
+    local_initial = _build_initial_state(local_device or {})
+    use_local_device = False
+    if local_device_ts and remote_device_ts:
+        use_local_device = local_device_ts > remote_device_ts
+    elif local_device_ts and not remote_device_ts:
+        use_local_device = True
+
+    if use_local_device:
+        for key in (
+            "device_id",
+            "time_zone",
+            "volume",
+            "ip_address",
+            "brightness",
+            "games",
+            "dim_window",
+            "device_info",
+            "firmware",
+        ):
+            if key in local_initial:
+                merged[key] = local_initial[key]
+        merged["device_updated_at"] = local_device.get("updated_at", "") or ""
+
+    use_local_pages = False
+    if local_pages_ts and remote_pages_ts:
+        use_local_pages = local_pages_ts > remote_pages_ts
+    elif local_pages_ts and not remote_pages_ts:
+        use_local_pages = True
+    if use_local_pages:
+        merged["pages"] = local_pages_conf.get("pages", []) or []
+        merged["pages_updated_at"] = local_pages_conf.get("pages_updated_at", "") or ""
+
+    for key in ("pages", "games"):
+        if key in merged and (merged[key] is None or not isinstance(merged[key], list)):
+            merged[key] = []
+    if "device_id" not in merged or not str(merged.get("device_id", "")).strip():
+        merged["device_id"] = str(local_initial.get("device_id", "") or "").strip()
+    return merged
 
 
 class _SyncClient:
@@ -100,9 +278,17 @@ class _SyncClient:
                             payload = msg.get("payload")
                             if kind == "ready":
                                 self.send_state(self._initial_state, full=True)
-                            elif kind in ("config", "config_initial") and isinstance(payload, dict):
+                            elif kind in ("config", "config_initial") and isinstance(
+                                payload, dict
+                            ):
+                                cfg = _normalize_config_payload(payload)
+                                if kind == "config_initial":
+                                    try:
+                                        cfg = _merge_remote_and_local(payload)
+                                    except Exception:
+                                        cfg = _normalize_config_payload(payload)
                                 try:
-                                    self._on_config_updated(payload)
+                                    self._on_config_updated(cfg)
                                 except Exception:
                                     pass
                                 try:
@@ -110,7 +296,9 @@ class _SyncClient:
                                 except Exception:
                                     pass
                             elif kind == "bridge_health" and isinstance(payload, dict):
-                                _set_connected(str(payload.get("state", "")).lower() == "connected")
+                                _set_connected(
+                                    str(payload.get("state", "")).lower() == "connected"
+                                )
             except Exception:
                 pass
             finally:
@@ -121,6 +309,7 @@ class _SyncClient:
         threading.Thread(target=_server, daemon=True).start()
 
     def send_state(self, payload: Dict[str, Any], *, full: bool = False) -> bool:
+        payload = _coerce_pages_games_lists(dict(payload))
         kind = "initial_state" if full else "device_state"
         line = (json.dumps({"kind": kind, "payload": payload}) + "\n").encode("utf-8")
         with self._conn_lock:
@@ -134,15 +323,32 @@ class _SyncClient:
             return False
 
 
-def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
-    state = dict(device_info or {})
-    try:
-        from game_lifecycle import get_games_summary
+def _load_supabase_env_overrides() -> Dict[str, str]:
+    """
+    Load simple KEY=VALUE pairs from project dotenv files.
 
-        state["games"] = get_games_summary()
-    except Exception:
-        state.setdefault("games", [])
-    return state
+    Existing process env always wins over file values.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    overrides: Dict[str, str] = {}
+    for name in _DOTENV_CANDIDATES:
+        path = os.path.join(base_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and key not in os.environ and key not in overrides:
+                        overrides[key] = value
+        except Exception:
+            continue
+    return overrides
 
 
 def start_supabase_sync_if_available(
@@ -222,6 +428,8 @@ def ensure_supabase_sync_running(
     with _bridge_lock:
         if _bridge_proc is not None and _bridge_proc.poll() is None:
             return
+        launch_env = os.environ.copy()
+        launch_env.update(_load_supabase_env_overrides())
         executable_path = os.environ.get("DARTSNUT_SUPABASE_BRIDGE", _DEFAULT_BRIDGE_BIN)
         if not os.path.isfile(executable_path) or not os.access(executable_path, os.X_OK):
             print(f"Supabase sync skipped: bridge binary unavailable at {executable_path}")
@@ -243,7 +451,7 @@ def ensure_supabase_sync_running(
                     [executable_path, f"--socket-path={socket_path}"],
                     stdout=subprocess.DEVNULL,
                     stderr=None,
-                    env=os.environ.copy(),
+                    env=launch_env,
                 )
                 with _bridge_lock:
                     _bridge_proc = proc
