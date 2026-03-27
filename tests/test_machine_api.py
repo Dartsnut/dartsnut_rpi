@@ -68,3 +68,5 @@ def test_bluetooth_wrappers_delegate(monkeypatch):
     assert machine_api.build_firestore_bluetooth_list() == [{"address": "aa"}]
     assert machine_api.connect_device_for_firestore("AA:BB") == {"ok": "AA:BB"}
     assert machine_api.current_utc_iso_timestamp() == "2026-03-26T00:00:00+00:00"
+    assert machine_api.build_remote_bluetooth_list() == [{"address": "aa"}]
+    assert machine_api.connect_device_for_remote("AA:BB") == {"ok": "AA:BB"}

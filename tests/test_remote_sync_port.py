@@ -3,14 +3,14 @@ import runtime.remote_sync_port as rsp
 
 def test_create_default_remote_sync_matches_bridge_availability():
     try:
-        import firestore_sync_bridge  # noqa: F401
+        import supabase_sync_bridge  # noqa: F401
 
-        expect_fs = True
+        expect_bridge = True
     except ImportError:
-        expect_fs = False
+        expect_bridge = False
     impl = rsp.create_default_remote_sync()
-    if expect_fs:
-        assert isinstance(impl, rsp.FirestoreRemoteSync)
+    if expect_bridge:
+        assert isinstance(impl, rsp.SupabaseRemoteSync)
     else:
         assert isinstance(impl, rsp.NoOpRemoteSync)
 

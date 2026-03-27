@@ -1,0 +1,2 @@
+-- Seed intentionally empty.
+-- Add local development fixtures here if needed.

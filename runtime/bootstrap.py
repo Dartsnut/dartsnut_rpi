@@ -1,5 +1,5 @@
 """
-Background threads and remote sync startup (BLE, WebSocket, Firestore, network pollers).
+Background threads and remote sync startup (BLE, WebSocket, Supabase, network pollers).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def start_background_subsystems(
     start_game_from_websocket: Callable[[str], bool],
     trigger_dim_check: Callable[[], None],
     check_connection_loop: Callable[[], None],
-    network_state_firestore_loop: Callable[[], None],
+    network_state_remote_loop: Callable[[], None],
     apply_remote_config: Callable[[Dict[str, Any]], None],
     on_remote_connectivity_changed: Callable[[bool], None],
     request_network_state_refresh: Callable[[], None],
@@ -48,7 +48,7 @@ def start_background_subsystems(
         device_info["firmware_version"] = firmware_version
         remote_config_runtime.startup_firmware_version = firmware_version
     except Exception as e:
-        print(f"Error determining firmware version for Firestore initial state: {e}")
+        print(f"Error determining firmware version for remote initial state: {e}")
     if "firmware_update" not in device_info:
         device_info["firmware_update"] = False
     set_volume(int(device_info.get("volume", "50")))
@@ -74,7 +74,7 @@ def start_background_subsystems(
         daemon=True,
     ).start()
     threading.Thread(target=check_connection_loop, daemon=True).start()
-    threading.Thread(target=network_state_firestore_loop, daemon=True).start()
+    threading.Thread(target=network_state_remote_loop, daemon=True).start()
 
     get_remote_sync().set_connectivity_callback(on_remote_connectivity_changed)
     request_network_state_refresh()
@@ -84,7 +84,7 @@ def start_background_subsystems(
             device_info or {}, reload_config, apply_remote_config
         )
     except Exception as e:
-        print(f"Failed to start Firestore sync: {e}")
+        print(f"Failed to start Supabase sync: {e}")
     else:
         try:
             get_remote_sync().request_set_all_games_ready()
@@ -92,4 +92,4 @@ def start_background_subsystems(
             remote_config_runtime.startup_games_ready_confirmed_at = None
             remote_config_runtime.startup_filter_playing_until_newer_update = False
         except Exception as e:
-            print(f"Error resetting Firestore game statuses to ready on startup: {e}")
+            print(f"Error resetting remote game statuses to ready on startup: {e}")

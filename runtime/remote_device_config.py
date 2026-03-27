@@ -1,5 +1,5 @@
 """
-Apply remote (Firestore-shaped) device configuration to local machine state.
+Apply remote device configuration to local machine state.
 
 Extracted from main for testing and to keep the composition root thinner.
 """
@@ -33,7 +33,7 @@ def parse_iso_ts(value: Any) -> Optional[datetime]:
     return None
 
 
-def is_firestore_reset_confirmed(config: dict) -> bool:
+def is_remote_reset_confirmed(config: dict) -> bool:
     if not isinstance(config, dict):
         return False
     if config.get("ip_address") != "":
@@ -50,6 +50,11 @@ def is_firestore_reset_confirmed(config: dict) -> bool:
     if not isinstance(dim_window, dict):
         return False
     return bool(dim_window.get("dim_window_enabled")) is False
+
+
+def is_firestore_reset_confirmed(config: dict) -> bool:
+    """Backward-compatible alias for old test and call sites."""
+    return is_remote_reset_confirmed(config)
 
 
 @dataclass
@@ -81,7 +86,7 @@ class RemoteDeviceConfigDependencies:
 
 
 class RemoteDeviceConfigApplier:
-    """Applies one remote config snapshot (same shape as Firestore bridge pushes)."""
+    """Applies one remote config snapshot from the sync bridge."""
 
     def __init__(
         self,
@@ -103,7 +108,7 @@ class RemoteDeviceConfigApplier:
         rt = self._runtime
         ctx = deps.app_ctx
 
-        if deps.is_reset_in_progress() and is_firestore_reset_confirmed(config):
+        if deps.is_reset_in_progress() and is_remote_reset_confirmed(config):
             deps.on_reset_confirmed()
 
         games_cfg = config.get("games")
@@ -126,7 +131,7 @@ class RemoteDeviceConfigApplier:
                 service.set_pages(pages, reload_pages=False)
                 ctx.reload_pages = True
         except Exception as e:
-            print(f"Error applying Firestore pages config: {e}")
+            print(f"Error applying remote pages config: {e}")
 
         try:
             bluetooth_cfg = config.get("bluetooth")
@@ -139,7 +144,7 @@ class RemoteDeviceConfigApplier:
                         connect_address.strip()
                     )
         except Exception as e:
-            print(f"Error handling Firestore bluetooth config: {e}")
+            print(f"Error handling remote bluetooth config: {e}")
 
         try:
             if "brightness" in config or "Brightness" in config:
@@ -190,7 +195,7 @@ class RemoteDeviceConfigApplier:
                         rt.startup_filter_playing_until_newer_update = True
                         confirmed_in_this_call = True
                         print(
-                            "Firestore game reset confirmed; enabling game command handling"
+                            "Remote game reset confirmed; enabling game command handling"
                         )
                     else:
                         now = time.time()
@@ -239,7 +244,7 @@ class RemoteDeviceConfigApplier:
                             deps.request_set_game_status(gid, next_status)
                         except Exception as e:
                             print(
-                                f"Error updating Firestore game status to {next_status} for {gid}: {e}"
+                                f"Error updating remote game status to {next_status} for {gid}: {e}"
                             )
 
                     def _request_launch(gid: str) -> None:
@@ -275,7 +280,7 @@ class RemoteDeviceConfigApplier:
                     if status == "playing":
                         break
         except Exception as e:
-            print(f"Error applying Firestore device config: {e}")
+            print(f"Error applying remote device config: {e}")
 
         try:
             if rt.startup_firmware_version:
@@ -288,7 +293,7 @@ class RemoteDeviceConfigApplier:
                 try:
                     deps.publish_partial_state(payload)
                 except Exception as e:
-                    print(f"Error notifying Firestore of startup firmware version: {e}")
+                    print(f"Error notifying remote sync of startup firmware version: {e}")
 
                 try:
                     service.set_firmware_info(rt.startup_firmware_version, False)
@@ -339,10 +344,8 @@ class RemoteDeviceConfigApplier:
                 except Exception as e:
                     print(f"Error persisting firmware info locally after update: {e}")
             else:
-                print(
-                    f"Firmware update requested via Firestore but perform_update failed: {update_result}"
-                )
+                print(f"Firmware update requested via remote sync but perform_update failed: {update_result}")
         except Exception as e:
-            print(f"Error handling Firestore firmware update config: {e}")
+            print(f"Error handling remote firmware update config: {e}")
         finally:
             rt.firmware_update_in_progress = False

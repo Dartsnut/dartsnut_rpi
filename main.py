@@ -36,7 +36,7 @@ from pydartsnut import Dartsnut
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.udp_broadcast import udp_broadcast
-from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
+from python_websocket.remote_bluetooth_sync import RemoteBluetoothScanController
 
 import assets
 from domain.app_context import AppContext
@@ -88,20 +88,20 @@ _brightness_last_set = None
 
 BRIGHTNESS_TRANSITION_DURATION = 1.0
 
-# Remote config / Firestore game startup coordination (see RemoteConfigRuntimeState).
+# Remote config/game startup coordination (see RemoteConfigRuntimeState).
 _remote_config_runtime = RemoteConfigRuntimeState()
 _network_state_refresh_event = threading.Event()
 _reset_in_progress = False
 _reset_lock = threading.Lock()
-_reset_firestore_confirm_event = threading.Event()
+_reset_remote_confirm_event = threading.Event()
 
 set_remote_sync(create_default_remote_sync())
 
-_firestore_bluetooth_scan_controller = FirestoreBluetoothScanController(
-    scan_builder=machine_api.build_firestore_bluetooth_list,
+_remote_bluetooth_scan_controller = RemoteBluetoothScanController(
+    scan_builder=machine_api.build_remote_bluetooth_list,
     timestamp_factory=machine_api.current_utc_iso_timestamp,
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
-    connect_device=machine_api.connect_device_for_firestore,
+    connect_device=machine_api.connect_device_for_remote,
 )
 _websocket_service_registry = build_default_websocket_registry()
 
@@ -195,7 +195,7 @@ def set_brightness(brightness):
     service = get_machine_state_service()
 
     if dim_rt.currently_in_dim_window:
-        # When in dim window, only update stored brightness and Firestore; keep hardware dimmed.
+        # When in dim window, only update stored brightness and remote sync; keep hardware dimmed.
         try:
             if service is not None:
                 service.set_brightness(brightness)
@@ -221,7 +221,7 @@ def set_brightness(brightness):
 def set_volume(volume):
     """
     Public volume setter used by the rest of the app and websocket layer.
-    Delegates to MachineStateService for hardware + JSON, then notifies Firestore.
+    Delegates to MachineStateService for hardware + JSON, then notifies remote sync.
     """
     service = get_machine_state_service()
     try:
@@ -311,11 +311,11 @@ def _run_device_reset_sequence() -> None:
     if _is_reset_in_progress():
         return
     _set_reset_in_progress(True)
-    _reset_firestore_confirm_event.clear()
+    _reset_remote_confirm_event.clear()
     _network_state_refresh_event.clear()
     try:
         get_remote_sync().request_device_reset_state()
-        _reset_firestore_confirm_event.wait()
+        _reset_remote_confirm_event.wait()
         machine_api.forget_wifi()
         try:
             term_widget_processes(ctx.pages)
@@ -352,7 +352,7 @@ _remote_config_applier = RemoteDeviceConfigApplier(
     RemoteDeviceConfigDependencies(
         app_ctx=ctx,
         get_machine_state_service=get_machine_state_service,
-        bluetooth_scan_controller=_firestore_bluetooth_scan_controller,
+        bluetooth_scan_controller=_remote_bluetooth_scan_controller,
         publish_partial_state=lambda p: get_remote_sync().publish_partial_state(p),
         request_set_game_status=lambda gid, s: get_remote_sync().request_set_game_status(
             gid, s
@@ -365,14 +365,14 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         perform_update=machine_api.perform_update,
         get_version=machine_api.get_version,
         is_reset_in_progress=_is_reset_in_progress,
-        on_reset_confirmed=_reset_firestore_confirm_event.set,
+        on_reset_confirmed=_reset_remote_confirm_event.set,
     ),
     _remote_config_runtime,
 )
 
 
-def _apply_firestore_config(config: dict) -> None:
-    """Apply remote (Firestore-shaped) configuration; implementation in remote_device_config."""
+def _apply_remote_config(config: dict) -> None:
+    """Apply remote configuration; implementation in remote_device_config."""
     _remote_config_applier.apply(config)
 
 
@@ -642,11 +642,11 @@ def check_connection_loop():
                 try:
                     di = get_device_info()
                     get_remote_sync().restart_sync(
-                        di or {}, reload_config, _apply_firestore_config
+                        di or {}, reload_config, _apply_remote_config
                     )
                     request_network_state_refresh()
                 except Exception as e:
-                    print(f"Error restarting Firestore sync after connectivity established: {e}")
+                    print(f"Error restarting remote sync after connectivity established: {e}")
         except Exception as e:
             print(f"Error checking connection: {e}")
             _app_ctx.wifi_connected = False
@@ -654,9 +654,9 @@ def check_connection_loop():
         time.sleep(10)
 
 
-def network_state_firestore_loop():
+def network_state_remote_loop():
     """
-    Poll current IP/SSID every 30s and only push changed values to Firestore.
+    Poll current IP/SSID every 30s and only push changed values to remote sync.
     Cache tracks successfully-published values so we resend after bridge restarts.
     """
     poll_interval_seconds = 30
@@ -697,7 +697,7 @@ def network_state_firestore_loop():
                     if "ssid" in updates:
                         last_published_ssid = payload_ssid
         except Exception as e:
-            print(f"Error in network Firestore poller: {e}")
+            print(f"Error in network sync poller: {e}")
 
         _network_state_refresh_event.wait(poll_interval_seconds)
 
@@ -709,7 +709,7 @@ def request_network_state_refresh():
     _network_state_refresh_event.set()
 
 
-def _on_firestore_connectivity_changed(connected: bool) -> None:
+def _on_remote_connectivity_changed(connected: bool) -> None:
     if connected and not _is_reset_in_progress():
         request_network_state_refresh()
 
@@ -735,9 +735,9 @@ start_background_subsystems(
     start_game_from_websocket=start_game_from_websocket,
     trigger_dim_check=trigger_dim_check,
     check_connection_loop=check_connection_loop,
-    network_state_firestore_loop=network_state_firestore_loop,
-    apply_remote_config=_apply_firestore_config,
-    on_remote_connectivity_changed=_on_firestore_connectivity_changed,
+    network_state_remote_loop=network_state_remote_loop,
+    apply_remote_config=_apply_remote_config,
+    on_remote_connectivity_changed=_on_remote_connectivity_changed,
     request_network_state_refresh=request_network_state_refresh,
     remote_config_runtime=_remote_config_runtime,
     websocket_service_registry=_websocket_service_registry,

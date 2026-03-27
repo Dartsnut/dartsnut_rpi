@@ -53,10 +53,18 @@ def build_firestore_bluetooth_list():
     return btops.build_firestore_bluetooth_list()
 
 
+def build_remote_bluetooth_list():
+    return build_firestore_bluetooth_list()
+
+
 def connect_device_for_firestore(address: str):
     btops = importlib.import_module("python_websocket.bluetooth_operations")
 
     return btops.connect_device_for_firestore(address)
+
+
+def connect_device_for_remote(address: str):
+    return connect_device_for_firestore(address)
 
 
 def current_utc_iso_timestamp() -> str:

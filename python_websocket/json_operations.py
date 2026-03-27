@@ -145,7 +145,10 @@ def get_device_info():
         except Exception:
             ssid = ""
         device_info["ssid"] = ssid
-        device_info["firestore_connected"] = bool(get_remote_sync().is_connected())
+        connected = bool(get_remote_sync().is_connected())
+        device_info["supabase_connected"] = connected
+        # Backward compatibility for older clients.
+        device_info["firestore_connected"] = connected
 
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:

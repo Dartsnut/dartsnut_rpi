@@ -5,9 +5,9 @@ This service is responsible for:
 - Applying changes to hardware / AppContext (brightness, pages, etc.)
 - Persisting relevant fields to local JSON files (device.json, apps/conf.json)
 
-It deliberately does NOT talk to Firestore directly. Higher layers (e.g.
-firestore_sync_bridge, websocket handlers) decide when to call this service
-based on whether Firestore is the source of truth.
+It deliberately does NOT talk to remote sync providers directly. Higher layers
+(e.g. sync bridge, websocket handlers) decide when to call this service based
+on source-of-truth rules.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ class MachineStateService:
     def set_volume(self, volume: int) -> None:
         """
         Set volume via amixer and persist to device.json.
-        Mirrors the behavior of main.set_volume without any Firestore concerns.
+        Mirrors the behavior of main.set_volume without sync-provider concerns.
         """
         try:
             if volume == 0:

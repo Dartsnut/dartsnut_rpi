@@ -1,7 +1,7 @@
 """
-Pluggable remote sync: Firestore bridge when available, otherwise no-op.
+Pluggable remote sync: Supabase bridge when available, otherwise no-op.
 
-Presentation and config appliers depend on RemoteSyncPort, not on firestore_sync_bridge.
+Presentation and config appliers depend on RemoteSyncPort, not on provider specifics.
 
 When the bridge module is missing, `NoOpRemoteSync` is used: outbound publishes and
 game-status requests are dropped. Local control still works via WebSocket RPC and the
@@ -14,12 +14,12 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional, Protocol
 
 try:
-    import firestore_sync_bridge as _fsb
+    import supabase_sync_bridge as _ssb
 
-    _FIRESTORE_AVAILABLE = True
+    _SUPABASE_AVAILABLE = True
 except ImportError:
-    _fsb = None  # type: ignore
-    _FIRESTORE_AVAILABLE = False
+    _ssb = None  # type: ignore
+    _SUPABASE_AVAILABLE = False
 
 
 class RemoteSyncPort(Protocol):
@@ -57,7 +57,7 @@ class RemoteSyncPort(Protocol):
 
 
 class NoOpRemoteSync:
-    """Used when the Firestore bridge module is missing or intentionally disabled."""
+    """Used when the Supabase bridge module is missing or intentionally disabled."""
 
     def publish_partial_state(self, payload: Dict[str, Any]) -> None:
         return None
@@ -99,28 +99,28 @@ class NoOpRemoteSync:
         return False
 
 
-class FirestoreRemoteSync:
-    """Delegates to firestore_sync_bridge (Unix-socket Go bridge)."""
+class SupabaseRemoteSync:
+    """Delegates to supabase_sync_bridge (Unix-socket external bridge)."""
 
     def publish_partial_state(self, payload: Dict[str, Any]) -> None:
-        _fsb.notify_device_state_update(payload)
+        _ssb.publish_device_state_update(payload)
 
     def request_set_game_status(self, game_id: str, status: str) -> None:
-        _fsb.request_set_game_status(game_id, status)
+        _ssb.request_set_game_status(game_id, status)
 
     def request_set_all_games_ready(self) -> None:
-        _fsb.request_set_all_games_ready()
+        _ssb.request_set_all_games_ready()
 
     def request_device_reset_state(self) -> None:
-        _fsb.request_device_reset_state()
+        _ssb.request_device_reset_state()
 
     def is_connected(self) -> bool:
-        return _fsb.is_firestore_connected()
+        return _ssb.is_supabase_connected()
 
     def set_connectivity_callback(
         self, callback: Optional[Callable[[bool], None]]
     ) -> None:
-        _fsb.set_firestore_connectivity_callback(callback)
+        _ssb.set_supabase_connectivity_callback(callback)
 
     def start_sync_if_available(
         self,
@@ -128,9 +128,7 @@ class FirestoreRemoteSync:
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
     ) -> None:
-        _fsb.start_firestore_sync_if_available(
-            device_info, reload_config, on_config_updated
-        )
+        _ssb.start_supabase_sync_if_available(device_info, reload_config, on_config_updated)
 
     def restart_sync(
         self,
@@ -138,18 +136,18 @@ class FirestoreRemoteSync:
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
     ) -> None:
-        _fsb.restart_firestore_sync(device_info, reload_config, on_config_updated)
+        _ssb.restart_supabase_sync(device_info, reload_config, on_config_updated)
 
     def is_bridge_active(self) -> bool:
-        return _fsb.is_firestore_bridge_active()
+        return _ssb.is_supabase_bridge_active()
 
 
 _sync_impl: Optional[RemoteSyncPort] = None
 
 
 def create_default_remote_sync() -> RemoteSyncPort:
-    if _FIRESTORE_AVAILABLE:
-        return FirestoreRemoteSync()
+    if _SUPABASE_AVAILABLE:
+        return SupabaseRemoteSync()
     return NoOpRemoteSync()
 
 
