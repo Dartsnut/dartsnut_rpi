@@ -205,6 +205,39 @@ fn extract_record_from_payload(payload: &Value) -> Option<&Value> {
         .or_else(|| payload.get("data").and_then(|d| d.get("new")))
 }
 
+fn is_reset_confirmation_state(state: &Value) -> bool {
+    let obj = match state.as_object() {
+        Some(v) => v,
+        None => return false,
+    };
+    if obj.get("ip_address").and_then(|v| v.as_str()) != Some("") {
+        return false;
+    }
+    if let Some(ssid) = obj.get("ssid") {
+        if ssid.as_str() != Some("") {
+            return false;
+        }
+    }
+    if let Some(pages) = obj.get("pages") {
+        if pages.as_array().map_or(true, |a| !a.is_empty()) {
+            return false;
+        }
+    }
+    if let Some(games) = obj.get("games") {
+        if games.as_array().map_or(true, |a| !a.is_empty()) {
+            return false;
+        }
+    }
+    let dim_window = match obj.get("dim_window").and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return false,
+    };
+    !dim_window
+        .get("dim_window_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
     let ws_url = match build_realtime_ws_url(&cfg) {
         Ok(u) => u,
@@ -284,17 +317,17 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                             Some(r) => r,
                             None => continue,
                         };
-                        let source = record
-                            .get("last_update_source")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if source == "supabase_bridge" {
-                            continue;
-                        }
                         let state = match record.get("state") {
                             Some(v) => v.clone(),
                             None => continue,
                         };
+                        let source = record
+                            .get("last_update_source")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if source == "supabase_bridge" && !is_reset_confirmation_state(&state) {
+                            continue;
+                        }
                         let kind = if sent_initial { "config" } else { "config_initial" };
                         if send_msg(&writer, kind, state).is_ok() {
                             sent_initial = true;
@@ -391,4 +424,36 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_confirmation_shape_is_detected() {
+        let state = json!({
+            "ip_address": "",
+            "ssid": "",
+            "pages": [],
+            "games": [],
+            "dim_window": {"dim_window_enabled": false}
+        });
+        assert!(is_reset_confirmation_state(&state));
+    }
+
+    #[test]
+    fn reset_confirmation_requires_empty_ip_and_dim_disabled() {
+        let non_reset_state = json!({
+            "ip_address": "192.168.1.2",
+            "dim_window": {"dim_window_enabled": false}
+        });
+        assert!(!is_reset_confirmation_state(&non_reset_state));
+
+        let non_reset_state2 = json!({
+            "ip_address": "",
+            "dim_window": {"dim_window_enabled": true}
+        });
+        assert!(!is_reset_confirmation_state(&non_reset_state2));
+    }
 }

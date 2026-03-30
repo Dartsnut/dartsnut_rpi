@@ -18,7 +18,6 @@ def start_background_subsystems(
     get_version: Callable[[], Any],
     set_volume: Callable[[int], None],
     start_ble_server: Callable[..., None],
-    start_udp_broadcast: Callable[[], None],
     locate_device: Callable[[], None],
     start_websocket_server: Callable[..., None],
     set_brightness: Callable[[int], None],
@@ -56,8 +55,6 @@ def start_background_subsystems(
     threading.Thread(
         target=start_ble_server, args=(locate_device,), daemon=True
     ).start()
-    threading.Thread(target=start_udp_broadcast, daemon=True).start()
-
     threading.Thread(
         target=start_websocket_server,
         args=(

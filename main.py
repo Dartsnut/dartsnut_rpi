@@ -35,7 +35,6 @@ from pydartsnut import Dartsnut
 
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
-from python_websocket.udp_broadcast import udp_broadcast
 from python_websocket.remote_bluetooth_sync import RemoteBluetoothScanController
 
 import assets
@@ -68,6 +67,7 @@ from runtime.remote_sync_port import (
     get_remote_sync,
     set_remote_sync,
 )
+from runtime.reset_workflow import request_confirm_and_forget_wifi
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
 from runtime.websocket_service_registry import build_default_websocket_registry
@@ -94,6 +94,7 @@ _network_state_refresh_event = threading.Event()
 _reset_in_progress = False
 _reset_lock = threading.Lock()
 _reset_remote_confirm_event = threading.Event()
+_RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
 
 set_remote_sync(create_default_remote_sync())
 
@@ -311,12 +312,14 @@ def _run_device_reset_sequence() -> None:
     if _is_reset_in_progress():
         return
     _set_reset_in_progress(True)
-    _reset_remote_confirm_event.clear()
     _network_state_refresh_event.clear()
     try:
-        get_remote_sync().request_device_reset_state()
-        _reset_remote_confirm_event.wait()
-        machine_api.forget_wifi()
+        request_confirm_and_forget_wifi(
+            request_device_reset_state=get_remote_sync().request_device_reset_state,
+            confirm_event=_reset_remote_confirm_event,
+            confirm_timeout_seconds=_RESET_CONFIRM_TIMEOUT_SECONDS,
+            forget_wifi=machine_api.forget_wifi,
+        )
         try:
             term_widget_processes(ctx.pages)
         except Exception as e:
@@ -725,7 +728,6 @@ start_background_subsystems(
     get_version=machine_api.get_version,
     set_volume=set_volume,
     start_ble_server=start_ble_server,
-    start_udp_broadcast=udp_broadcast,
     locate_device=locate_device,
     start_websocket_server=start_websocket_server,
     set_brightness=set_brightness,
