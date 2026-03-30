@@ -35,6 +35,54 @@ chmod +x ./bridge
 - `DARTSNUT_SUPABASE_BRIDGE` (optional bridge executable override)
 - `DARTSNUT_SUPABASE_SOCKET` (optional socket override)
 
+## Integration tests
+
+Run hardware-free end-to-end integration tests:
+
+```bash
+python -m pytest -m integration tests/integration
+```
+
+Run the full suite except optional Supabase contract tests:
+
+```bash
+python -m pytest -m "not contract"
+```
+
+Run optional Supabase contract tests (local or hosted):
+
+```bash
+RUN_SUPABASE_CONTRACT=1 \
+SUPABASE_URL="http://127.0.0.1:54321" \
+SUPABASE_KEY="<anon-or-service-role-key>" \
+python -m pytest -m contract tests/integration/test_supabase_sql_contract.py
+```
+
+The contract test validates JSON patch merge behavior and `last_update_source`
+through `public.apply_remote_device_patch`.
+
+Run full local bridge E2E tests (opt-in):
+
+```bash
+./scripts/supabase_bootstrap.sh
+cd supabase_bridge && cargo build --release && cp target/release/dartsnut-supabase-bridge ./bridge && chmod +x ./bridge
+cd ..
+RUN_SUPABASE_LOCAL_E2E=1 \
+SUPABASE_URL="http://127.0.0.1:54321" \
+SUPABASE_KEY="<anon-or-service-role-key>" \
+python -m pytest tests/integration/test_supabase_local_bridge_e2e.py
+```
+
+This suite launches the real Rust bridge process, verifies device-to-Supabase
+state writes, and verifies Supabase realtime updates are delivered back to
+Python callbacks.
+
+One-command helper:
+
+```bash
+SUPABASE_KEY="<anon-or-service-role-key>" ./scripts/run_local_supabase_e2e.sh
+```
+
 ## Realtime inbound config
 
 - The Rust bridge subscribes to Supabase Realtime (`postgres_changes`) on `public.remote_devices`.

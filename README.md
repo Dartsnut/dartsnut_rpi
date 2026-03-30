@@ -56,6 +56,42 @@ Paste the following content according to your device type:
 sudo reboot
 ```
 
+## 7. Run Tests (Local or CI)
+
+```bash
+python -m pytest
+```
+
+Hardware-free integration suite:
+
+```bash
+python -m pytest -m integration tests/integration
+```
+
+Skip optional contract tests in CI:
+
+```bash
+python -m pytest -m "not contract"
+```
+
+Optional Supabase contract tests (manual/nightly):
+
+```bash
+RUN_SUPABASE_CONTRACT=1 SUPABASE_URL="<url>" SUPABASE_KEY="<key>" python -m pytest -m contract
+```
+
+Optional local Supabase bridge E2E (manual/nightly):
+
+```bash
+RUN_SUPABASE_LOCAL_E2E=1 SUPABASE_URL="http://127.0.0.1:54321" SUPABASE_KEY="<key>" python -m pytest tests/integration/test_supabase_local_bridge_e2e.py
+```
+
+Helper script:
+
+```bash
+SUPABASE_KEY="<key>" ./scripts/run_local_supabase_e2e.sh
+```
+
 ---
 
 For questions, please refer to the project repository or contact the developer.
