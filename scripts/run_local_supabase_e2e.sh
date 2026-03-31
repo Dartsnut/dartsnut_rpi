@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_DIR="${REPO_ROOT}/supabase_bridge"
-BRIDGE_BIN="${BRIDGE_DIR}/bridge"
+BRIDGE_BIN="${REPO_ROOT}/bridge"
 SUPABASE_URL_DEFAULT="http://127.0.0.1:54321"
 
 if ! command -v supabase >/dev/null 2>&1; then

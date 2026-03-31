@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_DIR="${REPO_ROOT}/supabase_bridge"
-OUT_BIN="${BRIDGE_DIR}/bridge"
-TMP_OUT_BIN="${BRIDGE_DIR}/bridge.new"
+OUT_BIN="${REPO_ROOT}/bridge"
+TMP_OUT_BIN="${REPO_ROOT}/bridge.new"
 
 EMBED_URL="https://csofgmhsoswpqobxmftm.supabase.co"
 EMBED_KEY="sb_publishable_5IXiYDDpMlgP4xJuX-on9A_m-A25T5H"

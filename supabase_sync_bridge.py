@@ -14,7 +14,6 @@ from typing import Any, Callable, Dict, Optional
 SOCKET_PATH = "/tmp/dartsnut-supabase-sync.sock"
 _DEFAULT_BRIDGE_BIN = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "supabase_bridge",
     "bridge",
 )
 _DOTENV_CANDIDATES = (".env", ".env.local")
