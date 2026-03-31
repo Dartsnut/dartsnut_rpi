@@ -201,3 +201,42 @@ def test_apply_game_playing_requests_launch():
 
     assert game_ctx.start_game is True
     assert game_ctx.game_id == "g1"
+
+
+def test_startup_ready_confirmation_completes_on_supabase_bridge_updates_without_games():
+    """
+    If inbound snapshots are sourced from `supabase_bridge` and omit `games`,
+    startup ready-confirmation should still complete.
+    """
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    all_ready = {"count": 0}
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"last_update_source": "supabase_bridge"})
+    applier.apply({"last_update_source": "supabase_bridge"})
+
+    assert rt.awaiting_games_ready_confirmation is False
+    assert rt.startup_filter_playing_until_newer_update is True
+    assert all_ready["count"] == 0
