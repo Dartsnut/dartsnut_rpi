@@ -1,6 +1,6 @@
 import signal
 
-from states.game import GameSelectState, InGameState
+from states.game import InGameState
 
 
 class _Proc:
@@ -40,23 +40,16 @@ class _Ctx:
         self.transitions.append(type(state).__name__)
 
 
-def test_game_select_btn_b_transitions_to_menu():
-    ctx = _Ctx()
-    state = GameSelectState()
+def test_ingame_home_on_pixelboard_goes_to_widget():
+    ctx = _Ctx(model="PixelBoard")
+    state = InGameState()
+    ctx.game = {"process": ctx.proc, "game_id": "g1"}
 
-    state.handle_input(ctx, {"btn_b": True})
-
-    assert ctx.transitions[-1] == "MenuState"
-
-
-def test_game_select_sets_reload_conf_when_start_fails():
-    ctx = _Ctx()
-    ctx.start_game_process = lambda _gid: None
-    state = GameSelectState()
-
-    state.handle_input(ctx, {"btn_a": True})
+    state.handle_input(ctx, {"btn_home": True})
 
     assert ctx.reload_conf is True
+    assert ctx.trigger_dim_check is True
+    assert ctx.transitions[-1] == "WidgetState"
 
 
 def test_ingame_overlay_resume_requires_a_release():
@@ -73,15 +66,3 @@ def test_ingame_overlay_resume_requires_a_release():
 
     assert state.is_showing_exit_game_overlay(ctx) is False
     assert signal.SIGCONT in ctx.proc.signals
-
-
-def test_ingame_home_on_pixelboard_goes_to_widget():
-    ctx = _Ctx(model="PixelBoard")
-    state = InGameState()
-    ctx.game = {"process": ctx.proc, "game_id": "g1"}
-
-    state.handle_input(ctx, {"btn_home": True})
-
-    assert ctx.reload_conf is True
-    assert ctx.trigger_dim_check is True
-    assert ctx.transitions[-1] == "WidgetState"

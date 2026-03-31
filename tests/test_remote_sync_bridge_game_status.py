@@ -1,6 +1,7 @@
 import remote_sync_bridge as rsb
 
 
+# Game status update flow (existing -> append -> remote-removal guard)
 def test_request_set_game_status_updates_existing_game(monkeypatch):
     sent = []
 

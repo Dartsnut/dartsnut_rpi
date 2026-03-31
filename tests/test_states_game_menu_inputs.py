@@ -40,6 +40,21 @@ class _Ctx:
         self.transitions.append(type(state).__name__)
 
 
+def test_menu_input_wrap_and_home_transition():
+    ctx = _Ctx()
+    ctx.menu_select_index = 0
+    ctx.pages = [{"uuid": "x"}]
+    state = MenuState()
+
+    state.handle_input(ctx, {"btn_left": True})
+    assert ctx.menu_select_index == 2
+    state.handle_input(ctx, {"btn_right": True})
+    assert ctx.menu_select_index == 0
+
+    state.handle_input(ctx, {"btn_home": True})
+    assert ctx.transitions[-1] == "WidgetState"
+
+
 def test_game_select_input_wrap_and_start_transition():
     ctx = _Ctx()
     state = GameSelectState()
@@ -53,6 +68,25 @@ def test_game_select_input_wrap_and_start_transition():
     state.handle_input(ctx, {"btn_a": True})
     assert ctx.transitions[-1] == "InGameState"
     assert ctx.status_calls[-1] == ("g1", "playing")
+
+
+def test_game_select_btn_b_transitions_to_menu():
+    ctx = _Ctx()
+    state = GameSelectState()
+
+    state.handle_input(ctx, {"btn_b": True})
+
+    assert ctx.transitions[-1] == "MenuState"
+
+
+def test_game_select_sets_reload_conf_when_start_fails():
+    ctx = _Ctx()
+    ctx.start_game_process = lambda _gid: None
+    state = GameSelectState()
+
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert ctx.reload_conf is True
 
 
 def test_ingame_home_opens_overlay_and_overlay_b_ends_game():
@@ -70,18 +104,3 @@ def test_ingame_home_opens_overlay_and_overlay_b_ends_game():
     assert ctx.game is None
     assert ctx.transitions[-1] == "MenuState"
     assert ctx.status_calls[-1] == ("g1", "ready")
-
-
-def test_menu_input_wrap_and_home_transition():
-    ctx = _Ctx()
-    ctx.menu_select_index = 0
-    ctx.pages = [{"uuid": "x"}]
-    state = MenuState()
-
-    state.handle_input(ctx, {"btn_left": True})
-    assert ctx.menu_select_index == 2
-    state.handle_input(ctx, {"btn_right": True})
-    assert ctx.menu_select_index == 0
-
-    state.handle_input(ctx, {"btn_home": True})
-    assert ctx.transitions[-1] == "WidgetState"

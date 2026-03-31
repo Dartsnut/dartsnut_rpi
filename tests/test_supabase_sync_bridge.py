@@ -1,6 +1,7 @@
 import supabase_sync_bridge as ssb
 
 
+# Initial-state construction (happy path -> fallback identity)
 def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
 
@@ -53,6 +54,7 @@ def test_build_initial_state_sets_device_info_id_from_ble_mac_when_missing(monke
     assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
 
 
+# Payload normalization and merge guards
 def test_coerce_pages_games_lists():
     out = ssb._coerce_pages_games_lists({"pages": None, "games": "bad"})
     assert out == {"pages": [], "games": []}

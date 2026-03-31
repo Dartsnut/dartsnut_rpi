@@ -14,6 +14,7 @@ from runtime.remote_device_config import (
 )
 
 
+# Parsing and reset-shape guards
 def test_parse_iso_ts_accepts_z_suffix():
     dt = parse_iso_ts("2026-03-25T12:00:00Z")
     assert dt is not None
@@ -41,6 +42,7 @@ def test_is_remote_reset_confirmed_requires_empty_network_and_dim_disabled():
     )
 
 
+# Non-game remote config application
 def test_apply_sets_pages_and_reload_flag_without_calling_game_logic(
     tmp_path, monkeypatch
 ):
@@ -151,6 +153,7 @@ def test_apply_updates_brightness_via_service():
     svc.set_brightness.assert_called_once_with(77)
 
 
+# Game command handling
 def _game_ctx():
     ctx = AppContext(
         display=MagicMock(),
@@ -204,6 +207,7 @@ def test_apply_game_playing_requests_launch():
     assert game_ctx.game_id == "g1"
 
 
+# Startup gate behavior
 def test_startup_ready_confirmation_waits_on_supabase_bridge_updates_without_games():
     """
     If inbound snapshots are sourced from `supabase_bridge` but omit `games`,
