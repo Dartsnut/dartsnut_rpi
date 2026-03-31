@@ -203,10 +203,10 @@ def test_apply_game_playing_requests_launch():
     assert game_ctx.game_id == "g1"
 
 
-def test_startup_ready_confirmation_completes_on_supabase_bridge_updates_without_games():
+def test_startup_ready_confirmation_waits_on_supabase_bridge_updates_without_games():
     """
-    If inbound snapshots are sourced from `supabase_bridge` and omit `games`,
-    startup ready-confirmation should still complete.
+    If inbound snapshots are sourced from `supabase_bridge` but omit `games`,
+    startup ready-confirmation should not complete yet.
     """
     game_ctx = _game_ctx()
     svc = MagicMock()
@@ -237,6 +237,6 @@ def test_startup_ready_confirmation_completes_on_supabase_bridge_updates_without
     applier.apply({"last_update_source": "supabase_bridge"})
     applier.apply({"last_update_source": "supabase_bridge"})
 
-    assert rt.awaiting_games_ready_confirmation is False
-    assert rt.startup_filter_playing_until_newer_update is True
-    assert all_ready["count"] == 0
+    assert rt.awaiting_games_ready_confirmation is True
+    assert rt.startup_games_ready_confirmed_at is None
+    assert all_ready["count"] == 1

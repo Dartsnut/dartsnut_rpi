@@ -121,14 +121,16 @@ class RemoteDeviceConfigApplier:
             self._runtime.awaiting_games_ready_confirmation
             and str(config.get("last_update_source", "")).strip().lower() == "supabase_bridge"
         ):
-            # Bridge-originated snapshots may omit `games`. Treat this as a confirmation
-            # that stale remote "playing" statuses were cleared during startup.
-            self._runtime.awaiting_games_ready_confirmation = False
-            self._runtime.startup_games_ready_confirmed_at = parse_iso_ts(
-                config.get("device_updated_at") or config.get("updated_at")
-            )
-            self._runtime.startup_filter_playing_until_newer_update = True
-            print("Remote game reset confirmed from bridge snapshot without games payload")
+            # Bridge-originated snapshots may omit `games`; do not auto-confirm reset.
+            # Keep waiting for explicit games-state confirmation and periodically
+            # re-request all games to be set ready.
+            now = time.time()
+            if (now - float(self._runtime.startup_ready_retry_last_at)) >= 2.0:
+                self._runtime.startup_ready_retry_last_at = now
+                try:
+                    deps.request_set_all_games_ready()
+                except Exception:
+                    pass
 
         service = deps.get_machine_state_service()
         if service is None:
