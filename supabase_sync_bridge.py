@@ -24,6 +24,8 @@ _bridge_lock = threading.Lock()
 _connected = False
 _connected_lock = threading.Lock()
 _connectivity_callback: Optional[Callable[[bool], None]] = None
+_remote_game_ids: Optional[set[str]] = None
+_remote_game_ids_lock = threading.Lock()
 
 
 def _set_connected(connected: bool) -> None:
@@ -89,6 +91,41 @@ def _coerce_pages_games_lists(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _remember_remote_game_ids(config: Dict[str, Any]) -> None:
+    if not isinstance(config, dict) or "games" not in config:
+        return
+    games = config.get("games")
+    next_ids: set[str] = set()
+    if isinstance(games, list):
+        next_ids = {
+            str(g.get("id"))
+            for g in games
+            if isinstance(g, dict) and g.get("id") is not None
+        }
+    with _remote_game_ids_lock:
+        global _remote_game_ids
+        _remote_game_ids = next_ids
+
+
+def _current_remote_game_ids() -> Optional[set[str]]:
+    with _remote_game_ids_lock:
+        if _remote_game_ids is None:
+            return None
+        return set(_remote_game_ids)
+
+
+def _normalize_device_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parts = raw.split(":")
+    if len(parts) == 6 and all(
+        len(p) == 2 and all(c in "0123456789abcdefABCDEF" for c in p) for p in parts
+    ):
+        return ":".join(p.upper() for p in parts)
+    return raw
+
+
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     brightness_raw = device_info.get("brightness")
     volume_raw = device_info.get("volume")
@@ -101,6 +138,12 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         volume = 0
 
+    resolved_device_id = _normalize_device_id(
+        device_info.get("device_id")
+        or device_info.get("id")
+        or device_info.get("ble_mac")
+        or device_info.get("mac_address")
+    )
     dim_window = {
         "dim_window_enabled": bool(device_info.get("dim_window_enabled", False)),
         "dim_window_start": device_info.get("dim_window_start", ""),
@@ -109,6 +152,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         "dim_restore_seconds": device_info.get("dim_restore_seconds", 0),
     }
     device_meta = {
+        "id": resolved_device_id,
         "sn": device_info.get("serial", ""),
         "model": device_info.get("model", ""),
         "name": device_info.get("name", ""),
@@ -143,7 +187,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         games = []
 
     state: Dict[str, Any] = {
-        "device_id": str(device_info.get("device_id", "") or ""),
+        "device_id": resolved_device_id,
         "time_zone": device_info.get("time_zone", ""),
         "volume": volume,
         "brightness": brightness,
@@ -280,6 +324,7 @@ class _SyncClient:
                             elif kind in ("config", "config_initial") and isinstance(
                                 payload, dict
                             ):
+                                _remember_remote_game_ids(payload)
                                 cfg = _normalize_config_payload(payload)
                                 if kind == "config_initial":
                                     try:
@@ -380,6 +425,13 @@ def request_set_game_status(game_id: str, status: str) -> None:
         from game_lifecycle import get_games_summary
 
         games = get_games_summary()
+        remote_ids = _current_remote_game_ids()
+        if remote_ids is not None:
+            games = [
+                g
+                for g in games
+                if isinstance(g, dict) and str(g.get("id") or "") in remote_ids
+            ]
         found = False
         for g in games:
             if isinstance(g, dict) and g.get("id") == game_id:
@@ -397,6 +449,13 @@ def request_set_all_games_ready() -> None:
         from game_lifecycle import get_games_summary
 
         games = get_games_summary()
+        remote_ids = _current_remote_game_ids()
+        if remote_ids is not None:
+            games = [
+                g
+                for g in games
+                if isinstance(g, dict) and str(g.get("id") or "") in remote_ids
+            ]
         for g in games:
             if isinstance(g, dict):
                 g["status"] = "ready"
@@ -423,8 +482,10 @@ def ensure_supabase_sync_running(
     reload_config: Callable[[], None],
     on_config_updated: Callable[[Dict[str, Any]], None],
 ) -> None:
-    global _client, _bridge_proc
+    global _client, _bridge_proc, _remote_game_ids
     with _bridge_lock:
+        with _remote_game_ids_lock:
+            _remote_game_ids = None
         if _bridge_proc is not None and _bridge_proc.poll() is None:
             return
         launch_env = os.environ.copy()
@@ -471,7 +532,7 @@ def restart_supabase_sync(
 
 
 def stop_supabase_sync() -> None:
-    global _client, _bridge_proc
+    global _client, _bridge_proc, _remote_game_ids
     with _bridge_lock:
         proc = _bridge_proc
         _bridge_proc = None
@@ -481,4 +542,6 @@ def stop_supabase_sync() -> None:
         except Exception:
             pass
     _client = None
+    with _remote_game_ids_lock:
+        _remote_game_ids = None
     _set_connected(False)

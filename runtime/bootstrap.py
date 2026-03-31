@@ -4,11 +4,63 @@ Background threads and remote sync startup (BLE, WebSocket, Supabase, network po
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 from typing import Any, Callable, Dict
 
 import assets
 from runtime.remote_sync_port import get_remote_sync
+
+
+def _normalize_device_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parts = raw.split(":")
+    if len(parts) == 6 and all(len(p) == 2 and all(c in "0123456789abcdefABCDEF" for c in p) for p in parts):
+        return ":".join(p.upper() for p in parts)
+    return raw
+
+
+def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
+    info = dict(device_info or {})
+    existing_id = _normalize_device_id(info.get("id") or info.get("device_id"))
+    if existing_id:
+        info["id"] = existing_id
+        info["device_id"] = existing_id
+        return info
+
+    resolved = _normalize_device_id(info.get("ble_mac") or info.get("mac_address"))
+    if not resolved:
+        try:
+            from bluezero import adapter  # type: ignore
+
+            adapters = list(adapter.Adapter.available())
+            if adapters:
+                resolved = _normalize_device_id(adapters[0].address)
+        except Exception:
+            resolved = ""
+    if not resolved:
+        return info
+
+    info["id"] = resolved
+    info["device_id"] = resolved
+
+    try:
+        path = os.path.join(os.getcwd(), "device.json")
+        persisted: Dict[str, Any] = {}
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                persisted = json.load(f) or {}
+        persisted["id"] = resolved
+        persisted["device_id"] = resolved
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(persisted, f)
+    except Exception:
+        pass
+
+    return info
 
 
 def start_background_subsystems(
@@ -34,6 +86,7 @@ def start_background_subsystems(
     remote_config_runtime: Any,
     websocket_service_registry: Any = None,
 ) -> None:
+    device_info = _ensure_device_info_id(device_info)
     dartsnut.update_frame_buffer(assets.create_loading_image())
     try:
         version_result = get_version()
