@@ -152,10 +152,18 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
         if not incoming_configs:
             return False
         latest = incoming_configs[-1]
-        return latest.get("brightness") == 64 and latest.get("volume") == 21 and reload_count["n"] > 0
+        return (
+            latest.get("brightness") == 64
+            and latest.get("volume") == 21
+            and bool(latest.get("updated_at"))
+            and bool(latest.get("last_update_source"))
+            and reload_count["n"] > 0
+        )
 
     _wait_until(_callback_received, desc="Python inbound config callback")
     latest = incoming_configs[-1]
     assert latest.get("brightness") == 64
     assert latest.get("volume") == 21
+    assert latest.get("updated_at")
+    assert latest.get("last_update_source") == "mobile_app_test"
     assert reload_count["n"] > 0

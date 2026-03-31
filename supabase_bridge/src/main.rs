@@ -212,6 +212,27 @@ fn extract_record_from_payload(payload: &Value) -> Option<&Value> {
         .or_else(|| payload.get("data").and_then(|d| d.get("new")))
 }
 
+fn build_config_payload(record: &Value, state: &Value) -> Value {
+    let mut payload = match state.as_object() {
+        Some(obj) => Value::Object(obj.clone()),
+        None => json!({}),
+    };
+
+    if let Some(obj) = payload.as_object_mut() {
+        if let Some(updated_at) = record.get("updated_at").and_then(|v| v.as_str()) {
+            obj.insert("updated_at".to_string(), Value::String(updated_at.to_string()));
+        }
+        if let Some(source) = record.get("last_update_source").and_then(|v| v.as_str()) {
+            obj.insert(
+                "last_update_source".to_string(),
+                Value::String(source.to_string()),
+            );
+        }
+    }
+
+    payload
+}
+
 fn is_reset_confirmation_state(state: &Value) -> bool {
     let obj = match state.as_object() {
         Some(v) => v,
@@ -336,7 +357,8 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                             continue;
                         }
                         let kind = if sent_initial { "config" } else { "config_initial" };
-                        if send_msg(&writer, kind, state).is_ok() {
+                        let config_payload = build_config_payload(record, &state);
+                        if send_msg(&writer, kind, config_payload).is_ok() {
                             sent_initial = true;
                             let _ = send_msg(&writer, "bridge_health", json!({ "state": "connected" }));
                         }
@@ -462,5 +484,27 @@ mod tests {
             "dim_window": {"dim_window_enabled": true}
         });
         assert!(!is_reset_confirmation_state(&non_reset_state2));
+    }
+
+    #[test]
+    fn build_config_payload_includes_record_metadata() {
+        let record = json!({
+            "updated_at": "2026-04-01T12:00:01Z",
+            "last_update_source": "mobile_app_test"
+        });
+        let state = json!({
+            "games": [{"id": "chess", "status": "ready"}]
+        });
+
+        let payload = build_config_payload(&record, &state);
+        assert_eq!(
+            payload.get("updated_at").and_then(|v| v.as_str()),
+            Some("2026-04-01T12:00:01Z")
+        );
+        assert_eq!(
+            payload.get("last_update_source").and_then(|v| v.as_str()),
+            Some("mobile_app_test")
+        );
+        assert!(payload.get("games").is_some());
     }
 }
