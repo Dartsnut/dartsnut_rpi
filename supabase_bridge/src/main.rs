@@ -266,6 +266,13 @@ fn is_reset_confirmation_state(state: &Value) -> bool {
         .unwrap_or(false)
 }
 
+fn is_game_state_payload(state: &Value) -> bool {
+    state
+        .get("games")
+        .and_then(|v| v.as_array())
+        .is_some()
+}
+
 fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
     let ws_url = match build_realtime_ws_url(&cfg) {
         Ok(u) => u,
@@ -353,7 +360,10 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                             .get("last_update_source")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        if source == "supabase_bridge" && !is_reset_confirmation_state(&state) {
+                        if source == "supabase_bridge"
+                            && !is_reset_confirmation_state(&state)
+                            && !is_game_state_payload(&state)
+                        {
                             continue;
                         }
                         let kind = if sent_initial { "config" } else { "config_initial" };
@@ -484,6 +494,14 @@ mod tests {
             "dim_window": {"dim_window_enabled": true}
         });
         assert!(!is_reset_confirmation_state(&non_reset_state2));
+    }
+
+    #[test]
+    fn game_state_payload_detects_games_array() {
+        assert!(is_game_state_payload(&json!({"games": []})));
+        assert!(is_game_state_payload(&json!({"games": [{"id":"g1","status":"ready"}]})));
+        assert!(!is_game_state_payload(&json!({"games": null})));
+        assert!(!is_game_state_payload(&json!({"brightness": 70})));
     }
 
     #[test]
