@@ -53,6 +53,73 @@ def test_remote_config_game_playing_sets_start_game(remote_config_harness, app_c
 
 
 @pytest.mark.integration
+def test_remote_config_game_install_requests_download_then_ready(remote_config_harness):
+    runtime = remote_config_harness["runtime"]
+    runtime.startup_firmware_version = None
+    apply = remote_config_harness["apply"]
+    events = remote_config_harness["events"]
+
+    apply(
+        {
+            "games": [{"id": "g-install", "status": "downloading", "version": "1.2.3"}],
+            "device_updated_at": "2026-03-30T00:00:01",
+        }
+    )
+
+    assert events["ensure_download_calls"] == [("g-install", "1.2.3")]
+    assert events["status_updates"] == [("g-install", "downloading"), ("g-install", "ready")]
+
+
+@pytest.mark.integration
+def test_remote_config_game_ready_terminates_running_game(remote_config_harness, app_ctx):
+    runtime = remote_config_harness["runtime"]
+    runtime.startup_firmware_version = None
+    apply = remote_config_harness["apply"]
+    events = remote_config_harness["events"]
+    app_ctx.game = {"game_id": "g-remove"}
+    app_ctx.reload_conf = False
+
+    apply(
+        {
+            "games": [{"id": "g-remove", "status": "ready", "version": "1.0.0"}],
+            "device_updated_at": "2026-03-30T00:00:02",
+        }
+    )
+
+    assert events["term_calls"] == 1
+    assert events["status_updates"] == [("g-remove", "ready")]
+    assert app_ctx.game is None
+    assert app_ctx.reload_conf is True
+
+
+@pytest.mark.integration
+def test_remote_config_game_removed_during_download_cancels_and_no_readd(remote_config_harness):
+    runtime = remote_config_harness["runtime"]
+    runtime.startup_firmware_version = None
+    apply = remote_config_harness["apply"]
+    events = remote_config_harness["events"]
+    events["ensure_download_result"] = False
+
+    apply(
+        {
+            "games": [{"id": "g-cancel", "status": "downloading", "version": "2.0.0"}],
+            "device_updated_at": "2026-03-30T00:00:01",
+        }
+    )
+    apply(
+        {
+            "games": [],
+            "device_updated_at": "2026-03-30T00:00:02",
+        }
+    )
+
+    assert events["ensure_download_calls"] == [("g-cancel", "2.0.0")]
+    assert events["cancel_download_calls"] == ["g-cancel"]
+    assert events["status_updates"] == [("g-cancel", "downloading")]
+    assert runtime.remote_downloading_game_ids == set()
+
+
+@pytest.mark.integration
 def test_remote_config_firmware_update_publishes_completion_and_persists(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None

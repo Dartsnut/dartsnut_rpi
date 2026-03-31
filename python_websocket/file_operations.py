@@ -26,6 +26,7 @@ _DOWNLOAD_ACTIVE_STATUSES = ("pending", "initializing", "downloading", "extracti
 # (url, md5) in progress for both sync download_app and async game downloads (by url or resolved in worker)
 _DOWNLOAD_KEYS_IN_FLIGHT = set()
 _DOWNLOAD_KEYS_LOCK = threading.Lock()
+_DOWNLOAD_CANCEL_REQUESTED = set()
 
 _MISSING = object()
 
@@ -96,6 +97,24 @@ def _set_download_progress(
         entry["version"] = version
 
     DOWNLOAD_PROGRESS[game_id] = entry
+
+
+def _is_download_cancel_requested(game_id):
+    return game_id in _DOWNLOAD_CANCEL_REQUESTED
+
+
+def _mark_download_canceled(game_id):
+    _set_download_progress(game_id, status="canceled", error=None)
+    _DOWNLOAD_CANCEL_REQUESTED.discard(game_id)
+
+
+def cancel_game_download(game_id):
+    if not game_id:
+        return
+    gid = str(game_id)
+    _DOWNLOAD_CANCEL_REQUESTED.add(gid)
+    if not _is_game_download_active(gid):
+        _mark_download_canceled(gid)
 
 
 def get_download_progress(game_id):
@@ -425,6 +444,9 @@ def _download_game_worker(game_id):
     """
     download_path = None
     try:
+        if _is_download_cancel_requested(game_id):
+            _mark_download_canceled(game_id)
+            return
         _set_download_progress(game_id, progress=0, status="initializing", error=None)
 
         # Get download info from remote API (same as in main.start_game_process)
@@ -479,6 +501,9 @@ def _download_game_worker(game_id):
             _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
 
         try:
+            if _is_download_cancel_requested(game_id):
+                _mark_download_canceled(game_id)
+                return
             # Ensure the download directory exists
             os.makedirs(DOWNLOAD_DIR, exist_ok=True)
             file_name = game_download_url.split("/")[-1]
@@ -504,6 +529,9 @@ def _download_game_worker(game_id):
 
                 with open(download_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=chunk_size):
+                        if _is_download_cancel_requested(game_id):
+                            _mark_download_canceled(game_id)
+                            return
                         if not chunk:
                             continue
                         f.write(chunk)
@@ -521,6 +549,9 @@ def _download_game_worker(game_id):
 
             # Verify MD5
             downloaded_md5 = hash_md5.hexdigest()
+            if _is_download_cancel_requested(game_id):
+                _mark_download_canceled(game_id)
+                return
             if downloaded_md5 != game_download_md5:
                 if download_path and os.path.isfile(download_path):
                     os.remove(download_path)
@@ -533,6 +564,9 @@ def _download_game_worker(game_id):
 
             # Extract tar.gz using tarfile (Python stdlib)
             apps_dir = _apps_path()
+            if _is_download_cancel_requested(game_id):
+                _mark_download_canceled(game_id)
+                return
             try:
                 with tarfile.open(download_path, "r:gz") as tar:
                     tar.extractall(apps_dir)
@@ -575,6 +609,9 @@ def _download_game_worker_with_url(game_id, url, md5):
     """
     download_path = None
     try:
+        if _is_download_cancel_requested(game_id):
+            _mark_download_canceled(game_id)
+            return
         _set_download_progress(game_id, progress=0, status="initializing", error=None)
 
         if not url or not md5:
@@ -618,6 +655,9 @@ def _download_game_worker_with_url(game_id, url, md5):
 
             with open(download_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=chunk_size):
+                    if _is_download_cancel_requested(game_id):
+                        _mark_download_canceled(game_id)
+                        return
                     if not chunk:
                         continue
                     f.write(chunk)
@@ -635,6 +675,9 @@ def _download_game_worker_with_url(game_id, url, md5):
 
         # Verify MD5
         downloaded_md5 = hash_md5.hexdigest()
+        if _is_download_cancel_requested(game_id):
+            _mark_download_canceled(game_id)
+            return
         if downloaded_md5 != md5:
             if download_path and os.path.isfile(download_path):
                 os.remove(download_path)
@@ -647,6 +690,9 @@ def _download_game_worker_with_url(game_id, url, md5):
 
         # Extract tar.gz using tarfile (Python stdlib)
         apps_dir = _apps_path()
+        if _is_download_cancel_requested(game_id):
+            _mark_download_canceled(game_id)
+            return
         try:
             with tarfile.open(download_path, "r:gz") as tar:
                 tar.extractall(apps_dir)
@@ -704,6 +750,7 @@ def start_game_download_async(game_id):
             game_id=game_id,
         )
 
+    _DOWNLOAD_CANCEL_REQUESTED.discard(str(game_id))
     # Initialize / reset progress entry
     _set_download_progress(game_id, progress=0, status="pending", error=None)
 
@@ -761,6 +808,7 @@ def start_game_download_async_with_url(game_id, url, md5):
             )
         _DOWNLOAD_KEYS_IN_FLIGHT.add(key)
 
+    _DOWNLOAD_CANCEL_REQUESTED.discard(str(game_id))
     # Initialize / reset progress entry
     _set_download_progress(game_id, progress=0, status="pending", error=None)
 

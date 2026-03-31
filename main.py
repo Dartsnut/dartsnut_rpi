@@ -36,6 +36,7 @@ from pydartsnut import Dartsnut
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.remote_bluetooth_sync import RemoteBluetoothScanController
+from python_websocket.file_operations import cancel_game_download
 
 import assets
 from domain.app_context import AppContext
@@ -364,6 +365,7 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         set_time_zone=set_time_zone,
         term_game_process=term_game_process,
         ensure_game_downloaded=ensure_game_downloaded,
+        cancel_game_download=cancel_game_download,
         local_game_version_matches=local_game_version_matches,
         perform_update=machine_api.perform_update,
         get_version=machine_api.get_version,

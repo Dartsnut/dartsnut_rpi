@@ -78,6 +78,8 @@ def local_bridge_runtime(monkeypatch):
         "name": "LocalE2E",
         "updated_at": "2026-03-30T00:00:00",
     }
+    # Local non-BLE dev machines can force bridge device_id via env override.
+    monkeypatch.setenv("DARTSNUT_SUPABASE_DEVICE_ID", device_id)
 
     ssb.start_supabase_sync_if_available(device_info, on_reload, on_cfg)
     _wait_until(lambda: connected_event.is_set() or ssb.is_supabase_connected(), desc="bridge connection")
@@ -123,7 +125,7 @@ def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
     _wait_until(_state_updated, desc="Supabase row brightness update")
 
 
-def test_local_bridge_e2e_supabase_update_reaches_python_callback(local_bridge_runtime):
+def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_bridge_runtime):
     base_url = local_bridge_runtime["base_url"]
     api_key = local_bridge_runtime["api_key"]
     device_id = local_bridge_runtime["device_id"]
@@ -153,3 +155,7 @@ def test_local_bridge_e2e_supabase_update_reaches_python_callback(local_bridge_r
         return latest.get("brightness") == 64 and latest.get("volume") == 21 and reload_count["n"] > 0
 
     _wait_until(_callback_received, desc="Python inbound config callback")
+    latest = incoming_configs[-1]
+    assert latest.get("brightness") == 64
+    assert latest.get("volume") == 21
+    assert reload_count["n"] > 0

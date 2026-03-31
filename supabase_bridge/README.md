@@ -32,6 +32,7 @@ chmod +x ./bridge
 - `SUPABASE_KEY` (recommended) or `SUPABASE_ANON_KEY`
 - `DARTSNUT_SUPABASE_BRIDGE` (optional; overrides executable path)
 - `DARTSNUT_SUPABASE_SOCKET` (optional; overrides socket path)
+- `DARTSNUT_SUPABASE_DEVICE_ID` (optional; override `device_id` when BLE MAC is unavailable)
 
 ## Device ID source
 

@@ -13,6 +13,23 @@ def test_get_download_progress_single_and_list():
     assert listed["progresses"]["g2"]["status"] == "not_found"
 
 
+def test_cancel_game_download_marks_entry_canceled():
+    fops.DOWNLOAD_PROGRESS.clear()
+    fops._DOWNLOAD_CANCEL_REQUESTED.clear()
+    fops.DOWNLOAD_PROGRESS["g1"] = {
+        "game_id": "g1",
+        "progress": 20,
+        "status": "downloading",
+        "error": None,
+    }
+
+    fops.cancel_game_download("g1")
+    progress = fops.get_download_progress("g1")
+
+    assert progress["status"] == "downloading"
+    assert "g1" in fops._DOWNLOAD_CANCEL_REQUESTED
+
+
 def test_create_and_list_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "apps").mkdir()

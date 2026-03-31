@@ -74,9 +74,10 @@ def test_device_action_set_device_name_publishes_remote(run_action, websocket_re
     assert fake_remote_sync.published[-1] == {"device_info": {"name": "Kitchen"}}
 
 
-def test_supabase_inbound_config_updates_local_machine(remote_config_harness):
+def test_external_change_from_supabase_inbound_config_updates_local_machine(remote_config_harness):
     apply = remote_config_harness["apply"]
     state = remote_config_harness["machine_state"]
+    events = remote_config_harness["events"]
     apply(
         {
             "brightness": 81,
@@ -92,6 +93,7 @@ def test_supabase_inbound_config_updates_local_machine(remote_config_harness):
         }
     )
 
+    assert events["reload_called"] is True
     assert state.brightness == 81
     assert state.volume == 66
     assert state.device_name == "LivingRoom"

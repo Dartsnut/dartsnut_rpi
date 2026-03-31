@@ -279,6 +279,9 @@ def remote_config_harness(
         "reload_called": False,
         "published": [],
         "status_updates": [],
+        "ensure_download_calls": [],
+        "cancel_download_calls": [],
+        "ensure_download_result": True,
         "all_ready_requests": 0,
         "reset_confirmed": False,
         "tz": None,
@@ -303,7 +306,9 @@ def remote_config_harness(
         ),
         set_time_zone=lambda tz: events.__setitem__("tz", tz),
         term_game_process=lambda _g: events.__setitem__("term_calls", events["term_calls"] + 1),
-        ensure_game_downloaded=lambda _gid, _ver: True,
+        ensure_game_downloaded=lambda gid, ver: events["ensure_download_calls"].append((gid, ver))
+        or bool(events["ensure_download_result"]),
+        cancel_game_download=lambda gid: events["cancel_download_calls"].append(gid),
         local_game_version_matches=lambda *_a: False,
         perform_update=lambda: {"error": False},
         get_version=lambda: {"error": False, "version": "9.9.9"},
@@ -314,6 +319,7 @@ def remote_config_harness(
     applier = RemoteDeviceConfigApplier(deps, runtime)
 
     def apply(config: dict[str, Any]) -> None:
+        # Model the Supabase inbound callback path used for external changes.
         applier.apply(config)
         events["reload_called"] = True
 

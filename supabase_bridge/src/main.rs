@@ -62,10 +62,17 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
         .context(
             "missing SUPABASE_KEY/SUPABASE_ANON_KEY (runtime env or embedded compile-time value)",
         )?;
-    let device_id = resolve_device_id().unwrap_or_else(|e| {
-        eprintln!("bridge: failed to resolve BLE device_id: {e}");
-        "UNKNOWN-DEVICE".to_string()
-    });
+    let device_id = env::var("DARTSNUT_SUPABASE_DEVICE_ID")
+        .ok()
+        .or_else(|| env::var("SUPABASE_DEVICE_ID").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            resolve_device_id().unwrap_or_else(|e| {
+                eprintln!("bridge: failed to resolve BLE device_id: {e}");
+                "UNKNOWN-DEVICE".to_string()
+            })
+        });
     Ok(SupabaseConfig { url, key, device_id })
 }
 

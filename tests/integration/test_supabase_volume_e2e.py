@@ -29,10 +29,12 @@ def test_volume_action_updates_local_and_publishes_remote(
 
 
 @pytest.mark.integration
-def test_volume_update_from_supabase_reflects_on_machine(remote_config_harness):
+def test_external_change_from_supabase_updates_machine_volume(remote_config_harness):
     apply = remote_config_harness["apply"]
     machine_state = remote_config_harness["machine_state"]
+    events = remote_config_harness["events"]
 
     apply({"volume": 27})
 
+    assert events["reload_called"] is True
     assert machine_state.volume == 27

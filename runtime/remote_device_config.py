@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -65,6 +65,7 @@ class RemoteConfigRuntimeState:
     startup_ready_retry_last_at: float = 0.0
     startup_firmware_version: Optional[str] = None
     firmware_update_in_progress: bool = False
+    remote_downloading_game_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -78,6 +79,7 @@ class RemoteDeviceConfigDependencies:
     set_time_zone: Callable[[str], Any]
     term_game_process: Callable[[Any], None]
     ensure_game_downloaded: Callable[[str, str], bool]
+    cancel_game_download: Callable[[str], None]
     local_game_version_matches: Callable[[str, str], bool]
     perform_update: Callable[[], dict]
     get_version: Callable[[], dict]
@@ -184,6 +186,17 @@ class RemoteDeviceConfigApplier:
 
             games_cfg = config.get("games")
             if isinstance(games_cfg, list):
+                incoming_ids = {
+                    str(g.get("id"))
+                    for g in games_cfg
+                    if isinstance(g, dict) and g.get("id") is not None
+                }
+                for removed_game_id in tuple(rt.remote_downloading_game_ids - incoming_ids):
+                    try:
+                        deps.cancel_game_download(removed_game_id)
+                    except Exception:
+                        pass
+                    rt.remote_downloading_game_ids.discard(removed_game_id)
                 cfg_ts = parse_iso_ts(
                     config.get("device_updated_at") or config.get("updated_at")
                 )
@@ -216,6 +229,10 @@ class RemoteDeviceConfigApplier:
                     if not game_id:
                         continue
                     game_id = str(game_id)
+                    if status == "downloading":
+                        rt.remote_downloading_game_ids.add(game_id)
+                    else:
+                        rt.remote_downloading_game_ids.discard(game_id)
                     if (
                         rt.startup_filter_playing_until_newer_update
                         and not confirmed_in_this_call
