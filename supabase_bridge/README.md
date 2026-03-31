@@ -26,6 +26,8 @@ cp target/release/dartsnut-supabase-bridge ./bridge
 chmod +x ./bridge
 ```
 
+Do not commit real credential values into source files or documentation.
+
 ### Runtime environment (fallback / override)
 
 - `SUPABASE_URL` (required)

@@ -13,7 +13,7 @@ The script starts local Supabase and applies migrations from `supabase/migration
 ## Hosted project setup
 
 ```bash
-supabase link --project-ref csofgmhsoswpqobxmftm
+supabase link --project-ref <project-ref>
 supabase db push
 ```
 
@@ -30,7 +30,7 @@ chmod +x ./bridge
 
 ## Runtime env
 
-- `SUPABASE_URL` (for example `https://csofgmhsoswpqobxmftm.supabase.co`)
+- `SUPABASE_URL` (for example `https://<project-ref>.supabase.co`)
 - `SUPABASE_KEY` (preferred) or `SUPABASE_ANON_KEY`
 - `DARTSNUT_SUPABASE_BRIDGE` (optional bridge executable override)
 - `DARTSNUT_SUPABASE_SOCKET` (optional socket override)
@@ -55,7 +55,7 @@ Run optional Supabase contract tests (local or hosted):
 ```bash
 RUN_SUPABASE_CONTRACT=1 \
 SUPABASE_URL="http://127.0.0.1:54321" \
-SUPABASE_KEY="<anon-or-service-role-key>" \
+SUPABASE_KEY="<supabase-key>" \
 python -m pytest -m contract tests/integration/test_supabase_sql_contract.py
 ```
 
@@ -70,7 +70,7 @@ cd supabase_bridge && cargo build --release && cp target/release/dartsnut-supaba
 cd ..
 RUN_SUPABASE_LOCAL_E2E=1 \
 SUPABASE_URL="http://127.0.0.1:54321" \
-SUPABASE_KEY="<anon-or-service-role-key>" \
+SUPABASE_KEY="<supabase-key>" \
 python -m pytest tests/integration/test_supabase_local_bridge_e2e.py
 ```
 
@@ -81,7 +81,7 @@ Python callbacks.
 One-command helper:
 
 ```bash
-SUPABASE_KEY="<anon-or-service-role-key>" ./scripts/run_local_supabase_e2e.sh
+SUPABASE_KEY="<supabase-key>" ./scripts/run_local_supabase_e2e.sh
 ```
 
 ## Realtime inbound config
@@ -103,3 +103,8 @@ Remove these paths before publishing:
 - `supabase_bridge/`
 - `supabase_sync_bridge.py`
 - `supabase/` (if migrations are not intended for OSS release)
+
+## Secret hygiene
+
+- Never commit real values for `SUPABASE_KEY` or `SUPABASE_ANON_KEY`.
+- Use placeholders in documentation and shell history examples.

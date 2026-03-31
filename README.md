@@ -92,6 +92,8 @@ Helper script:
 SUPABASE_KEY="<key>" ./scripts/run_local_supabase_e2e.sh
 ```
 
+Never commit real API keys in docs, scripts, or shell snippets.
+
 ---
 
 For questions, please refer to the project repository or contact the developer.

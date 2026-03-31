@@ -12,6 +12,8 @@ EXCLUDED_PATHS=(
   ".agents/"
   ".cursor/"
   "skills-lock.json"
+  "tests/integration/"
+  "docs/supabase-sync.md"
 )
 
 log() {
@@ -116,7 +118,7 @@ main() {
   fi
 
   log "final staged diff summary"
-  git diff --cached --stat
+  git --no-pager diff --cached --stat
 
   log "creating squash commit"
   git commit -m "${commit_message}"
