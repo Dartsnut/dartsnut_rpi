@@ -434,3 +434,53 @@ def test_startup_gate_keeps_pending_when_downloading_present_but_timestamp_not_n
         }
     )
     assert rt.awaiting_games_ready_confirmation is True
+
+
+def test_startup_gate_prefers_updated_at_over_device_updated_at_for_newer_check():
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    # First snapshot initializes gate baseline at updated_at=10:00:00.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T10:00:00",
+            "device_updated_at": "2026-04-01T09:00:00",
+            "games": [{"id": "g1", "status": "playing"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+
+    # device_updated_at remains stale, but updated_at is newer and all games are stable.
+    # Gate must use updated_at so it can pass.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T10:00:01",
+            "device_updated_at": "2026-04-01T09:00:00",
+            "games": [{"id": "g1", "status": "ready"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is False
+

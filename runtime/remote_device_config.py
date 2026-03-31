@@ -129,7 +129,9 @@ class RemoteDeviceConfigApplier:
         rt = self._runtime
         ctx = deps.app_ctx
         debug_reset_gate = _debug_reset_gate_enabled()
-        cfg_ts = parse_iso_ts(config.get("device_updated_at") or config.get("updated_at"))
+        # Prefer row-level updated_at from remote sync payloads. device_updated_at is
+        # local device state time and may remain stale across remote row updates.
+        cfg_ts = parse_iso_ts(config.get("updated_at") or config.get("device_updated_at"))
 
         if deps.is_reset_in_progress() and is_remote_reset_confirmed(config):
             deps.on_reset_confirmed()
