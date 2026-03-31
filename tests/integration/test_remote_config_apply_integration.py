@@ -40,7 +40,10 @@ def test_remote_config_applies_multi_field_snapshot(remote_config_harness, app_c
 def test_remote_config_game_playing_sets_start_game(remote_config_harness, app_ctx):
     app_ctx.start_game = False
     app_ctx.game_id = None
-    remote_config_harness["runtime"].startup_firmware_version = None
+    runtime = remote_config_harness["runtime"]
+    runtime.startup_firmware_version = None
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
     remote_config_harness["apply"](
         {
             "games": [{"id": "g1", "status": "playing", "version": ""}],
@@ -56,6 +59,8 @@ def test_remote_config_game_playing_sets_start_game(remote_config_harness, app_c
 def test_remote_config_game_install_requests_download_then_ready(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
 
@@ -74,6 +79,8 @@ def test_remote_config_game_install_requests_download_then_ready(remote_config_h
 def test_remote_config_game_ready_terminates_running_game(remote_config_harness, app_ctx):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
     app_ctx.game = {"game_id": "g-remove"}
@@ -96,6 +103,8 @@ def test_remote_config_game_ready_terminates_running_game(remote_config_harness,
 def test_remote_config_game_removed_during_download_cancels_and_no_readd(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
     events["ensure_download_result"] = False

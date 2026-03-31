@@ -52,8 +52,23 @@ def is_remote_reset_confirmed(config: dict) -> bool:
     return bool(dim_window.get("dim_window_enabled")) is False
 
 
+def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
+    """True when all games are in stable startup statuses: ready/downloading."""
+    if not isinstance(games_cfg, list):
+        return False
+    for g in games_cfg:
+        if not isinstance(g, dict):
+            continue
+        status = str(g.get("status", "")).strip().lower()
+        if status not in {"ready", "downloading"}:
+            return False
+    return True
+
+
 @dataclass
 class RemoteConfigRuntimeState:
+    startup_games_reset_initialized: bool = False
+    startup_games_reset_requested_at: Optional[datetime] = None
     awaiting_games_ready_confirmation: bool = False
     startup_games_ready_confirmed_at: Optional[datetime] = None
     startup_filter_playing_until_newer_update: bool = False
@@ -104,11 +119,24 @@ class RemoteDeviceConfigApplier:
         deps = self._deps
         rt = self._runtime
         ctx = deps.app_ctx
+        cfg_ts = parse_iso_ts(config.get("device_updated_at") or config.get("updated_at"))
 
         if deps.is_reset_in_progress() and is_remote_reset_confirmed(config):
             deps.on_reset_confirmed()
 
         games_cfg = config.get("games")
+        if not rt.startup_games_reset_initialized:
+            rt.startup_games_reset_initialized = True
+            rt.awaiting_games_ready_confirmation = True
+            rt.startup_games_ready_confirmed_at = None
+            rt.startup_filter_playing_until_newer_update = False
+            rt.startup_games_reset_requested_at = cfg_ts
+            rt.startup_ready_retry_last_at = time.time()
+            try:
+                deps.request_set_all_games_ready()
+            except Exception:
+                pass
+
         if isinstance(games_cfg, list):
             ctx.remote_menu_ready_game_ids = frozenset(
                 str(g["id"])
@@ -206,12 +234,13 @@ class RemoteDeviceConfigApplier:
                     except Exception:
                         pass
                     rt.remote_downloading_game_ids.discard(removed_game_id)
-                cfg_ts = parse_iso_ts(
-                    config.get("device_updated_at") or config.get("updated_at")
-                )
                 confirmed_in_this_call = False
                 if rt.awaiting_games_ready_confirmation:
-                    if are_remote_playing_games_cleared(games_cfg):
+                    baseline_ts = rt.startup_games_reset_requested_at
+                    has_newer_ts = (
+                        baseline_ts is not None and cfg_ts is not None and cfg_ts > baseline_ts
+                    )
+                    if are_remote_gate_stable_games(games_cfg) and has_newer_ts:
                         rt.awaiting_games_ready_confirmation = False
                         rt.startup_games_ready_confirmed_at = cfg_ts
                         rt.startup_filter_playing_until_newer_update = True
@@ -219,6 +248,8 @@ class RemoteDeviceConfigApplier:
                         print(
                             "Remote game reset confirmed; enabling game command handling"
                         )
+                        # Defer normal game command handling to the next inbound snapshot.
+                        return
                     else:
                         now = time.time()
                         if (now - float(rt.startup_ready_retry_last_at)) >= 2.0:

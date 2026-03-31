@@ -190,6 +190,7 @@ def test_apply_game_playing_requests_launch():
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
+    rt.startup_games_reset_initialized = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
 
@@ -240,3 +241,196 @@ def test_startup_ready_confirmation_waits_on_supabase_bridge_updates_without_gam
     assert rt.awaiting_games_ready_confirmation is True
     assert rt.startup_games_ready_confirmed_at is None
     assert all_ready["count"] == 1
+
+
+def test_startup_always_requests_all_ready_even_if_last_source_is_device():
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    all_ready = {"count": 0}
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"last_update_source": "device", "games": [{"id": "g1", "status": "ready"}]})
+
+    assert rt.awaiting_games_ready_confirmation is True
+    assert all_ready["count"] == 1
+
+
+def test_startup_ready_confirmation_requires_newer_timestamp_and_all_ready():
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    all_ready = {"count": 0}
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    # Startup pass should trigger reset request and mark pending.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-03-31T10:00:00",
+            "games": [{"id": "g1", "status": "playing"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+    assert all_ready["count"] == 1
+
+    # Same timestamp + all ready should still not confirm.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-03-31T10:00:00",
+            "games": [{"id": "g1", "status": "ready"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+
+    # Newer timestamp + still not all-ready should not confirm.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-03-31T10:00:01",
+            "games": [{"id": "g1", "status": "playing"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+
+    # Newer timestamp + all-ready confirms.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-03-31T10:00:02",
+            "games": [{"id": "g1", "status": "ready"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is False
+
+
+def test_startup_gate_passes_on_newer_timestamp_when_all_games_are_ready_or_downloading():
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    all_ready = {"count": 0}
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T10:00:00",
+            "games": [{"id": "g1", "status": "playing"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T10:00:01",
+            "games": [
+                {"id": "g1", "status": "downloading", "version": "2.0.0"},
+                {"id": "g2", "status": "ready"},
+            ],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is False
+
+
+def test_startup_gate_keeps_pending_when_downloading_present_but_timestamp_not_newer():
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    all_ready = {"count": 0}
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T11:00:00",
+            "games": [{"id": "g1", "status": "playing"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T11:00:00",
+            "games": [{"id": "g1", "status": "downloading", "version": "3.0.0"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
