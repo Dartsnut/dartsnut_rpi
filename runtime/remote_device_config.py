@@ -65,6 +65,15 @@ def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
     return True
 
 
+def _debug_reset_gate_enabled() -> bool:
+    return str(os.getenv("DARTSNUT_DEBUG_RESET_GATE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 @dataclass
 class RemoteConfigRuntimeState:
     startup_games_reset_initialized: bool = False
@@ -119,6 +128,7 @@ class RemoteDeviceConfigApplier:
         deps = self._deps
         rt = self._runtime
         ctx = deps.app_ctx
+        debug_reset_gate = _debug_reset_gate_enabled()
         cfg_ts = parse_iso_ts(config.get("device_updated_at") or config.get("updated_at"))
 
         if deps.is_reset_in_progress() and is_remote_reset_confirmed(config):
@@ -149,6 +159,14 @@ class RemoteDeviceConfigApplier:
             self._runtime.awaiting_games_ready_confirmation
             and str(config.get("last_update_source", "")).strip().lower() == "supabase_bridge"
         ):
+            if debug_reset_gate:
+                print(
+                    "[reset-gate] pending snapshot without games; "
+                    f"source={str(config.get('last_update_source', ''))!r} "
+                    f"cfg_ts={config.get('device_updated_at') or config.get('updated_at')!r} "
+                    f"baseline_ts={rt.startup_games_reset_requested_at!r} "
+                    f"awaiting={rt.awaiting_games_ready_confirmation}"
+                )
             # Bridge-originated snapshots may omit `games`; do not auto-confirm reset.
             # Keep waiting for explicit games-state confirmation and periodically
             # re-request all games to be set ready.
@@ -240,7 +258,31 @@ class RemoteDeviceConfigApplier:
                     has_newer_ts = (
                         baseline_ts is not None and cfg_ts is not None and cfg_ts > baseline_ts
                     )
-                    if are_remote_gate_stable_games(games_cfg) and has_newer_ts:
+                    stable_games = are_remote_gate_stable_games(games_cfg)
+                    if debug_reset_gate:
+                        game_states = []
+                        for g in games_cfg:
+                            if isinstance(g, dict):
+                                game_states.append(
+                                    (
+                                        str(g.get("id") or ""),
+                                        str(g.get("status") or "").strip().lower(),
+                                        str(g.get("version") or ""),
+                                    )
+                                )
+                        print(
+                            "[reset-gate] evaluate "
+                            f"source={str(config.get('last_update_source', ''))!r} "
+                            f"cfg_ts={config.get('device_updated_at') or config.get('updated_at')!r} "
+                            f"parsed_cfg_ts={cfg_ts!r} "
+                            f"baseline_ts={baseline_ts!r} "
+                            f"stable_games={stable_games} "
+                            f"has_newer_ts={has_newer_ts} "
+                            f"awaiting={rt.awaiting_games_ready_confirmation} "
+                            f"startup_filter_playing_until_newer_update={rt.startup_filter_playing_until_newer_update} "
+                            f"games={game_states}"
+                        )
+                    if stable_games and has_newer_ts:
                         rt.awaiting_games_ready_confirmation = False
                         rt.startup_games_ready_confirmed_at = cfg_ts
                         rt.startup_filter_playing_until_newer_update = True
