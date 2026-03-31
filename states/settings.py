@@ -6,7 +6,7 @@ import subprocess
 import time
 from PIL import Image, ImageDraw
 
-from app_context import AppContext
+from domain.app_context import AppContext
 from network_utils import get_wifi_ipv4
 from states.base import BaseState
 

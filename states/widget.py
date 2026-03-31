@@ -4,7 +4,7 @@ import signal
 import time
 from PIL import Image
 
-from app_context import AppContext
+from domain.app_context import AppContext
 from states.base import BaseState
 from widget_lifecycle import (
     check_page_widget_updates,
@@ -25,6 +25,23 @@ class WidgetState(BaseState):
         if pages is None or len(pages) == 0:
             ctx.reload_conf = True
             return
+        if ctx.page_index < 0 or ctx.page_index >= len(pages):
+            ctx.page_index = 0
+
+        # If we're currently on the default QR page, jump back immediately to an
+        # enabled non-default page when one becomes available.
+        current_page = pages[ctx.page_index]
+        if current_page.get("uuid") == "0":
+            preferred_index = None
+            for idx, page in enumerate(pages):
+                if page.get("uuid") != "0" and page.get("enabled", True):
+                    preferred_index = idx
+                    break
+            if preferred_index is not None and preferred_index != ctx.page_index:
+                ctx.page_index = preferred_index
+                ctx.page_tick = time.time()
+                ctx.next_page_prepared_index = -1
+
         get_context = lambda: ctx
 
         if len(pages) > 1 and not ctx.page_freeze:

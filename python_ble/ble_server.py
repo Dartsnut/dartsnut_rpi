@@ -257,6 +257,7 @@ def start_ble_server(locate_device=None):
     adapter_address = list(adapter.Adapter.available())[0].address
     suffix = _ble_mac_last_two_octets(adapter_address)
     local_name = f"{base_name}-{suffix}"
+    UARTDevice.device_info["ble_mac"] = adapter_address
     # Ensure Bluetooth is unblocked and powered on
     try:
         subprocess.run(['rfkill', 'unblock', 'bluetooth'], check=False, capture_output=True)

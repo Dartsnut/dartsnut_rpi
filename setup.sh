@@ -127,7 +127,7 @@ sudo apt-get install -y libgpiod-dev gpiod
 sudo python3 -m venv "${VENV_DIR}"
 
 sudo "${VENV_PIP}" install --upgrade pip
-sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirement.txt"
+sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
 
 echo "== Kernel / device configuration =="
 

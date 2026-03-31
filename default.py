@@ -9,11 +9,12 @@ import json
 import base64
 import time
 from io import BytesIO
+import os
 from pydartsnut import Dartsnut
 
 dartsnut = Dartsnut()
 
-qr_img = Image.open("qrcode.png")
+qr_img = Image.open(os.path.join("assets_media", "images", "qrcode.png"))
 
 dartsnut.update_frame_buffer(qr_img)
 

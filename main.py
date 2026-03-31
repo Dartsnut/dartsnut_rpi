@@ -1,19 +1,17 @@
 """
 Main entry point: display, device, context, state machine, and main loop.
 """
+
 import base64
 import io
 import json
 import os
-import signal
 import struct
 import subprocess
 import threading
 import time
 import glob
 import urllib.request
-from datetime import datetime, time as dt_time
-
 # Start the RGB matrix explicitly when the Python service starts.
 # We keep `dartsnut_matrix.service` from auto-starting at boot so the
 # splash can appear as early as possible, and then `Conflicts=` will
@@ -37,10 +35,11 @@ from pydartsnut import Dartsnut
 
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
-from python_websocket.device_operations import _parse_hhmm, forget_wifi
+from python_websocket.remote_bluetooth_sync import RemoteBluetoothScanController
+from python_websocket.file_operations import cancel_game_download
 
 import assets
-from app_context import AppContext
+from domain.app_context import AppContext
 from states import MenuState, WidgetState, GameSelectState, InGameState, SettingsState
 from widget_lifecycle import (
     init_pages,
@@ -48,22 +47,39 @@ from widget_lifecycle import (
     check_widget_ready,
 )
 from game_lifecycle import (
-    load_game_list,
+    load_menu_game_list,
     start_game_process,
     term_game_process,
+    ensure_game_downloaded,
+    local_game_version_matches,
 )
+import runtime.machine_api as machine_api
+from machine_state_service import (
+    init_machine_state_service,
+    get_machine_state_service,
+)
+from runtime.remote_device_config import (
+    RemoteConfigRuntimeState,
+    RemoteDeviceConfigApplier,
+    RemoteDeviceConfigDependencies,
+)
+from runtime.remote_sync_port import (
+    create_default_remote_sync,
+    get_remote_sync,
+    set_remote_sync,
+)
+from runtime.reset_workflow import request_confirm_and_forget_wifi
+from runtime.display_loop import DimWindowRuntime, run_main_loop
+from runtime.bootstrap import start_background_subsystems
+from runtime.websocket_service_registry import build_default_websocket_registry
 
 # -----------------------------------------------------------------------------
 # Display and device (used by context and dim logic)
 # -----------------------------------------------------------------------------
 dartsnut = Dartsnut()
 
-# Dim window state (used in main loop)
-_currently_in_dim_window = False
-_brightness_before_dim = None
-_last_dim_check_time = 0
-_dim_force_normal_brightness = False
-_dim_force_normal_start_time = None
+# Dim window state (shared with set_brightness and display loop)
+dim_rt = DimWindowRuntime()
 
 # Smooth brightness transition (1 second to target)
 _brightness_transition_start_time = None
@@ -72,6 +88,24 @@ _brightness_transition_target = None
 _brightness_last_set = None
 
 BRIGHTNESS_TRANSITION_DURATION = 1.0
+
+# Remote config/game startup coordination (see RemoteConfigRuntimeState).
+_remote_config_runtime = RemoteConfigRuntimeState()
+_network_state_refresh_event = threading.Event()
+_reset_in_progress = False
+_reset_lock = threading.Lock()
+_reset_remote_confirm_event = threading.Event()
+_RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
+
+set_remote_sync(create_default_remote_sync())
+
+_remote_bluetooth_scan_controller = RemoteBluetoothScanController(
+    scan_builder=machine_api.build_remote_bluetooth_list,
+    timestamp_factory=machine_api.current_utc_iso_timestamp,
+    publish_update=lambda p: get_remote_sync().publish_partial_state(p),
+    connect_device=machine_api.connect_device_for_remote,
+)
+_websocket_service_registry = build_default_websocket_registry()
 
 
 def _get_current_brightness_for_transition():
@@ -88,8 +122,14 @@ def _start_brightness_transition(target):
     """Start or replace a 1-second smooth transition to target brightness (0-100)."""
     global _brightness_transition_start_time, _brightness_transition_start_value, _brightness_transition_target
     now = time.time()
-    if _brightness_transition_start_time is not None and _brightness_transition_target is not None:
-        t = min(1.0, (now - _brightness_transition_start_time) / BRIGHTNESS_TRANSITION_DURATION)
+    if (
+        _brightness_transition_start_time is not None
+        and _brightness_transition_target is not None
+    ):
+        t = min(
+            1.0,
+            (now - _brightness_transition_start_time) / BRIGHTNESS_TRANSITION_DURATION,
+        )
         start_val = round(
             _brightness_transition_start_value
             + (_brightness_transition_target - _brightness_transition_start_value) * t
@@ -130,7 +170,10 @@ def get_device_info():
     file_path = os.path.join(os.getcwd(), "device.json")
     try:
         current_mtime = os.path.getmtime(file_path)
-        if current_mtime != get_device_info._last_mtime or get_device_info._cached_device_info is None:
+        if (
+            current_mtime != get_device_info._last_mtime
+            or get_device_info._cached_device_info is None
+        ):
             with open(file_path, "r") as file:
                 get_device_info._cached_device_info = json.load(file)
             get_device_info._last_mtime = current_mtime
@@ -146,60 +189,86 @@ def _set_brightness_hardware(brightness):
 
 
 def set_brightness(brightness):
-    global _brightness_before_dim
-    if _currently_in_dim_window:
+    """
+    Public brightness setter used by the rest of the app and websocket layer.
+    Delegates persistence to MachineStateService while preserving dim-window
+    behavior and smooth transitions.
+    """
+    service = get_machine_state_service()
+
+    if dim_rt.currently_in_dim_window:
+        # When in dim window, only update stored brightness and remote sync; keep hardware dimmed.
         try:
-            device_info = get_device_info()
-            device_info["brightness"] = str(brightness)
-            with open("./device.json", "w") as file:
-                json.dump(device_info, file)
-            _brightness_before_dim = brightness
+            if service is not None:
+                service.set_brightness(brightness)
+            dim_rt.brightness_before_dim = brightness
+            v = int(brightness)
+            get_remote_sync().publish_partial_state({"brightness": v})
         except Exception as e:
-            print(f"Error updating device info: {e}")
+            print(f"Error updating device brightness while dimmed: {e}")
         return
-    _set_brightness_hardware(brightness)
+
+    # Outside dim window: apply immediately and persist via service.
     try:
-        device_info = get_device_info()
-        device_info["brightness"] = str(brightness)
-        with open("./device.json", "w") as file:
-            json.dump(device_info, file)
+        if service is not None:
+            service.set_brightness(brightness)
+        else:
+            _set_brightness_hardware(int(brightness))
+        v = int(brightness)
+        get_remote_sync().publish_partial_state({"brightness": v})
     except Exception as e:
-        print(f"Error updating device info: {e}")
+        print(f"Error updating brightness: {e}")
 
 
 def set_volume(volume):
+    """
+    Public volume setter used by the rest of the app and websocket layer.
+    Delegates to MachineStateService for hardware + JSON, then notifies remote sync.
+    """
+    service = get_machine_state_service()
     try:
-        if volume == 0:
-            subprocess.run(
-                ["amixer", "-c", "0", "sset", "PCM", "mute"],
-                check=True,
-                capture_output=True,
-            )
+        if service is not None:
+            service.set_volume(volume)
         else:
-            mapped_volume = int(50 + (volume / 100) * 50)
-            subprocess.run(
-                ["amixer", "-c", "0", "sset", "PCM", "unmute"],
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                ["amixer", "-c", "0", "sset", "PCM", f"{mapped_volume}%"],
-                check=True,
-                capture_output=True,
-            )
-        device_info = get_device_info()
-        device_info["volume"] = str(volume)
-        with open("./device.json", "w") as file:
-            json.dump(device_info, file)
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to set volume: {e.stderr.decode().strip()}")
+            # Fallback to previous behavior if service is not initialized.
+            if volume == 0:
+                subprocess.run(
+                    ["amixer", "-c", "0", "sset", "PCM", "mute"],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                mapped_volume = int(50 + (volume / 100) * 50)
+                subprocess.run(
+                    ["amixer", "-c", "0", "sset", "PCM", "unmute"],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["amixer", "-c", "0", "sset", "PCM", f"{mapped_volume}%"],
+                    check=True,
+                    capture_output=True,
+                )
+        get_remote_sync().publish_partial_state({"volume": int(volume)})
     except Exception as e:
-        print(f"Error updating device info: {e}")
+        print(f"Error updating volume: {e}")
 
 
 def set_time_zone(time_zone):
+    tz = str(time_zone or "").strip()
+    if not tz:
+        return None
     try:
-        subprocess.run(["sudo", "timedatectl", "set-timezone", time_zone], check=True)
+        current_tz_result = subprocess.run(
+            ["timedatectl", "show", "--property=Timezone", "--value"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        current_tz = (current_tz_result.stdout or "").strip()
+        if current_tz == tz:
+            return None
+        subprocess.run(["sudo", "timedatectl", "set-timezone", tz], check=True)
     except subprocess.CalledProcessError as e:
         print(f"Failed to set time zone: {e}")
     return None
@@ -216,13 +285,100 @@ ctx = AppContext(
     set_volume=set_volume,
     set_brightness_hardware=_set_brightness_hardware,
 )
-ctx.load_game_list = load_game_list
+ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
-ctx.reset_device = lambda: forget_wifi()
+ctx.set_game_status = lambda gid, st: get_remote_sync().request_set_game_status(gid, st)
 
 _app_ctx = ctx
+
+
+def _is_reset_in_progress() -> bool:
+    with _reset_lock:
+        return _reset_in_progress
+
+
+def _set_reset_in_progress(value: bool) -> None:
+    global _reset_in_progress
+    with _reset_lock:
+        _reset_in_progress = bool(value)
+
+
+def _run_device_reset_sequence() -> None:
+    service = get_machine_state_service()
+    if service is None:
+        print("Reset aborted: MachineStateService is not initialized")
+        return
+    if _is_reset_in_progress():
+        return
+    _set_reset_in_progress(True)
+    _network_state_refresh_event.clear()
+    try:
+        request_confirm_and_forget_wifi(
+            request_device_reset_state=get_remote_sync().request_device_reset_state,
+            confirm_event=_reset_remote_confirm_event,
+            confirm_timeout_seconds=_RESET_CONFIRM_TIMEOUT_SECONDS,
+            forget_wifi=machine_api.forget_wifi,
+        )
+        try:
+            term_widget_processes(ctx.pages)
+        except Exception as e:
+            print(f"Error terminating widget processes during reset: {e}")
+        try:
+            if ctx.game:
+                term_game_process(ctx.game)
+                ctx.game = None
+        except Exception as e:
+            print(f"Error terminating game process during reset: {e}")
+        try:
+            machine_api.reset_user_data_file()
+        except Exception as e:
+            print(f"Error resetting user data during device reset: {e}")
+        service.clear_apps_directory_contents()
+        service.reset_device_to_factory_fields()
+    except Exception as e:
+        print(f"Error during device reset sequence: {e}")
+    finally:
+        _set_reset_in_progress(False)
+
+
+def _start_device_reset() -> None:
+    if _is_reset_in_progress():
+        return
+    threading.Thread(target=_run_device_reset_sequence, daemon=True).start()
+
+
+ctx.reset_device = _start_device_reset
+
+
+_remote_config_applier = RemoteDeviceConfigApplier(
+    RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=get_machine_state_service,
+        bluetooth_scan_controller=_remote_bluetooth_scan_controller,
+        publish_partial_state=lambda p: get_remote_sync().publish_partial_state(p),
+        request_set_game_status=lambda gid, s: get_remote_sync().request_set_game_status(
+            gid, s
+        ),
+        request_set_all_games_ready=lambda: get_remote_sync().request_set_all_games_ready(),
+        set_time_zone=set_time_zone,
+        term_game_process=term_game_process,
+        ensure_game_downloaded=ensure_game_downloaded,
+        cancel_game_download=cancel_game_download,
+        local_game_version_matches=local_game_version_matches,
+        perform_update=machine_api.perform_update,
+        get_version=machine_api.get_version,
+        is_reset_in_progress=_is_reset_in_progress,
+        on_reset_confirmed=_reset_remote_confirm_event.set,
+    ),
+    _remote_config_runtime,
+)
+
+
+def _apply_remote_config(config: dict) -> None:
+    """Apply remote configuration; implementation in remote_device_config."""
+    _remote_config_applier.apply(config)
 
 
 def locate_device():
@@ -245,16 +401,22 @@ def get_widgets_framebuffer():
         main_img = img.crop((0, 0, 128, 128))
         main_img_buffer = io.BytesIO()
         main_img.save(main_img_buffer, format="JPEG")
-        main_img_base64_str = "data:image/png;base64," + base64.b64encode(main_img_buffer.getvalue()).decode("utf-8")
+        main_img_base64_str = "data:image/png;base64," + base64.b64encode(
+            main_img_buffer.getvalue()
+        ).decode("utf-8")
         second_img = img.crop((0, 128, 64, 160))
         second_img_buffer = io.BytesIO()
         second_img.save(second_img_buffer, format="JPEG")
-        second_img_base64_str = "data:image/png;base64," + base64.b64encode(second_img_buffer.getvalue()).decode("utf-8")
-        framebuffers.append({
-            "uuid": page["uuid"],
-            "main_screen": main_img_base64_str,
-            "sec_screen": second_img_base64_str,
-        })
+        second_img_base64_str = "data:image/png;base64," + base64.b64encode(
+            second_img_buffer.getvalue()
+        ).decode("utf-8")
+        framebuffers.append(
+            {
+                "uuid": page["uuid"],
+                "main_screen": main_img_base64_str,
+                "sec_screen": second_img_base64_str,
+            }
+        )
     return framebuffers
 
 
@@ -280,7 +442,11 @@ def _ensure_apps_conf_and_load_pages(context: AppContext) -> None:
                     "combination": "0",
                     "enabled": True,
                     "widgets": [
-                        {"id": "factory_tool", "position": [0, 0, 127, 159], "fields": {}}
+                        {
+                            "id": "factory_tool",
+                            "position": [0, 0, 127, 159],
+                            "fields": {},
+                        }
                     ],
                 }
             ],
@@ -288,7 +454,20 @@ def _ensure_apps_conf_and_load_pages(context: AppContext) -> None:
         with open("./apps/conf.json", "w") as f:
             json.dump(default_config, f)
     with open("./apps/conf.json", "r") as f:
-        context.pages = init_pages(json.load(f))
+        raw_conf = json.load(f)
+    # Defensive normalization: ensure each page has a widgets list so that
+    # downstream code (init_pages/start_page_process) never sees None here.
+    try:
+        pages_conf = raw_conf.get("pages") if isinstance(raw_conf, dict) else None
+        if isinstance(pages_conf, list):
+            for page in pages_conf:
+                if isinstance(page, dict):
+                    widgets = page.get("widgets")
+                    if not isinstance(widgets, list):
+                        page["widgets"] = []
+    except Exception:
+        pass
+    context.pages = init_pages(raw_conf)
 
 
 # -----------------------------------------------------------------------------
@@ -443,6 +622,9 @@ def check_connection_loop():
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
+            previous_wifi = getattr(_app_ctx, "wifi_connected", False)
+            previous_internet = getattr(_app_ctx, "internet_connected", False)
+
             _app_ctx.wifi_connected = wifi_check.returncode == 0
             if _app_ctx.wifi_connected:
                 # Prefer HTTP over ping: many networks block or rate-limit ICMP
@@ -456,6 +638,20 @@ def check_connection_loop():
                     _app_ctx.internet_connected = False
             else:
                 _app_ctx.internet_connected = False
+
+            if (
+                not previous_internet
+                and _app_ctx.wifi_connected
+                and _app_ctx.internet_connected
+            ):
+                try:
+                    di = get_device_info()
+                    get_remote_sync().restart_sync(
+                        di or {}, reload_config, _apply_remote_config
+                    )
+                    request_network_state_refresh()
+                except Exception as e:
+                    print(f"Error restarting remote sync after connectivity established: {e}")
         except Exception as e:
             print(f"Error checking connection: {e}")
             _app_ctx.wifi_connected = False
@@ -463,219 +659,125 @@ def check_connection_loop():
         time.sleep(10)
 
 
-# -----------------------------------------------------------------------------
-# Startup: loading screen, device, threads, init_widgets
-# -----------------------------------------------------------------------------
-dartsnut.update_frame_buffer(assets.create_loading_image())
-device_info = get_device_info()
-set_volume(int(device_info.get("volume", "50")))
+def network_state_remote_loop():
+    """
+    Poll current IP/SSID every 30s and only push changed values to remote sync.
+    Cache tracks successfully-published values so we resend after bridge restarts.
+    """
+    poll_interval_seconds = 30
+    last_published_ip = None
+    last_published_ssid = None
 
-ble_thread = threading.Thread(target=start_ble_server, args=(locate_device,), daemon=True)
-ble_thread.start()
+    while True:
+        try:
+            if _network_state_refresh_event.is_set():
+                # Force next publish after startup/reconnect, even if values are unchanged.
+                last_published_ip = None
+                last_published_ssid = None
+                _network_state_refresh_event.clear()
+
+            if not _is_reset_in_progress() and get_remote_sync().is_connected():
+                updates = {}
+
+                normalized_ip = machine_api.normalize_ip(machine_api.get_ip_address())
+                payload_ip = normalized_ip or ""
+                should_publish_ip = payload_ip != last_published_ip
+                # Avoid writing a transient empty IP on startup/reconnect before
+                # DHCP/network is fully ready. Once we have published any value,
+                # normal change-detection behavior resumes.
+                if last_published_ip is None and payload_ip == "":
+                    should_publish_ip = False
+                if should_publish_ip:
+                    updates["ip_address"] = payload_ip
+
+                normalized_ssid = machine_api.normalize_ssid(machine_api.get_current_ssid())
+                payload_ssid = normalized_ssid or ""
+                if payload_ssid != last_published_ssid:
+                    updates["ssid"] = payload_ssid
+
+                if updates:
+                    get_remote_sync().publish_partial_state(updates)
+                    if "ip_address" in updates:
+                        last_published_ip = payload_ip
+                    if "ssid" in updates:
+                        last_published_ssid = payload_ssid
+        except Exception as e:
+            print(f"Error in network sync poller: {e}")
+
+        _network_state_refresh_event.wait(poll_interval_seconds)
+
+
+def request_network_state_refresh():
+    """
+    Trigger an immediate poll cycle and force a republish of IP/SSID on next run.
+    """
+    _network_state_refresh_event.set()
+
+
+def _on_remote_connectivity_changed(connected: bool) -> None:
+    if connected and not _is_reset_in_progress():
+        request_network_state_refresh()
+
+
 def trigger_dim_check():
     _app_ctx.trigger_dim_check = True
 
-websocket_thread = threading.Thread(
-    target=start_websocket_server,
-    args=(
-        set_brightness,
-        locate_device,
-        reload_config,
-        set_time_zone,
-        get_widgets_framebuffer,
-        start_game_from_websocket,
-        set_volume,
-        trigger_dim_check,
-    ),
-    daemon=True,
+
+device_info = get_device_info() or {}
+start_background_subsystems(
+    dartsnut=dartsnut,
+    device_info=device_info,
+    get_version=machine_api.get_version,
+    set_volume=set_volume,
+    start_ble_server=start_ble_server,
+    locate_device=locate_device,
+    start_websocket_server=start_websocket_server,
+    set_brightness=set_brightness,
+    reload_config=reload_config,
+    set_time_zone=set_time_zone,
+    get_widgets_framebuffer=get_widgets_framebuffer,
+    start_game_from_websocket=start_game_from_websocket,
+    trigger_dim_check=trigger_dim_check,
+    check_connection_loop=check_connection_loop,
+    network_state_remote_loop=network_state_remote_loop,
+    apply_remote_config=_apply_remote_config,
+    on_remote_connectivity_changed=_on_remote_connectivity_changed,
+    request_network_state_refresh=request_network_state_refresh,
+    remote_config_runtime=_remote_config_runtime,
+    websocket_service_registry=_websocket_service_registry,
 )
-websocket_thread.start()
-connection_thread = threading.Thread(target=check_connection_loop, daemon=True)
-connection_thread.start()
 
 ctx.reload_conf = False
 ctx.start_game = False
 ctx.menu_select_index = 0
 ctx.setting_select_index = 3
+
+# Initialize machine state service and widgets after context is ready.
+init_machine_state_service(
+    ctx,
+    set_brightness_hardware=_set_brightness_hardware,
+    get_device_info=get_device_info,
+    reload_pages_from_conf=reload_pages_from_conf,
+)
 init_widgets(ctx)
 
 
-# -----------------------------------------------------------------------------
-# Main loop
-# -----------------------------------------------------------------------------
-while dartsnut.running:
-    try:
-        time.sleep(1 / 30)
-        assets.get_current_loading_frame()
-
-        _update_brightness_transition()
-
-        if ctx.trigger_dim_check:
-            ctx.trigger_dim_check = False
-            _last_dim_check_time = 0
-
-        # Dim window: 60s check
-        if (time.time() - _last_dim_check_time) >= 60 or _last_dim_check_time == 0:
-            _last_dim_check_time = time.time()
-            di = get_device_info()
-            enabled = str(di.get("dim_window_enabled", "false")).lower() == "true"
-            start_s = (di.get("dim_window_start") or "").strip()
-            end_s = (di.get("dim_window_end") or "").strip()
-            dim_lvl = int(di.get("dim_level", 10))
-            if not enabled or not start_s or not end_s:
-                if _currently_in_dim_window:
-                    restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                    _start_brightness_transition(restore)
-                    _currently_in_dim_window = False
-                    _dim_force_normal_brightness = False
-                    _dim_force_normal_start_time = None
-            else:
-                start_hm = _parse_hhmm(start_s)
-                end_hm = _parse_hhmm(end_s)
-                if start_hm is None or end_hm is None:
-                    if _currently_in_dim_window:
-                        restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                        _start_brightness_transition(restore)
-                        _currently_in_dim_window = False
-                        _dim_force_normal_brightness = False
-                        _dim_force_normal_start_time = None
-                else:
-                    now = datetime.now().time()
-                    start_t = dt_time(start_hm[0], start_hm[1])
-                    end_t = dt_time(end_hm[0], end_hm[1])
-                    in_window = (start_t <= end_t and start_t <= now <= end_t) or (
-                        start_t > end_t and (now >= start_t or now < end_t)
-                    )
-                    if in_window:
-                        if (ctx.current_state.name() != "in_game" 
-                            and ctx.current_state.name() != "game_select"
-                            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
-                            and not _dim_force_normal_brightness):
-                            if not _currently_in_dim_window:
-                                _brightness_before_dim = int(di.get("brightness", 50))
-                            _start_brightness_transition(dim_lvl)
-                            _currently_in_dim_window = True
-                    else:
-                        if _currently_in_dim_window:
-                            restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                            _start_brightness_transition(restore)
-                            _currently_in_dim_window = False
-                            _dim_force_normal_brightness = False
-                            _dim_force_normal_start_time = None
-
-        ctx.state_str = ctx.current_state.name()
-
-        if ctx.locate_device_intv:
-            dartsnut.update_frame_buffer(assets.identify_image)
-            ctx.locate_device_intv -= 1
-        elif ctx.reload_conf:
-            ctx.reload_conf = False
-            init_widgets(ctx)
-        elif getattr(ctx, "reload_pages", False):
-            ctx.reload_pages = False
-            reload_pages_from_conf(ctx)
-        elif ctx.start_game:
-            ctx.start_game = False
-            term_game_process(ctx.game)
-            ctx.game = start_game_process(ctx.game_id)
-            if ctx.game is not None:
-                term_widget_processes(ctx.pages)
-                ctx.transition_to(InGameState())
-        else:
-            ctx.current_state.update(ctx)
-
-        buttons = get_buttons_pressed(ctx)
-        ctx.current_button_state = dict(get_buttons_pressed.old_buttons)
-
-        # Dim window: btn_a force normal, btn_b remove force (menu/widget/settings only)
-        if (ctx.current_state.name() != "in_game" 
-            and ctx.current_state.name() != "game_select"
-            and not ctx.current_state.is_showing_exit_game_overlay(ctx)
-            and _currently_in_dim_window):
-            di = get_device_info()
-            dim_lvl = int(di.get("dim_level", 10))
-            # Remove force after dim_restore_seconds
-            if _dim_force_normal_brightness and _dim_force_normal_start_time is not None:
-                secs = max(5, min(300, int(di.get("dim_restore_seconds", 30))))
-                if time.time() - _dim_force_normal_start_time >= secs:
-                    _dim_force_normal_brightness = False
-                    _dim_force_normal_start_time = None
-                    _start_brightness_transition(dim_lvl)
-            if _dim_force_normal_brightness and buttons.get("btn_b"):
-                # Let B go to state when it has a meaning: menu exit overlay (end game), game_select (back to menu), or settings reset overlay (dismiss)
-                btn_b_handled_by_state = (
-                    ctx.current_state.is_showing_exit_game_overlay(ctx)
-                    or ctx.current_state.name() == "game_select"
-                    or ctx.current_state.consumes_btn_b_for_overlay(ctx)
-                )
-                if not btn_b_handled_by_state:
-                    _dim_force_normal_brightness = False
-                    _dim_force_normal_start_time = None
-                    _start_brightness_transition(dim_lvl)
-                    buttons["btn_b"] = False
-            elif not _dim_force_normal_brightness and buttons.get("btn_a"):
-                _dim_force_normal_brightness = True
-                _dim_force_normal_start_time = time.time()
-                restore = _brightness_before_dim if _brightness_before_dim is not None else int(di.get("brightness", 50))
-                _start_brightness_transition(restore)
-                buttons["btn_a"] = False
-
-        ctx.current_state.handle_input(ctx, buttons)
-
-        # Render widgets: update all page framebuffers from shared memory
-        if ctx.pages is not None and len(ctx.pages) > 0:
-            for page in ctx.pages:
-                page_img = Image.frombytes("RGB", (128, 160), bytes(page["framebuffer"]))
-                current_loading_frame_big = assets.get_current_loading_frame_big()
-                current_loading_frame = assets.get_current_loading_frame()
-                if current_loading_frame_big.mode != "RGB":
-                    current_loading_frame_big = current_loading_frame_big.convert("RGB")
-                if current_loading_frame.mode != "RGB":
-                    current_loading_frame = current_loading_frame.convert("RGB")
-                for widget in page["widgets"]:
-                    widget_data = widget.get("widget")
-                    if widget_data is None:
-                        continue
-                    widget_id = widget_data.get("id", "unknown")
-                    shm = widget.get("shm")
-                    x0, y0, x1, y1 = widget_data["position"]
-                    widget_width = x1 - x0 + 1
-                    widget_height = y1 - y0 + 1
-                    widget_frame = None
-                    if shm is not None:
-                        width = x1 - x0 + 1
-                        height = y1 - y0 + 1
-                        try:
-                            widget_frame = Image.frombytes(
-                                "RGB",
-                                (width, height),
-                                bytes(shm.buf[1 : 1 + width * height * 3]),
-                            )
-                            page_img.paste(widget_frame, (x0, y0))
-                            if shm.buf[0] == 0:
-                                shm.buf[0] = 1
-                        except Exception as e:
-                            print(f"Error reading widget frame for {widget_id}: {e}")
-                    widget_ready = False
-                    if widget_frame is not None:
-                        was_not_launched = not widget.get("launched", False)
-                        widget_ready = check_widget_ready(widget_frame)
-                        if widget_ready:
-                            widget["launched"] = True
-                            if widget_height == 160 and was_not_launched:
-                                small_widget_area = widget_frame.crop((0, 128, widget_width, 160))
-                                area_bytes = small_widget_area.tobytes()
-                                widget["has_small_widget"] = any(byte != 0 for byte in area_bytes)
-                    if not widget_ready:
-                        if widget_height == 160:
-                            page_img.paste(current_loading_frame_big, (x0, y0 + 32))
-                            has_small_widget = widget.get("has_small_widget", None)
-                            if has_small_widget is not False:
-                                page_img.paste(current_loading_frame, (x0, y0 + 128))
-                        elif widget_height == 128:
-                            page_img.paste(current_loading_frame_big, (x0, y0 + 32))
-                        elif widget_height == 32:
-                            page_img.paste(current_loading_frame, (x0, y0))
-                page["framebuffer"] = bytearray(page_img.tobytes())
-    except Exception as e:
-        print(f"Error in main loop: {e}")
+run_main_loop(
+    dim_rt=dim_rt,
+    dartsnut=dartsnut,
+    ctx=ctx,
+    assets=assets,
+    get_device_info=get_device_info,
+    parse_hhmm=machine_api.parse_hhmm,
+    update_brightness_transition=_update_brightness_transition,
+    start_brightness_transition=_start_brightness_transition,
+    init_widgets=init_widgets,
+    reload_pages_from_conf=reload_pages_from_conf,
+    term_game_process=term_game_process,
+    start_game_process=start_game_process,
+    term_widget_processes=term_widget_processes,
+    get_buttons_pressed=get_buttons_pressed,
+    check_widget_ready=check_widget_ready,
+    in_game_state_cls=InGameState,
+    get_remote_sync=get_remote_sync,
+)

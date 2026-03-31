@@ -1,6 +1,6 @@
 """Application context: display, assets, device, and all mutable app state."""
 # Optional type hint for current_state (avoids circular import at runtime)
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, FrozenSet
 
 if TYPE_CHECKING:
     from states.base import BaseState
@@ -48,6 +48,8 @@ class AppContext:
         self.reload_conf = False
         self.reload_pages = False
         self.game_preview_index = 0
+        # Remote-sync games with status "ready"; None until first games list applied
+        self.remote_menu_ready_game_ids: Optional[FrozenSet[str]] = None
 
         # Current state (object, not string)
         self.current_state: "BaseState" = None
@@ -64,6 +66,7 @@ class AppContext:
         self.start_game_process: Optional[Callable[[str], Any]] = None
         self.term_widget_processes: Optional[Callable[[Any], None]] = None
         self.reset_device: Optional[Callable[[], None]] = None
+        self.set_game_status: Optional[Callable[[str, str], None]] = None
 
     def transition_to(self, new_state: "BaseState") -> None:
         """Switch to a new state."""

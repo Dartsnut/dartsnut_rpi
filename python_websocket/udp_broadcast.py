@@ -3,9 +3,49 @@ import socket
 import time
 import json
 import os
+from typing import Optional
 from network_utils import get_wifi_ipv4
 
-def get_ip_address():
+
+def normalize_ip(ip: str) -> Optional[str]:
+    """
+    Normalize an IP string and classify invalid/local cases.
+
+    Current UI behavior treats missing/failed lookups as "0.0.0.0". To align
+    remote sync with that behavior, we consider the following invalid and return None:
+    - Empty/whitespace-only strings
+    - Literal "0.0.0.0"
+
+    All other values (including private/local addresses) are treated as valid;
+    they are returned unchanged so that the UI and remote sync stay consistent.
+    """
+    if ip is None:
+        return None
+    s = str(ip).strip()
+    if not s:
+        return None
+    if s == "0.0.0.0":
+        return None
+    return s
+
+
+def normalize_ssid(ssid: str) -> Optional[str]:
+    """
+    Normalize SSID string.
+
+    Treat empty/whitespace-only SSIDs as invalid (None). Any non-empty string is
+    considered valid and returned stripped. This matches the pattern used for
+    IPs where \"blank\" means \"do not populate the field\" in remote sync.
+    """
+    if ssid is None:
+        return None
+    s = str(ssid).strip()
+    if not s:
+        return None
+    return s
+
+
+def get_ip_address() -> str:
     return get_wifi_ipv4()
 
 def get_mac_address():
@@ -31,6 +71,30 @@ def get_device_info():
         return get_device_info._cached_device_info
     except Exception:
         return {}
+
+
+def get_current_ssid() -> str:
+    """
+    Read the current WiFi SSID from NetworkManager (nmcli).
+
+    Returns an empty string when not connected or on error.
+    """
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("yes:"):
+                # Format is 'yes:<ssid>'
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    return parts[1].strip()
+        return ""
+    except Exception:
+        return ""
 
 def get_ble_mac():
     if hasattr(get_ble_mac, "_cached_mac"):
@@ -89,7 +153,15 @@ def udp_broadcast():
 
             ip = get_ip_address()
             device_info = get_device_info()
-            message = json.dumps({"ip": ip, "mac": wlan_mac, "ble_mac": ble_mac, "device_info": device_info})
+
+            message = json.dumps(
+                {
+                    "ip": ip,
+                    "mac": wlan_mac,
+                    "ble_mac": ble_mac,
+                    "device_info": device_info,
+                }
+            )
             
             # Send to all broadcast addresses
             for addr in get_broadcast_addresses():

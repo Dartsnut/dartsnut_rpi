@@ -3,7 +3,7 @@ import os
 import time
 from PIL import Image, ImageDraw
 
-from app_context import AppContext
+from domain.app_context import AppContext
 from states.base import BaseState
 
 

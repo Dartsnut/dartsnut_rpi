@@ -1,5 +1,4 @@
 import subprocess
-import os
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -50,6 +49,8 @@ def check_update():
 
 
 def perform_update():
+    old_commit = None
+
     try:
         # Save current commit hash
         result = subprocess.run(
@@ -114,53 +115,12 @@ def perform_update():
                 cwd="/home/rpi/dartsnut_rpi",
                 check=True,
             )
-            # Extract error message
-            error_msg = "Update failed"
-            if e.stderr:
-                try:
-                    error_text = (
-                        e.stderr.decode("utf-8")
-                        if isinstance(e.stderr, bytes)
-                        else e.stderr
-                    )
-                    if error_text.strip():
-                        error_line = error_text.strip().split("\n")[0][:100]
-                        error_msg = f"Update failed: {error_line}"
-                except:
-                    pass
             return create_error_response(
                 "perform_update",
                 ErrorCode.GIT_UPDATE_FAILED,
                 "Unable to update the system. The system has been restored to the previous version",
             )
         except subprocess.CalledProcessError as rollback_error:
-            # Extract error message
-            error_msg = "Update failed"
-            if e.stderr:
-                try:
-                    error_text = (
-                        e.stderr.decode("utf-8")
-                        if isinstance(e.stderr, bytes)
-                        else e.stderr
-                    )
-                    if error_text.strip():
-                        error_line = error_text.strip().split("\n")[0][:100]
-                        error_msg = f"Update failed: {error_line}"
-                except:
-                    pass
-            rollback_msg = "Rollback failed"
-            if rollback_error.stderr:
-                try:
-                    rollback_text = (
-                        rollback_error.stderr.decode("utf-8")
-                        if isinstance(rollback_error.stderr, bytes)
-                        else rollback_error.stderr
-                    )
-                    if rollback_text.strip():
-                        rollback_line = rollback_text.strip().split("\n")[0][:100]
-                        rollback_msg = f"Rollback failed: {rollback_line}"
-                except:
-                    pass
             return create_error_response(
                 "perform_update",
                 ErrorCode.GIT_ROLLBACK_FAILED,
