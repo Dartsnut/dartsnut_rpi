@@ -3,6 +3,7 @@ from __future__ import annotations
 from states.game import InGameState
 
 
+# Local button-driven publish flow
 def test_button_start_game_publishes_playing_status(game_sim_harness):
     ctx = game_sim_harness["ctx"]
     state = game_sim_harness["select_state"]
@@ -44,6 +45,7 @@ def test_button_home_then_b_ends_game_and_publishes_ready(game_sim_harness):
     assert published[-1] == {"games": [{"id": "chess", "status": "ready"}]}
 
 
+# Inbound remote game command handling
 def test_inbound_playing_status_requests_local_launch(remote_config_harness):
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
@@ -94,6 +96,7 @@ def test_inbound_downloading_with_matching_local_version_publishes_ready(remote_
     assert events["ensure_download_calls"] == []
 
 
+# Startup gate behavior
 def test_startup_games_ready_retry_then_newer_playing_is_applied(remote_config_harness):
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]

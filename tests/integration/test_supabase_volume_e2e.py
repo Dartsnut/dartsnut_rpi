@@ -6,6 +6,7 @@ from runtime.websocket_ports import WebsocketEndpointConfig
 
 
 @pytest.mark.integration
+# Local volume action publish flow
 def test_volume_action_updates_local_and_publishes_remote(
     run_action, websocket_registry, fake_remote_sync
 ):
@@ -29,6 +30,7 @@ def test_volume_action_updates_local_and_publishes_remote(
 
 
 @pytest.mark.integration
+# Inbound remote config apply flow
 def test_external_change_from_supabase_updates_machine_volume(remote_config_harness):
     apply = remote_config_harness["apply"]
     machine_state = remote_config_harness["machine_state"]

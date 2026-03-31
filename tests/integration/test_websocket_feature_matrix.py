@@ -4,6 +4,7 @@ import pytest
 
 
 @pytest.mark.integration
+# Known action contract matrix (happy path)
 @pytest.mark.parametrize(
     "message, expected_action",
     [
@@ -60,6 +61,7 @@ def test_websocket_actions_feature_matrix(message, expected_action, run_action, 
 
 
 @pytest.mark.integration
+# Fire-and-forget action behavior
 def test_feature_matrix_non_response_actions_trigger_side_effects(
     run_action, websocket_registry, endpoint_config, endpoint_state
 ):
@@ -78,6 +80,7 @@ def test_feature_matrix_non_response_actions_trigger_side_effects(
 
 
 @pytest.mark.integration
+# Unknown action guard contract
 def test_feature_matrix_unknown_action_contract(run_action, websocket_registry, endpoint_config):
     result = run_action(
         message={"action": "unknown_action", "req_id": 200},

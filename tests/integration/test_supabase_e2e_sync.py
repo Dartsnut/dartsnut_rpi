@@ -3,6 +3,7 @@ from __future__ import annotations
 from runtime.websocket_ports import JsonOpsPort, WebsocketEndpointConfig, WebsocketServiceRegistry
 
 
+# WebSocket-driven local actions that publish remote state
 def test_device_action_updates_brightness_and_publishes_remote(
     run_action, websocket_registry, fake_remote_sync
 ):
@@ -74,32 +75,7 @@ def test_device_action_set_device_name_publishes_remote(run_action, websocket_re
     assert fake_remote_sync.published[-1] == {"device_info": {"name": "Kitchen"}}
 
 
-def test_external_change_from_supabase_inbound_config_updates_local_machine(remote_config_harness):
-    apply = remote_config_harness["apply"]
-    state = remote_config_harness["machine_state"]
-    events = remote_config_harness["events"]
-    apply(
-        {
-            "brightness": 81,
-            "volume": 66,
-            "dim_window": {
-                "dim_window_enabled": True,
-                "dim_window_start": "22:00",
-                "dim_window_end": "06:00",
-                "dim_level": 15,
-                "dim_restore_seconds": 30,
-            },
-            "device_info": {"name": "LivingRoom"},
-        }
-    )
-
-    assert events["reload_called"] is True
-    assert state.brightness == 81
-    assert state.volume == 66
-    assert state.device_name == "LivingRoom"
-    assert state.dim_window["dim_window_enabled"] is True
-
-
+# Reset-state payload contract
 def test_remote_reset_request_uses_expected_payload(fake_remote_sync):
     fake_remote_sync.request_device_reset_state()
     assert fake_remote_sync.published[-1] == {

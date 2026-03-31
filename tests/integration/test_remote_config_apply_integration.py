@@ -4,6 +4,7 @@ import pytest
 
 
 @pytest.mark.integration
+# Multi-field remote config application
 def test_remote_config_applies_multi_field_snapshot(remote_config_harness, app_ctx):
     app_ctx.reload_pages = False
     apply = remote_config_harness["apply"]
@@ -37,6 +38,36 @@ def test_remote_config_applies_multi_field_snapshot(remote_config_harness, app_c
 
 
 @pytest.mark.integration
+def test_external_change_from_supabase_inbound_config_updates_local_machine(
+    remote_config_harness,
+):
+    apply = remote_config_harness["apply"]
+    state = remote_config_harness["machine_state"]
+    events = remote_config_harness["events"]
+    apply(
+        {
+            "brightness": 81,
+            "volume": 66,
+            "dim_window": {
+                "dim_window_enabled": True,
+                "dim_window_start": "22:00",
+                "dim_window_end": "06:00",
+                "dim_level": 15,
+                "dim_restore_seconds": 30,
+            },
+            "device_info": {"name": "LivingRoom"},
+        }
+    )
+
+    assert events["reload_called"] is True
+    assert state.brightness == 81
+    assert state.volume == 66
+    assert state.device_name == "LivingRoom"
+    assert state.dim_window["dim_window_enabled"] is True
+
+
+@pytest.mark.integration
+# Game command and lifecycle application
 def test_remote_config_game_playing_sets_start_game(remote_config_harness, app_ctx):
     app_ctx.start_game = False
     app_ctx.game_id = None
@@ -129,6 +160,7 @@ def test_remote_config_game_removed_during_download_cancels_and_no_readd(remote_
 
 
 @pytest.mark.integration
+# Firmware update application
 def test_remote_config_firmware_update_publishes_completion_and_persists(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None

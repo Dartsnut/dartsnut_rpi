@@ -96,6 +96,7 @@ def local_bridge_runtime(monkeypatch):
     ssb.set_supabase_connectivity_callback(None)
 
 
+# Device-originated publish reaches Supabase row
 def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
     base_url = local_bridge_runtime["base_url"]
     api_key = local_bridge_runtime["api_key"]
@@ -125,6 +126,7 @@ def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
     _wait_until(_state_updated, desc="Supabase row brightness update")
 
 
+# Supabase-originated patch reaches Python callback
 def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_bridge_runtime):
     base_url = local_bridge_runtime["base_url"]
     api_key = local_bridge_runtime["api_key"]
