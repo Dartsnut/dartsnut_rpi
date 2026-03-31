@@ -25,10 +25,9 @@ def _normalize_device_id(value: Any) -> str:
 
 def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
     info = dict(device_info or {})
-    existing_id = _normalize_device_id(info.get("id") or info.get("device_id"))
+    existing_id = _normalize_device_id(info.get("id"))
     if existing_id:
         info["id"] = existing_id
-        info["device_id"] = existing_id
         return info
 
     resolved = _normalize_device_id(info.get("ble_mac") or info.get("mac_address"))
@@ -45,7 +44,6 @@ def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
         return info
 
     info["id"] = resolved
-    info["device_id"] = resolved
 
     try:
         path = os.path.join(os.getcwd(), "device.json")
@@ -54,7 +52,6 @@ def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
             with open(path, "r", encoding="utf-8") as f:
                 persisted = json.load(f) or {}
         persisted["id"] = resolved
-        persisted["device_id"] = resolved
         with open(path, "w", encoding="utf-8") as f:
             json.dump(persisted, f)
     except Exception:
