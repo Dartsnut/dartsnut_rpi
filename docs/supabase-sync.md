@@ -1,6 +1,6 @@
 # Supabase Sync Setup
 
-This branch uses Supabase for remote sync and disables Firestore runtime wiring.
+This branch uses Supabase for remote sync and disables legacy remote-sync runtime wiring.
 
 ## Local development
 

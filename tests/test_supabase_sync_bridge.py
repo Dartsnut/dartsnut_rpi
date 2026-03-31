@@ -1,7 +1,7 @@
 import supabase_sync_bridge as ssb
 
 
-def test_build_initial_state_includes_firestore_parity_fields(monkeypatch):
+def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
 
     state = ssb._build_initial_state(

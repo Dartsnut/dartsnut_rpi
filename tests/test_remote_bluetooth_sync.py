@@ -1,10 +1,10 @@
 import threading
 
 from python_websocket import bluetooth_operations
-from python_websocket.firestore_bluetooth_sync import FirestoreBluetoothScanController
+from python_websocket.remote_bluetooth_sync_controller import RemoteBluetoothScanController
 
 
-def test_build_firestore_bluetooth_list_maps_status(monkeypatch):
+def test_build_remote_bluetooth_list_maps_status(monkeypatch):
     monkeypatch.setattr(
         bluetooth_operations.bluetooth,
         "discover_devices",
@@ -19,7 +19,7 @@ def test_build_firestore_bluetooth_list_maps_status(monkeypatch):
         bluetooth_operations, "get_connection_status", lambda address: "connected" if address.endswith("01") else "disconnected"
     )
 
-    result = bluetooth_operations.build_firestore_bluetooth_list()
+    result = bluetooth_operations.build_remote_bluetooth_list()
 
     assert result == [
         {
@@ -35,10 +35,10 @@ def test_build_firestore_bluetooth_list_maps_status(monkeypatch):
     ]
 
 
-def test_firestore_scan_controller_publishes_scan_result_and_resets_flag():
+def test_remote_scan_controller_publishes_scan_result_and_resets_flag():
     published = []
 
-    controller = FirestoreBluetoothScanController(
+    controller = RemoteBluetoothScanController(
         scan_builder=lambda: [{"address": "AA", "name": "Pad", "status": "connected"}],
         timestamp_factory=lambda: "2026-03-23T12:34:56+00:00",
         publish_update=lambda payload: published.append(payload),
@@ -64,7 +64,7 @@ def test_firestore_scan_controller_publishes_scan_result_and_resets_flag():
     ]
 
 
-def test_firestore_scan_controller_ignores_reentrant_request_until_done():
+def test_remote_scan_controller_ignores_reentrant_request_until_done():
     published = []
     gate = threading.Event()
 
@@ -72,7 +72,7 @@ def test_firestore_scan_controller_ignores_reentrant_request_until_done():
         gate.wait(1)
         return [{"address": "AA", "name": "Pad", "status": "disconnected"}]
 
-    controller = FirestoreBluetoothScanController(
+    controller = RemoteBluetoothScanController(
         scan_builder=slow_scan,
         timestamp_factory=lambda: "2026-03-23T12:35:56+00:00",
         publish_update=lambda payload: published.append(payload),
@@ -92,10 +92,10 @@ def test_firestore_scan_controller_ignores_reentrant_request_until_done():
     assert published[0]["bluetooth"]["is_scan"] is False
 
 
-def test_firestore_scan_controller_handles_scan_failure_with_empty_list():
+def test_remote_scan_controller_handles_scan_failure_with_empty_list():
     published = []
 
-    controller = FirestoreBluetoothScanController(
+    controller = RemoteBluetoothScanController(
         scan_builder=lambda: (_ for _ in ()).throw(RuntimeError("scan failed")),
         timestamp_factory=lambda: "2026-03-23T12:36:56+00:00",
         publish_update=lambda payload: published.append(payload),
@@ -119,11 +119,11 @@ def test_firestore_scan_controller_handles_scan_failure_with_empty_list():
     ]
 
 
-def test_firestore_scan_controller_skips_unchanged_list_payload():
+def test_remote_scan_controller_skips_unchanged_list_payload():
     published = []
     scan_result = [{"address": "AA", "name": "Pad", "status": "connected"}]
 
-    controller = FirestoreBluetoothScanController(
+    controller = RemoteBluetoothScanController(
         scan_builder=lambda: scan_result,
         timestamp_factory=lambda: "2026-03-23T12:37:56+00:00",
         publish_update=lambda payload: published.append(payload),
@@ -153,10 +153,10 @@ def test_firestore_scan_controller_skips_unchanged_list_payload():
     assert published[1] == {"bluetooth": {"is_scan": False}}
 
 
-def test_firestore_connect_controller_success_sets_connected_and_clears_connect():
+def test_remote_connect_controller_success_sets_connected_and_clears_connect():
     published = []
 
-    controller = FirestoreBluetoothScanController(
+    controller = RemoteBluetoothScanController(
         scan_builder=lambda: [],
         timestamp_factory=lambda: "2026-03-23T12:40:56+00:00",
         publish_update=lambda payload: published.append(payload),
@@ -187,10 +187,10 @@ def test_firestore_connect_controller_success_sets_connected_and_clears_connect(
     ]
 
 
-def test_firestore_connect_controller_failure_sets_error_and_clears_connect():
+def test_remote_connect_controller_failure_sets_error_and_clears_connect():
     published = []
 
-    controller = FirestoreBluetoothScanController(
+    controller = RemoteBluetoothScanController(
         scan_builder=lambda: [],
         timestamp_factory=lambda: "2026-03-23T12:41:56+00:00",
         publish_update=lambda payload: published.append(payload),

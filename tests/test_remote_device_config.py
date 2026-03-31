@@ -1,4 +1,4 @@
-"""Characterization tests for Firestore-shaped remote config application."""
+"""Characterization tests for remote-shaped config application."""
 
 import json
 import os
@@ -9,7 +9,7 @@ from runtime.remote_device_config import (
     RemoteConfigRuntimeState,
     RemoteDeviceConfigApplier,
     RemoteDeviceConfigDependencies,
-    is_firestore_reset_confirmed,
+    is_remote_reset_confirmed,
     parse_iso_ts,
 )
 
@@ -20,8 +20,8 @@ def test_parse_iso_ts_accepts_z_suffix():
     assert dt.year == 2026 and dt.month == 3 and dt.day == 25
 
 
-def test_is_firestore_reset_confirmed_requires_empty_network_and_dim_disabled():
-    assert is_firestore_reset_confirmed(
+def test_is_remote_reset_confirmed_requires_empty_network_and_dim_disabled():
+    assert is_remote_reset_confirmed(
         {
             "ip_address": "",
             "ssid": "",
@@ -30,7 +30,7 @@ def test_is_firestore_reset_confirmed_requires_empty_network_and_dim_disabled():
             "dim_window": {"dim_window_enabled": False},
         }
     )
-    assert not is_firestore_reset_confirmed(
+    assert not is_remote_reset_confirmed(
         {
             "ip_address": "1.2.3.4",
             "ssid": "",

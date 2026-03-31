@@ -51,9 +51,9 @@ def get_connection_status(address):
     return "disconnected"
 
 
-def build_firestore_bluetooth_list():
+def build_remote_bluetooth_list():
     """
-    Build Firestore bluetooth.list payload entries:
+    Build remote bluetooth.list payload entries:
     {address, name, status}
     """
     devices = _discover_filtered_devices()
@@ -264,9 +264,9 @@ def pair_and_connect_device(address):
         )
 
 
-def connect_device_for_firestore(address):
+def connect_device_for_remote(address):
     """
-    Firestore-oriented connection helper.
+    Remote-oriented connection helper.
     Returns (success: bool, error_message: str).
     """
     if not address:

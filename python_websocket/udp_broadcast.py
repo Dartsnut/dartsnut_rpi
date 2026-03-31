@@ -12,12 +12,12 @@ def normalize_ip(ip: str) -> Optional[str]:
     Normalize an IP string and classify invalid/local cases.
 
     Current UI behavior treats missing/failed lookups as "0.0.0.0". To align
-    Firestore with that behavior, we consider the following invalid and return None:
+    remote sync with that behavior, we consider the following invalid and return None:
     - Empty/whitespace-only strings
     - Literal "0.0.0.0"
 
     All other values (including private/local addresses) are treated as valid;
-    they are returned unchanged so that the UI and Firestore stay consistent.
+    they are returned unchanged so that the UI and remote sync stay consistent.
     """
     if ip is None:
         return None
@@ -35,7 +35,7 @@ def normalize_ssid(ssid: str) -> Optional[str]:
 
     Treat empty/whitespace-only SSIDs as invalid (None). Any non-empty string is
     considered valid and returned stripped. This matches the pattern used for
-    IPs where \"blank\" means \"do not populate the field\" in Firestore.
+    IPs where \"blank\" means \"do not populate the field\" in remote sync.
     """
     if ssid is None:
         return None

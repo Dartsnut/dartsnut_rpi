@@ -191,11 +191,11 @@ def load_game_list() -> list:
 
 def load_menu_game_list(ctx) -> list:
     """
-    Games for the on-device picker: intersect with Firestore-ready ids when known,
+    Games for the on-device picker: intersect with remote-ready ids when known,
     else local entries marked ready; sort by playtime descending then name.
     """
     all_games = load_game_list()
-    ready_ids = getattr(ctx, "firestore_menu_ready_game_ids", None)
+    ready_ids = getattr(ctx, "remote_menu_ready_game_ids", None)
     if ready_ids is None:
         filtered = [
             c

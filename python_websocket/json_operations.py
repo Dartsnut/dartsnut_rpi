@@ -148,7 +148,7 @@ def get_device_info():
         connected = bool(get_remote_sync().is_connected())
         device_info["supabase_connected"] = connected
         # Backward compatibility for older clients.
-        device_info["firestore_connected"] = connected
+        device_info["remote_connected"] = connected
 
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:

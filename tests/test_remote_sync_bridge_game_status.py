@@ -1,4 +1,4 @@
-import firestore_sync_bridge
+import remote_sync_bridge as rsb
 
 
 def test_request_set_game_status_updates_existing_game(monkeypatch):
@@ -9,12 +9,12 @@ def test_request_set_game_status_updates_existing_game(monkeypatch):
         lambda: [{"id": "chess", "version": "1.0.0", "status": "ready"}],
     )
     monkeypatch.setattr(
-        firestore_sync_bridge,
-        "notify_device_state_update",
+        rsb._ssb,
+        "publish_device_state_update",
         lambda payload: sent.append(payload),
     )
 
-    firestore_sync_bridge.request_set_game_status("chess", "playing")
+    rsb.request_set_game_status("chess", "playing")
 
     assert sent == [
         {"games": [{"id": "chess", "version": "1.0.0", "status": "playing"}]}
@@ -26,12 +26,12 @@ def test_request_set_game_status_appends_missing_game(monkeypatch):
 
     monkeypatch.setattr("game_lifecycle.get_games_summary", lambda: [])
     monkeypatch.setattr(
-        firestore_sync_bridge,
-        "notify_device_state_update",
+        rsb._ssb,
+        "publish_device_state_update",
         lambda payload: sent.append(payload),
     )
 
-    firestore_sync_bridge.request_set_game_status("newgame", "downloading")
+    rsb.request_set_game_status("newgame", "downloading")
 
     assert sent == [
         {"games": [{"id": "newgame", "version": "", "status": "downloading"}]}

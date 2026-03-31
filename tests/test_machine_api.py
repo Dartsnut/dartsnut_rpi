@@ -59,14 +59,12 @@ def test_udp_wrappers_delegate(monkeypatch):
 
 def test_bluetooth_wrappers_delegate(monkeypatch):
     fake_mod = types.SimpleNamespace(
-        build_firestore_bluetooth_list=lambda: [{"address": "aa"}],
-        connect_device_for_firestore=lambda a: {"ok": a},
+        build_remote_bluetooth_list=lambda: [{"address": "aa"}],
+        connect_device_for_remote=lambda a: {"ok": a},
         current_utc_iso_timestamp=lambda: "2026-03-26T00:00:00+00:00",
     )
     monkeypatch.setitem(sys.modules, "python_websocket.bluetooth_operations", fake_mod)
 
-    assert machine_api.build_firestore_bluetooth_list() == [{"address": "aa"}]
-    assert machine_api.connect_device_for_firestore("AA:BB") == {"ok": "AA:BB"}
-    assert machine_api.current_utc_iso_timestamp() == "2026-03-26T00:00:00+00:00"
     assert machine_api.build_remote_bluetooth_list() == [{"address": "aa"}]
     assert machine_api.connect_device_for_remote("AA:BB") == {"ok": "AA:BB"}
+    assert machine_api.current_utc_iso_timestamp() == "2026-03-26T00:00:00+00:00"

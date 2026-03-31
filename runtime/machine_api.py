@@ -1,7 +1,7 @@
 """
 Local machine I/O facade for the presentation layer and composition root.
 
-Keeps `states/*` from importing python_websocket or firestore modules directly.
+Keeps `states/*` from importing python_websocket or remote-sync modules directly.
 Game downloads and app files remain in `game_lifecycle` / `widget_lifecycle` for now;
 call those modules from here when adding new presentation-layer entry points.
 """
@@ -47,24 +47,16 @@ def perform_update():
     return gitops.perform_update()
 
 
-def build_firestore_bluetooth_list():
-    btops = importlib.import_module("python_websocket.bluetooth_operations")
-
-    return btops.build_firestore_bluetooth_list()
-
-
 def build_remote_bluetooth_list():
-    return build_firestore_bluetooth_list()
-
-
-def connect_device_for_firestore(address: str):
     btops = importlib.import_module("python_websocket.bluetooth_operations")
 
-    return btops.connect_device_for_firestore(address)
+    return btops.build_remote_bluetooth_list()
 
 
 def connect_device_for_remote(address: str):
-    return connect_device_for_firestore(address)
+    btops = importlib.import_module("python_websocket.bluetooth_operations")
+
+    return btops.connect_device_for_remote(address)
 
 
 def current_utc_iso_timestamp() -> str:

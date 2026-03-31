@@ -2,7 +2,7 @@ import threading
 import json
 
 
-class FirestoreBluetoothScanController:
+class RemoteBluetoothScanController:
     def __init__(self, scan_builder, timestamp_factory, publish_update, connect_device):
         self._scan_builder = scan_builder
         self._timestamp_factory = timestamp_factory

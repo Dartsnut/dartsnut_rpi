@@ -1,10 +1,10 @@
-"""Helpers for reconciling incoming Firestore game status commands."""
+"""Helpers for reconciling incoming remote game status commands."""
 
 from typing import Callable, Optional
 
 
-def are_firestore_playing_games_cleared(games_cfg) -> bool:
-    """True when there are no Firestore game entries currently marked playing."""
+def are_remote_playing_games_cleared(games_cfg) -> bool:
+    """True when there are no remote game entries currently marked playing."""
     if not isinstance(games_cfg, list):
         return False
     for g in games_cfg:
@@ -28,7 +28,7 @@ def handle_incoming_game_status(
     request_launch: Callable[[str], None],
     terminate_running_game: Callable[[str], None],
 ) -> None:
-    """Apply one incoming game status command from Firestore."""
+    """Apply one incoming game status command from remote sync."""
     if not game_id:
         return
 

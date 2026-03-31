@@ -13,8 +13,8 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from domain.app_context import AppContext
-from domain.game_firestore_sync import (
-    are_firestore_playing_games_cleared,
+from domain.game_remote_sync import (
+    are_remote_playing_games_cleared,
     handle_incoming_game_status,
 )
 
@@ -50,11 +50,6 @@ def is_remote_reset_confirmed(config: dict) -> bool:
     if not isinstance(dim_window, dict):
         return False
     return bool(dim_window.get("dim_window_enabled")) is False
-
-
-def is_firestore_reset_confirmed(config: dict) -> bool:
-    """Backward-compatible alias for old test and call sites."""
-    return is_remote_reset_confirmed(config)
 
 
 @dataclass
@@ -115,7 +110,7 @@ class RemoteDeviceConfigApplier:
 
         games_cfg = config.get("games")
         if isinstance(games_cfg, list):
-            ctx.firestore_menu_ready_game_ids = frozenset(
+            ctx.remote_menu_ready_game_ids = frozenset(
                 str(g["id"])
                 for g in games_cfg
                 if isinstance(g, dict)
@@ -202,7 +197,7 @@ class RemoteDeviceConfigApplier:
                 )
                 confirmed_in_this_call = False
                 if rt.awaiting_games_ready_confirmation:
-                    if are_firestore_playing_games_cleared(games_cfg):
+                    if are_remote_playing_games_cleared(games_cfg):
                         rt.awaiting_games_ready_confirmation = False
                         rt.startup_games_ready_confirmed_at = cfg_ts
                         rt.startup_filter_playing_until_newer_update = True
@@ -354,7 +349,7 @@ class RemoteDeviceConfigApplier:
                 try:
                     deps.publish_partial_state(payload)
                 except Exception as e:
-                    print(f"Error notifying Firestore of firmware update completion: {e}")
+                    print(f"Error notifying remote sync of firmware update completion: {e}")
 
                 try:
                     service.set_firmware_info(new_version, False)

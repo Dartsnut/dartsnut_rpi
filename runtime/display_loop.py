@@ -146,7 +146,7 @@ def run_main_loop(
                             ctx.game_id, "playing"
                         )
                     except Exception as e:
-                        print(f"Error updating Firestore game status to playing: {e}")
+                        print(f"Error updating remote game status to playing: {e}")
             else:
                 ctx.current_state.update(ctx)
 

@@ -2,7 +2,7 @@ import game_lifecycle as gl
 
 
 class _Ctx:
-    firestore_menu_ready_game_ids = None
+    remote_menu_ready_game_ids = None
 
 
 def test_load_menu_game_list_none_cache_filters_local_ready(monkeypatch):
@@ -17,7 +17,7 @@ def test_load_menu_game_list_none_cache_filters_local_ready(monkeypatch):
         lambda: {"game_playtimes": {"a": 10, "b": 5}},
     )
     ctx = _Ctx()
-    ctx.firestore_menu_ready_game_ids = None
+    ctx.remote_menu_ready_game_ids = None
     result = gl.load_menu_game_list(ctx)
     assert [c["id"] for c in result] == ["a"]
 
@@ -30,11 +30,11 @@ def test_load_menu_game_list_empty_frozenset(monkeypatch):
     )
     monkeypatch.setattr(gl, "_load_user_data", lambda: {"game_playtimes": {}})
     ctx = _Ctx()
-    ctx.firestore_menu_ready_game_ids = frozenset()
+    ctx.remote_menu_ready_game_ids = frozenset()
     assert gl.load_menu_game_list(ctx) == []
 
 
-def test_load_menu_game_list_firestore_ready_only_and_sort(monkeypatch):
+def test_load_menu_game_list_remote_ready_only_and_sort(monkeypatch):
     games = [
         {"id": "a", "name": "Zebra", "status": "ready"},
         {"id": "b", "name": "Apple", "status": "ready"},
@@ -47,7 +47,7 @@ def test_load_menu_game_list_firestore_ready_only_and_sort(monkeypatch):
         lambda: {"game_playtimes": {"a": 100, "b": 100, "c": 50}},
     )
     ctx = _Ctx()
-    ctx.firestore_menu_ready_game_ids = frozenset({"a", "b"})
+    ctx.remote_menu_ready_game_ids = frozenset({"a", "b"})
     result = gl.load_menu_game_list(ctx)
-    # a and b tie at 100; sort by name: Apple before Zebra; c excluded (not in Firestore ready set)
+    # a and b tie at 100; sort by name: Apple before Zebra; c excluded (not in remote ready set)
     assert [c["id"] for c in result] == ["b", "a"]

@@ -1,16 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "firebase-basics": {
-      "source": "firebase/agent-skills",
-      "sourceType": "github",
-      "computedHash": "75d1c711575183510c31047ffc2608f8c3cb31ce4af63bcbf32e44b998eb62b3"
-    },
-    "firebase-firestore-basics": {
-      "source": "firebase/agent-skills",
-      "sourceType": "github",
-      "computedHash": "e7e21f72b693e8eba6797e0799e1f9d96ec9f73669cb741a7ca2e541fa460b55"
-    },
     "supabase-postgres-best-practices": {
       "source": "supabase/agent-skills",
       "sourceType": "github",

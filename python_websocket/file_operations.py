@@ -180,7 +180,7 @@ def receive_file(websocket, data):
             file.write(file_data)
 
         # If we just wrote the root apps/conf.json, let MachineStateService own pages
-        # and ensure timestamp + Firestore sync happen through the service.
+        # and ensure timestamp + remote sync happen through the service.
         try:
             svc = get_machine_state_service()
             if (

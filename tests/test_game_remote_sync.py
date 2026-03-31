@@ -1,9 +1,9 @@
-from domain.game_firestore_sync import handle_incoming_game_status, are_firestore_playing_games_cleared
+from domain.game_remote_sync import handle_incoming_game_status, are_remote_playing_games_cleared
 from states.game import InGameState
 
 
-def test_are_firestore_playing_games_cleared_ignores_downloading_entries():
-    assert are_firestore_playing_games_cleared(
+def test_are_remote_playing_games_cleared_ignores_downloading_entries():
+    assert are_remote_playing_games_cleared(
         [
             {"id": "chess", "status": "downloading"},
             {"id": "pong", "status": "ready"},
@@ -11,8 +11,8 @@ def test_are_firestore_playing_games_cleared_ignores_downloading_entries():
     )
 
 
-def test_are_firestore_playing_games_cleared_false_when_any_playing():
-    assert not are_firestore_playing_games_cleared(
+def test_are_remote_playing_games_cleared_false_when_any_playing():
+    assert not are_remote_playing_games_cleared(
         [
             {"id": "chess", "status": "ready"},
             {"id": "pong", "status": "playing"},

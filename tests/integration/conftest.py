@@ -25,6 +25,7 @@ from runtime.websocket_ports import (
     WebsocketEndpointConfig,
     WebsocketServiceRegistry,
 )
+from states.game import GameSelectState, InGameState
 
 
 @dataclass
@@ -323,4 +324,83 @@ def remote_config_harness(
         applier.apply(config)
         events["reload_called"] = True
 
-    return {"apply": apply, "events": events, "runtime": runtime, "machine_state": machine_state}
+    return {
+        "apply": apply,
+        "events": events,
+        "deps": deps,
+        "runtime": runtime,
+        "machine_state": machine_state,
+        "app_ctx": app_ctx,
+    }
+
+
+@dataclass
+class FakeGameProcess:
+    running: bool = True
+    signals: list[Any] = field(default_factory=list)
+
+    def poll(self):
+        return None if self.running else 1
+
+    def send_signal(self, sig: Any) -> None:
+        self.signals.append(sig)
+
+
+class FakeDisplay:
+    def __init__(self) -> None:
+        self.frames: list[Any] = []
+
+    def update_frame_buffer(self, frame: Any) -> None:
+        self.frames.append(frame)
+
+
+class FakeAssets:
+    def __init__(self) -> None:
+        self.qrcode_image = object()
+        self.game_select_image = object()
+        self.font24 = None
+
+
+@pytest.fixture()
+def game_sim_harness(fake_remote_sync):
+    transitions: list[str] = []
+    widget_terminated: list[bool] = []
+    game_terminated: list[str] = []
+    process = FakeGameProcess()
+    ctx = AppContext(
+        display=FakeDisplay(),
+        assets=FakeAssets(),
+        get_device_info=lambda: {"model": "PixelDart"},
+        set_brightness=lambda _v: None,
+        set_volume=lambda _v: None,
+    )
+    ctx.page_tick = 0.0
+    ctx.pages = [{"uuid": "p1"}]
+    ctx.current_button_state = {}
+    ctx.game_list = [{"id": "chess", "preview": [bytearray(128 * 128 * 3)]}]
+    ctx.game_index = 0
+    ctx.game_preview_index = 0
+    ctx.term_widget_processes = lambda _pages: widget_terminated.append(True)
+    ctx.term_game_process = lambda game: game_terminated.append(str(game.get("game_id", "")))
+    ctx.start_game_process = (
+        lambda gid: {
+            "process": process,
+            "shm": None,
+            "game_id": gid,
+            "launched": False,
+            "pico8_first_frame_seen": False,
+        }
+    )
+    ctx.set_game_status = fake_remote_sync.request_set_game_status
+    ctx.transition_to = lambda state: transitions.append(state.name())
+
+    return {
+        "ctx": ctx,
+        "process": process,
+        "transitions": transitions,
+        "widget_terminated": widget_terminated,
+        "game_terminated": game_terminated,
+        "select_state": GameSelectState(),
+        "in_game_state": InGameState(),
+        "remote_sync": fake_remote_sync,
+    }

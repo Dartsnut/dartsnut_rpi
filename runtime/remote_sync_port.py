@@ -23,7 +23,7 @@ except ImportError:
 
 
 class RemoteSyncPort(Protocol):
-    """Outbound device state + inbound config registration (Firestore bridge today)."""
+    """Outbound device state + inbound config registration for remote sync."""
 
     def publish_partial_state(self, payload: Dict[str, Any]) -> None: ...
 

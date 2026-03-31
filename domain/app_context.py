@@ -48,8 +48,8 @@ class AppContext:
         self.reload_conf = False
         self.reload_pages = False
         self.game_preview_index = 0
-        # Firestore games with status "ready"; None until first games list applied
-        self.firestore_menu_ready_game_ids: Optional[FrozenSet[str]] = None
+        # Remote-sync games with status "ready"; None until first games list applied
+        self.remote_menu_ready_game_ids: Optional[FrozenSet[str]] = None
 
         # Current state (object, not string)
         self.current_state: "BaseState" = None
