@@ -1,3 +1,4 @@
+import os
 import subprocess
 from python_websocket.error_handler import (
     ErrorCode,
@@ -6,7 +7,8 @@ from python_websocket.error_handler import (
     create_error_response,
 )
 
-GIT_REPO_CWD = "/home/rpi/dartsnut_rpi"
+# Repo root = parent of python_websocket/ so git matches this install, not a hardcoded path.
+GIT_REPO_CWD = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
 
 def _get_current_branch():
