@@ -21,28 +21,33 @@ def _get_current_branch():
     )
     branch = result.stdout.strip()
     if branch == "HEAD":
-        # Best-effort recovery for detached HEAD:
-        # 1) Prefer the remote default branch (origin/HEAD) when it contains HEAD.
-        # 2) Otherwise, use a single unambiguous origin/* branch that contains HEAD.
-        try:
-            origin_head = subprocess.run(
-                ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-                cwd=GIT_REPO_CWD,
-                check=True,
-                stdout=subprocess.PIPE,
-                text=True,
-            ).stdout.strip()
-            if origin_head.startswith("origin/"):
-                subprocess.run(
-                    ["git", "merge-base", "--is-ancestor", "HEAD", origin_head],
-                    cwd=GIT_REPO_CWD,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return origin_head.split("/", 1)[1]
-        except subprocess.CalledProcessError:
-            pass
+        # Detached HEAD recovery:
+        # 1) If exactly one origin/* ref points at HEAD, use it.
+        # 2) Else if exactly one origin/* ref contains HEAD, use it.
+        # 3) Else fail as ambiguous instead of guessing.
+        points_at = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "--points-at",
+                "HEAD",
+                "refs/remotes/origin",
+            ],
+            cwd=GIT_REPO_CWD,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        point_candidates = []
+        for line in points_at.stdout.splitlines():
+            remote = line.strip()
+            if not remote.startswith("origin/") or remote == "origin/HEAD":
+                continue
+            point_candidates.append(remote.split("/", 1)[1])
+        unique_points = sorted(set(point_candidates))
+        if len(unique_points) == 1:
+            return unique_points[0]
 
         contains = subprocess.run(
             ["git", "branch", "-r", "--contains", "HEAD"],

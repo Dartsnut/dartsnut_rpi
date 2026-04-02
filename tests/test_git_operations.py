@@ -19,10 +19,15 @@ def test_get_current_branch_uses_origin_head_when_detached(monkeypatch):
         calls.append(cmd)
         if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
             return _cp("HEAD\n")
-        if cmd == ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]:
+        if cmd == [
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "--points-at",
+            "HEAD",
+            "refs/remotes/origin",
+        ]:
             return _cp("origin/master\n")
-        if cmd == ["git", "merge-base", "--is-ancestor", "HEAD", "origin/master"]:
-            return _cp("")
         raise AssertionError(f"Unexpected command: {cmd}")
 
     monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
@@ -30,7 +35,14 @@ def test_get_current_branch_uses_origin_head_when_detached(monkeypatch):
     assert git_operations._get_current_branch() == "master"
     assert calls[:2] == [
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "--points-at",
+            "HEAD",
+            "refs/remotes/origin",
+        ],
     ]
 
 
@@ -38,8 +50,15 @@ def test_get_current_branch_falls_back_to_single_remote_contains(monkeypatch):
     def fake_run(cmd, **kwargs):
         if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
             return _cp("HEAD\n")
-        if cmd == ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]:
-            raise subprocess.CalledProcessError(1, cmd)
+        if cmd == [
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "--points-at",
+            "HEAD",
+            "refs/remotes/origin",
+        ]:
+            return _cp("")
         if cmd == ["git", "branch", "-r", "--contains", "HEAD"]:
             return _cp("  origin/feature-x\n")
         raise AssertionError(f"Unexpected command: {cmd}")
@@ -53,8 +72,15 @@ def test_get_current_branch_errors_when_detached_is_ambiguous(monkeypatch):
     def fake_run(cmd, **kwargs):
         if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
             return _cp("HEAD\n")
-        if cmd == ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]:
-            raise subprocess.CalledProcessError(1, cmd)
+        if cmd == [
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "--points-at",
+            "HEAD",
+            "refs/remotes/origin",
+        ]:
+            return _cp("")
         if cmd == ["git", "branch", "-r", "--contains", "HEAD"]:
             return _cp("  origin/main\n  origin/release\n")
         raise AssertionError(f"Unexpected command: {cmd}")
@@ -67,3 +93,52 @@ def test_get_current_branch_errors_when_detached_is_ambiguous(monkeypatch):
         assert "Detached HEAD" in str(exc)
     else:
         raise AssertionError("Expected ValueError for ambiguous detached HEAD")
+
+
+def test_check_update_non_release_avoids_tag_commands(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "fetch", "origin"]:
+            return _cp("")
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return _cp("feature/supabase\n")
+        if cmd == ["git", "rev-parse", "--verify", "origin/feature/supabase"]:
+            return _cp("")
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+        if cmd == ["git", "rev-parse", "origin/feature/supabase"]:
+            return _cp("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n")
+        if cmd[:2] == ["git", "describe"]:
+            raise AssertionError("Tag command should not run on non-release branches")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.check_update()
+    assert result["action"] == "check_update"
+    assert result["current_version"] == "aaaaaaa"
+    assert result["latest_version"] == "feature/supabase@bbbbbbb"
+    assert result["needs_update"] is True
+
+
+def test_check_update_release_uses_tag_commands(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "fetch", "origin"]:
+            return _cp("")
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return _cp("release\n")
+        if cmd == ["git", "describe", "--tags", "origin/release", "--abbrev=0"]:
+            return _cp("v1.2.3\n")
+        if cmd == ["git", "describe", "--tags", "--abbrev=0"]:
+            return _cp("v1.2.2\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.check_update()
+    assert result["action"] == "check_update"
+    assert result["current_version"] == "v1.2.2"
+    assert result["latest_version"] == "v1.2.3"
+    assert result["needs_update"] is True
