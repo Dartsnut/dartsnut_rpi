@@ -21,7 +21,50 @@ def _get_current_branch():
     )
     branch = result.stdout.strip()
     if branch == "HEAD":
-        raise ValueError("Detached HEAD; need a named branch for update checks")
+        # Best-effort recovery for detached HEAD:
+        # 1) Prefer the remote default branch (origin/HEAD) when it contains HEAD.
+        # 2) Otherwise, use a single unambiguous origin/* branch that contains HEAD.
+        try:
+            origin_head = subprocess.run(
+                ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                cwd=GIT_REPO_CWD,
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout.strip()
+            if origin_head.startswith("origin/"):
+                subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", "HEAD", origin_head],
+                    cwd=GIT_REPO_CWD,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return origin_head.split("/", 1)[1]
+        except subprocess.CalledProcessError:
+            pass
+
+        contains = subprocess.run(
+            ["git", "branch", "-r", "--contains", "HEAD"],
+            cwd=GIT_REPO_CWD,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        candidates = []
+        for line in contains.stdout.splitlines():
+            remote = line.strip().lstrip("*").strip()
+            if not remote.startswith("origin/"):
+                continue
+            if "->" in remote:
+                continue
+            candidates.append(remote.split("/", 1)[1])
+        unique = sorted(set(candidates))
+        if len(unique) == 1:
+            return unique[0]
+        raise ValueError(
+            "Detached HEAD; unable to determine a unique branch for update checks"
+        )
     return branch
 
 
