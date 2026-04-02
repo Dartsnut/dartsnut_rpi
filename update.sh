@@ -26,6 +26,21 @@ install_or_update_service_unit() {
     fi
 }
 
+# Install a file only when missing or different from src (dst is often root-owned; use sudo cmp).
+install_if_changed() {
+    local src="$1"
+    local dst="$2"
+    local mode="$3"
+    local name="$4"
+
+    if [ ! -f "${dst}" ] || ! sudo cmp -s "${src}" "${dst}"; then
+        echo "Installing/updating ${name} at ${dst}"
+        sudo install -m "${mode}" "${src}" "${dst}"
+    else
+        echo "${name} already up to date, skipping."
+    fi
+}
+
 echo "== Boot configuration (Bookworm) =="
 
 if ! grep -q "^disable_splash=1" /boot/firmware/config.txt; then
@@ -57,8 +72,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     install_or_update_service_unit "dartsnut_splash.service"
 
     if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
-        echo "Updating splash_matrix at /usr/local/bin/splash_matrix"
-        sudo install -m 0755 "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix
+        install_if_changed "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix 0755 splash_matrix
     else
         echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary update."
     fi
@@ -69,8 +83,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     fi
 
     if [ -f "${SERVICES_DIR}/logo.ppm" ]; then
-        echo "Updating logo.ppm at ${SPLASH_DEST_PPM}"
-        sudo install -m 0644 "${SERVICES_DIR}/logo.ppm" "${SPLASH_DEST_PPM}"
+        install_if_changed "${SERVICES_DIR}/logo.ppm" "${SPLASH_DEST_PPM}" 0644 logo.ppm
     else
         echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
     fi
