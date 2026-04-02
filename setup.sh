@@ -4,6 +4,8 @@ REPO_DIR="/home/rpi/dartsnut_rpi"
 SERVICES_DIR="${REPO_DIR}/services"
 VENV_DIR="${REPO_DIR}/venv0"
 VENV_PIP="${VENV_DIR}/bin/pip"
+SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
+INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 
 SYSTEMD_UNITS_UPDATED=0
 
@@ -105,17 +107,7 @@ else
 fi
 
 echo "== System packages / Python venv =="
-
-sudo apt-get update
-sudo apt-get install -y libcairo2-dev python3-cairo
-sudo apt-get install -y python3-dev
-sudo apt-get install -y libgirepository1.0-dev gir1.2-glib-2.0
-sudo apt-get install -y libdbus-1-dev
-sudo apt-get install -y libbluetooth-dev
-sudo apt-get install -y libgl1
-sudo apt-get install -y xvfb
-sudo apt-get install -y libsdl2-dev
-sudo apt-get install -y libgpiod-dev gpiod
+"${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 
 sudo python3 -m venv "${VENV_DIR}"
 

@@ -4,6 +4,8 @@ REPO_DIR="/home/rpi/dartsnut_rpi"
 SERVICES_DIR="${REPO_DIR}/services"
 VENV_DIR="${REPO_DIR}/venv0"
 VENV_PIP="${VENV_DIR}/bin/pip"
+SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
+INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 
 SYSTEMD_UNITS_UPDATED=0
 
@@ -115,6 +117,7 @@ else
 fi
 
 echo "== Python deps refresh =="
+"${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 
 sudo "${VENV_PIP}" install --upgrade pip
 sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
