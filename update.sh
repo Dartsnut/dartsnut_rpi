@@ -71,12 +71,6 @@ if [ -d "${SERVICES_DIR}" ]; then
     install_or_update_service_unit "dartsnut_python.service"
     install_or_update_service_unit "dartsnut_splash.service"
 
-    if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
-        install_if_changed "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix 0755 splash_matrix
-    else
-        echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary update."
-    fi
-
     SPLASH_DEST_PPM="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
         SPLASH_DEST_PPM="/boot/firmware/logo.ppm"
@@ -113,6 +107,9 @@ if [ -d "${SERVICES_DIR}" ]; then
     if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
         sudo systemctl daemon-reload
     fi
+
+    # Ensure splash service remains enabled on regular updates too.
+    sudo systemctl enable dartsnut_splash.service
 else
     echo "Warning: services directory not found at ${SERVICES_DIR}; skipping early-boot splash update."
 fi

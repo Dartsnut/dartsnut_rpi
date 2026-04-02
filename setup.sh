@@ -32,13 +32,6 @@ install_splash_assets_if_present() {
         return 0
     fi
 
-    if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
-        echo "Installing splash_matrix to /usr/local/bin/splash_matrix"
-        sudo install -m 0755 "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix
-    else
-        echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary install."
-    fi
-
     local splash_dest_ppm="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
         splash_dest_ppm="/boot/firmware/logo.ppm"
@@ -178,7 +171,7 @@ fi
 
 sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
-sudo systemctl enable dartsnut_splash.service 2>/dev/null || true
+sudo systemctl enable dartsnut_splash.service
 
 echo "Service setup steps complete."
 
