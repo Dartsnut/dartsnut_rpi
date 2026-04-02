@@ -222,6 +222,36 @@ def load_menu_game_list(ctx) -> list:
     return sorted(filtered, key=_sort_key)
 
 
+def refresh_menu_game_list_if_requested(ctx) -> None:
+    """Rebuild ctx.game_list after remote sync when reload_game_menu is set."""
+    if not getattr(ctx, "reload_game_menu", False):
+        return
+    loader = getattr(ctx, "load_game_list", None)
+    if not loader:
+        ctx.reload_game_menu = False
+        return
+    ctx.game_list = loader()
+    ctx.reload_game_menu = False
+    n = len(ctx.game_list)
+    if n == 0:
+        ctx.game_index = 0
+        ctx.game_preview_index = 0
+        return
+    if ctx.game_index < 0:
+        ctx.game_index = 0
+    elif ctx.game_index >= n:
+        ctx.game_index = n - 1
+    previews = ctx.game_list[ctx.game_index].get("preview") or []
+    plen = len(previews)
+    if plen == 0:
+        ctx.game_preview_index = 0
+    else:
+        if ctx.game_preview_index < 0:
+            ctx.game_preview_index = 0
+        elif ctx.game_preview_index >= plen:
+            ctx.game_preview_index = plen - 1
+
+
 def get_games_summary() -> list:
     """
     Build a lightweight games summary list for configuration / syncing.

@@ -45,8 +45,10 @@ class AppContext:
         # Flags for config reload behavior
         # reload_conf: hard reload via init_widgets (used for failures / explicit resets)
         # reload_pages: soft reload of ./apps/conf.json pages without forcing a state reset
+        # reload_game_menu: set when inbound remote config includes a games list; consumed by reload_config
         self.reload_conf = False
         self.reload_pages = False
+        self.reload_game_menu = False
         self.game_preview_index = 0
         # Remote-sync games with status "ready"; None until first games list applied
         self.remote_menu_ready_game_ids: Optional[FrozenSet[str]] = None

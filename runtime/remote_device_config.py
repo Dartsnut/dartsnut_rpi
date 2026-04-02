@@ -157,6 +157,7 @@ class RemoteDeviceConfigApplier:
                 and g.get("id")
                 and str(g.get("status", "")).strip().lower() == "ready"
             )
+            ctx.reload_game_menu = True
         elif (
             self._runtime.awaiting_games_ready_confirmation
             and str(config.get("last_update_source", "")).strip().lower() == "supabase_bridge"

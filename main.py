@@ -48,6 +48,7 @@ from widget_lifecycle import (
 )
 from game_lifecycle import (
     load_menu_game_list,
+    refresh_menu_game_list_if_requested,
     start_game_process,
     term_game_process,
     ensure_game_downloaded,
@@ -389,6 +390,7 @@ def reload_config():
     # WebSocket-driven config reloads should be soft: update pages from ./apps/conf.json
     # without forcing a hard reset back to menu/widgets or killing any running game.
     _app_ctx.reload_pages = True
+    refresh_menu_game_list_if_requested(_app_ctx)
 
 
 def get_widgets_framebuffer():

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from states.game import InGameState
+import json
+from pathlib import Path
+
+import pytest
+
+from game_lifecycle import load_menu_game_list, refresh_menu_game_list_if_requested
+from states.game import GameSelectState, InGameState
 
 
 # Local button-driven publish flow
@@ -79,6 +85,42 @@ def test_inbound_ready_status_terminates_running_game_and_publishes(remote_confi
     assert events["term_calls"] == 1
     assert ("chess", "ready") in events["status_updates"]
     assert events["reload_called"] is True
+
+
+@pytest.mark.integration
+def test_game_select_game_list_refreshes_after_remote_apply_and_refresh(
+    workspace, remote_config_harness, monkeypatch
+):
+    """E2E-style: remote games snapshot + same refresh path as main.reload_config."""
+    monkeypatch.setattr(
+        "game_lifecycle._load_user_data",
+        lambda: {"game_playtimes": {}},
+    )
+    d = Path("apps") / "chess"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "conf.json").write_text(
+        json.dumps(
+            {"id": "chess", "name": "Chess", "type": "game", "version": "1.0.0"}
+        ),
+        encoding="utf-8",
+    )
+    app_ctx = remote_config_harness["app_ctx"]
+    runtime = remote_config_harness["runtime"]
+    apply = remote_config_harness["apply"]
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
+
+    app_ctx.load_game_list = lambda: load_menu_game_list(app_ctx)
+    app_ctx.transition_to(GameSelectState())
+    app_ctx.game_list = [{"id": "stale"}]
+    app_ctx.game_index = 4
+
+    apply({"games": [{"id": "chess", "status": "ready", "version": "1.0.0"}]})
+    refresh_menu_game_list_if_requested(app_ctx)
+
+    assert [g["id"] for g in app_ctx.game_list] == ["chess"]
+    assert app_ctx.game_index == 0
+    assert app_ctx.reload_game_menu is False
 
 
 def test_inbound_downloading_with_matching_local_version_publishes_ready(remote_config_harness):

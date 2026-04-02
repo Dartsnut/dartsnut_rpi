@@ -205,6 +205,93 @@ def test_apply_game_playing_requests_launch():
 
     assert game_ctx.start_game is True
     assert game_ctx.game_id == "g1"
+    assert game_ctx.reload_game_menu is True
+
+
+def test_apply_with_games_list_sets_reload_game_menu():
+    game_ctx = _game_ctx()
+    assert game_ctx.reload_game_menu is False
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_games_reset_initialized = True
+    rt.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, rt)
+    applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
+    assert game_ctx.reload_game_menu is True
+
+
+def test_apply_with_empty_games_list_sets_reload_game_menu():
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_games_reset_initialized = True
+    rt.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, rt)
+    applier.apply({"games": []})
+    assert game_ctx.reload_game_menu is True
+
+
+def test_apply_without_games_key_leaves_reload_game_menu_unchanged():
+    game_ctx = _game_ctx()
+    game_ctx.reload_game_menu = False
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+    applier.apply({"brightness": 50})
+    assert game_ctx.reload_game_menu is False
 
 
 # Startup gate behavior

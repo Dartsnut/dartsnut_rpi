@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
+
+from game_lifecycle import load_menu_game_list, refresh_menu_game_list_if_requested
+from runtime.remote_device_config import (
+    RemoteConfigRuntimeState,
+    RemoteDeviceConfigApplier,
+    RemoteDeviceConfigDependencies,
+)
 
 
 @pytest.mark.integration
@@ -173,3 +183,86 @@ def test_remote_config_firmware_update_publishes_completion_and_persists(remote_
     assert {"firmware": {"version": "9.9.9", "update": False}} in events["published"]
     assert machine_state.firmware_info == {"version": "9.9.9", "update": False}
     assert runtime.firmware_update_in_progress is False
+
+
+@pytest.mark.integration
+def test_remote_apply_then_refresh_syncs_menu_game_list(
+    workspace, app_ctx, machine_state, monkeypatch
+):
+    """Mirror bridge order: apply remote config (games) then soft reload refresh."""
+    monkeypatch.setattr(
+        "game_lifecycle._load_user_data",
+        lambda: {"game_playtimes": {}},
+    )
+    for gid, name in (("g1", "B"), ("g2", "A")):
+        d = Path("apps") / gid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "conf.json").write_text(
+            json.dumps(
+                {"id": gid, "name": name, "type": "game", "version": "1.0.0"}
+            ),
+            encoding="utf-8",
+        )
+
+    events: dict = {
+        "published": [],
+        "status_updates": [],
+        "ensure_download_calls": [],
+        "cancel_download_calls": [],
+        "term_calls": 0,
+    }
+    ble = type(
+        "FakeBle",
+        (),
+        {
+            "start_scan_if_requested": lambda self: None,
+            "start_connect_if_requested": lambda self, _a: None,
+        },
+    )()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=app_ctx,
+        get_machine_state_service=lambda: machine_state,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda p: events["published"].append(dict(p)),
+        request_set_game_status=lambda gid, st: events["status_updates"].append((gid, st)),
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: events.__setitem__("term_calls", events["term_calls"] + 1),
+        ensure_game_downloaded=lambda gid, ver: events["ensure_download_calls"].append((gid, ver))
+        or True,
+        cancel_game_download=lambda gid: events["cancel_download_calls"].append(gid),
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {"error": False},
+        get_version=lambda: {"error": False, "version": "9.9.9"},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    runtime = RemoteConfigRuntimeState(startup_firmware_version=None)
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, runtime)
+
+    app_ctx.load_game_list = lambda: load_menu_game_list(app_ctx)
+    app_ctx.game_list = [{"id": "stale"}]
+
+    applier.apply({"games": [{"id": "g1", "status": "ready", "version": ""}]})
+    refresh_menu_game_list_if_requested(app_ctx)
+    assert [g["id"] for g in app_ctx.game_list] == ["g1"]
+    assert app_ctx.reload_game_menu is False
+
+    app_ctx.game_index = 1
+    applier.apply({"games": [{"id": "g1", "status": "ready", "version": ""}]})
+    refresh_menu_game_list_if_requested(app_ctx)
+    assert app_ctx.game_index == 0
+
+    applier.apply(
+        {
+            "games": [
+                {"id": "g1", "status": "ready", "version": ""},
+                {"id": "g2", "status": "ready", "version": ""},
+            ]
+        }
+    )
+    refresh_menu_game_list_if_requested(app_ctx)
+    assert {g["id"] for g in app_ctx.game_list} == {"g1", "g2"}
+    assert [g["id"] for g in app_ctx.game_list] == ["g2", "g1"]

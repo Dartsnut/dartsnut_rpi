@@ -51,3 +51,71 @@ def test_load_menu_game_list_remote_ready_only_and_sort(monkeypatch):
     result = gl.load_menu_game_list(ctx)
     # a and b tie at 100; sort by name: Apple before Zebra; c excluded (not in remote ready set)
     assert [c["id"] for c in result] == ["b", "a"]
+
+
+class _RefreshCtx:
+    def __init__(self):
+        self.remote_menu_ready_game_ids = None
+        self.reload_game_menu = False
+        self.load_game_list = None
+        self.game_list = []
+        self.game_index = 0
+        self.game_preview_index = 0
+
+
+def test_refresh_menu_game_list_replaces_and_clears_flag():
+    ctx = _RefreshCtx()
+    ctx.reload_game_menu = True
+    ctx.load_game_list = lambda: [{"id": "x", "preview": [bytearray(3)]}]
+    gl.refresh_menu_game_list_if_requested(ctx)
+    assert [g["id"] for g in ctx.game_list] == ["x"]
+    assert ctx.reload_game_menu is False
+
+
+def test_refresh_menu_game_list_clamps_index_when_list_shrinks():
+    ctx = _RefreshCtx()
+    ctx.reload_game_menu = True
+    ctx.load_game_list = lambda: [{"id": "only", "preview": [bytearray(1), bytearray(2)]}]
+    ctx.game_index = 5
+    ctx.game_preview_index = 99
+    gl.refresh_menu_game_list_if_requested(ctx)
+    assert ctx.game_index == 0
+    assert ctx.game_preview_index == 1
+
+
+def test_refresh_menu_game_list_empty_resets_indices():
+    ctx = _RefreshCtx()
+    ctx.reload_game_menu = True
+    ctx.load_game_list = lambda: []
+    ctx.game_index = 3
+    ctx.game_preview_index = 2
+    gl.refresh_menu_game_list_if_requested(ctx)
+    assert ctx.game_list == []
+    assert ctx.game_index == 0
+    assert ctx.game_preview_index == 0
+
+
+def test_refresh_menu_game_list_noop_when_flag_false():
+    ctx = _RefreshCtx()
+    ctx.reload_game_menu = False
+    called = []
+    ctx.load_game_list = lambda: called.append(1) or []
+    gl.refresh_menu_game_list_if_requested(ctx)
+    assert called == []
+
+
+def test_refresh_menu_game_list_no_loader_clears_flag():
+    ctx = _RefreshCtx()
+    ctx.reload_game_menu = True
+    ctx.load_game_list = None
+    gl.refresh_menu_game_list_if_requested(ctx)
+    assert ctx.reload_game_menu is False
+
+
+def test_refresh_menu_game_list_missing_preview_clamps_preview_index():
+    ctx = _RefreshCtx()
+    ctx.reload_game_menu = True
+    ctx.load_game_list = lambda: [{"id": "n", "name": "N"}]
+    ctx.game_preview_index = 5
+    gl.refresh_menu_game_list_if_requested(ctx)
+    assert ctx.game_preview_index == 0
