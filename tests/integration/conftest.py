@@ -129,7 +129,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "device.json").write_text(
         json.dumps(
             {
-                "device_id": "AA:BB:CC:DD:EE:FF",
+                "id": "AA:BB:CC:DD:EE:FF",
                 "brightness": "50",
                 "volume": "50",
                 "name": "Board",

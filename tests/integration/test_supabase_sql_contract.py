@@ -61,7 +61,7 @@ def test_apply_remote_device_patch_merges_and_sets_source():
     query = requests.get(
         row_url,
         headers=headers,
-        params={"device_id": f"eq.{device_id}", "select": "device_id,state,last_update_source"},
+        params={"device_id": f"eq.{device_id}", "select": "state,last_update_source"},
         timeout=15,
     )
     assert query.status_code == 200, query.text

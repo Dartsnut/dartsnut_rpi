@@ -155,8 +155,6 @@ fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bo
             obj
         }
     };
-    patch_obj.insert("device_id".to_string(), Value::String(cfg.device_id.clone()));
-
     let url = format!("{}/rest/v1/rpc/apply_remote_device_patch", cfg.url.trim_end_matches('/'));
     client
         .post(url)

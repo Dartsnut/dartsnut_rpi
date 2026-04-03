@@ -75,6 +75,7 @@ from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
+from python_websocket.json_operations import resolve_pixeldarts_hardware_version
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
@@ -184,7 +185,15 @@ def get_device_info():
             with open(file_path, "r") as file:
                 get_device_info._cached_device_info = json.load(file)
             get_device_info._last_mtime = current_mtime
-        return get_device_info._cached_device_info
+        base = get_device_info._cached_device_info
+        if not isinstance(base, dict):
+            return {}
+        hardware_version = resolve_pixeldarts_hardware_version()
+        if hardware_version:
+            merged = dict(base)
+            merged["hardware_version"] = hardware_version
+            return merged
+        return base
     except Exception:
         return {}
 

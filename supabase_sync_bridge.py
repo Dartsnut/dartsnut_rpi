@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import threading
@@ -131,6 +132,41 @@ def _normalize_device_id(value: Any) -> str:
     return raw
 
 
+def _resolve_hardware_version() -> str:
+    cache_path = os.path.join(os.getcwd(), ".hardware_version.json")
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if isinstance(payload, dict):
+            value = str(payload.get("hardware_version", "")).strip().lower()
+            if value:
+                return value
+    except Exception:
+        pass
+
+    try:
+        output = subprocess.check_output(["lsusb"]).decode("utf-8", errors="ignore")
+        for line in output.splitlines():
+            match = re.search(
+                r"\bID\s+[0-9a-fA-F]{4}:([0-9a-fA-F]{4})\b.*\bPIXELDARTS\b",
+                line.strip(),
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                continue
+            value = match.group(1).lower()
+            try:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump({"hardware_version": value}, f)
+            except Exception:
+                pass
+            return value
+    except Exception:
+        pass
+
+    return ""
+
+
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     brightness_raw = device_info.get("brightness")
     volume_raw = device_info.get("volume")
@@ -144,8 +180,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         volume = 0
 
     resolved_device_id = _normalize_device_id(
-        device_info.get("device_id")
-        or device_info.get("id")
+device_info.get("id")
         or device_info.get("ble_mac")
         or device_info.get("mac_address")
     )
@@ -156,12 +191,18 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         "dim_level": device_info.get("dim_level", 0),
         "dim_restore_seconds": device_info.get("dim_restore_seconds", 0),
     }
+    hardware_version = str(device_info.get("hardware_version", "")).strip().lower()
+    if not hardware_version:
+        hardware_version = _resolve_hardware_version()
+
     device_meta = {
         "id": resolved_device_id,
         "sn": device_info.get("serial", ""),
         "model": device_info.get("model", ""),
         "name": device_info.get("name", ""),
     }
+    if hardware_version:
+        device_meta["hardware_version"] = hardware_version
     firmware = {
         "version": device_info.get("firmware_version", ""),
         "update": bool(device_info.get("firmware_update", False)),
@@ -192,7 +233,6 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         games = []
 
     state: Dict[str, Any] = {
-        "device_id": resolved_device_id,
         "time_zone": device_info.get("time_zone", ""),
         "volume": volume,
         "brightness": brightness,
@@ -246,7 +286,6 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
 
     if use_local_device:
         for key in (
-            "device_id",
             "time_zone",
             "volume",
             "ip_address",
@@ -272,8 +311,20 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("pages", "games"):
         if key in merged and (merged[key] is None or not isinstance(merged[key], list)):
             merged[key] = []
-    if "device_id" not in merged or not str(merged.get("device_id", "")).strip():
-        merged["device_id"] = str(local_initial.get("device_id", "") or "").strip()
+
+    local_info = local_initial.get("device_info") if isinstance(local_initial, dict) else {}
+    local_info_id = ""
+    if isinstance(local_info, dict):
+        local_info_id = str(local_info.get("id", "") or "").strip()
+
+    merged_info = merged.get("device_info")
+    if not isinstance(merged_info, dict):
+        merged_info = {}
+    if local_info_id and not str(merged_info.get("id", "") or "").strip():
+        merged_info = dict(merged_info)
+        merged_info["id"] = local_info_id
+    if merged_info:
+        merged["device_info"] = merged_info
     return merged
 
 

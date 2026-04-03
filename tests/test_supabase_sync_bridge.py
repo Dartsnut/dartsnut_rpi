@@ -7,7 +7,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
 
     state = ssb._build_initial_state(
         {
-            "device_id": "AA:BB:CC:DD:EE:FF",
+            "id": "AA:BB:CC:DD:EE:FF",
             "brightness": "70",
             "volume": "50",
             "dim_window_enabled": True,
@@ -24,7 +24,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
         }
     )
 
-    assert state["device_id"] == "AA:BB:CC:DD:EE:FF"
+    assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
     assert state["brightness"] == 70
     assert state["volume"] == 50
     assert state["pages"] == []
@@ -50,7 +50,7 @@ def test_build_initial_state_sets_device_info_id_from_ble_mac_when_missing(monke
         }
     )
 
-    assert state["device_id"] == "AA:BB:CC:DD:EE:FF"
+    assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
     assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
 
 
@@ -62,8 +62,27 @@ def test_coerce_pages_games_lists():
 
 def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
-    monkeypatch.setattr(ssb, "_build_initial_state", lambda _d: {"device_id": "AA:BB:CC:DD:EE:FF"})
+    monkeypatch.setattr(ssb, "_build_initial_state", lambda _d: {"device_info": {"id": "AA:BB:CC:DD:EE:FF"}})
     merged = ssb._merge_remote_and_local({"pages": None, "games": None})
-    assert merged["device_id"] == "AA:BB:CC:DD:EE:FF"
+    assert merged["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
     assert merged["pages"] == []
     assert merged["games"] == []
+
+
+
+def test_build_initial_state_adds_hardware_version_when_missing(monkeypatch):
+    monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
+    monkeypatch.setattr(ssb, "_resolve_hardware_version", lambda: "444e")
+
+    state = ssb._build_initial_state(
+        {
+            "id": "AA:BB:CC:DD:EE:FF",
+            "brightness": "70",
+            "volume": "50",
+            "serial": "SN123",
+            "model": "PixelBoard",
+            "name": "Kitchen",
+        }
+    )
+
+    assert state["device_info"]["hardware_version"] == "444e"

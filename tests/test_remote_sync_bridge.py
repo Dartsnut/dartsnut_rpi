@@ -22,7 +22,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
 
     state = rsb._build_initial_state(
         {
-            "device_id": "AA:BB:CC:DD:EE:FF",
+            "id": "AA:BB:CC:DD:EE:FF",
             "brightness": "70",
             "volume": "50",
             "dim_window_enabled": True,
@@ -39,7 +39,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
         }
     )
 
-    assert state["device_id"] == "AA:BB:CC:DD:EE:FF"
+    assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
     assert state["brightness"] == 70
     assert state["volume"] == 50
     assert state["pages"] == []

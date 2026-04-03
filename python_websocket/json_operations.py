@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 import base64
+import re
 import subprocess
 from python_websocket.error_handler import (
     ErrorCode,
@@ -27,18 +28,13 @@ def _hardware_cache_path():
 
 def _extract_pixeldarts_pid(lsusb_output):
     for line in (lsusb_output or "").splitlines():
-        if "PIXELDARTS" not in line.upper():
-            continue
-        parts = line.split("ID ", 1)
-        if len(parts) != 2:
-            continue
-        vendor_product = parts[1].split(None, 1)[0]
-        if ":" not in vendor_product:
-            continue
-        _, pid = vendor_product.split(":", 1)
-        pid = pid.strip().lower()
-        if pid:
-            return pid
+        match = re.search(
+            r"\bID\s+[0-9a-fA-F]{4}:([0-9a-fA-F]{4})\b.*\bPIXELDARTS\b",
+            line.strip(),
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower()
     return ""
 
 
@@ -75,6 +71,10 @@ def _get_hardware_version():
     except Exception:
         pass
     return ""
+
+
+def resolve_pixeldarts_hardware_version():
+    return _get_hardware_version()
 
 
 def _normalize_relative_path(path_value):
@@ -208,7 +208,7 @@ def get_device_info():
         device_info["supabase_connected"] = connected
         # Backward compatibility for older clients.
         device_info["remote_connected"] = connected
-        hardware_version = _get_hardware_version()
+        hardware_version = resolve_pixeldarts_hardware_version()
         if hardware_version:
             device_info["hardware_version"] = hardware_version
 

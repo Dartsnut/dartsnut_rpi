@@ -72,7 +72,7 @@ def local_bridge_runtime(monkeypatch):
     ssb.set_supabase_connectivity_callback(on_conn)
     device_id = f"ITEST-{uuid.uuid4()}".upper()
     device_info = {
-        "device_id": device_id,
+        "id": device_id,
         "brightness": "50",
         "volume": "50",
         "name": "LocalE2E",
@@ -87,7 +87,7 @@ def local_bridge_runtime(monkeypatch):
     yield {
         "base_url": base_url,
         "api_key": api_key,
-        "device_id": device_id,
+        "id": device_id,
         "incoming_configs": incoming_configs,
         "reload_count": reload_count,
     }
@@ -111,7 +111,7 @@ def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
             headers=headers,
             params={
                 "device_id": f"eq.{device_id}",
-                "select": "device_id,state,last_update_source",
+                "select": "state,last_update_source",
             },
             timeout=10,
         )

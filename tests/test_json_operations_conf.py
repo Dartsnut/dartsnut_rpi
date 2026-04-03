@@ -111,3 +111,30 @@ def test_get_device_info_uses_existing_cached_hardware_version_when_lsusb_fails(
 
     result = json_operations.get_device_info()
     assert result["device_info"]["hardware_version"] == "444e"
+
+
+
+def test_get_device_info_parses_pixeldarts_with_extra_spacing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "device.json").write_text(json.dumps({"model": "PixelDart"}), encoding="utf-8")
+
+    class _RemoteSync:
+        @staticmethod
+        def is_connected():
+            return True
+
+    lsusb_output = (
+        "Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n"
+        "Bus 001 Device 004: ID  2d80:444e   PIXELDARTS\n"
+    )
+
+    def fake_check_output(cmd):
+        if cmd == ["lsusb"]:
+            return lsusb_output.encode("utf-8")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(json_operations, "get_remote_sync", lambda: _RemoteSync())
+    monkeypatch.setattr(json_operations.subprocess, "check_output", fake_check_output)
+
+    result = json_operations.get_device_info()
+    assert result["device_info"]["hardware_version"] == "444e"
