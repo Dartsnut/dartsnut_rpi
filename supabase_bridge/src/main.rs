@@ -147,7 +147,7 @@ fn send_msg(writer: &Arc<Mutex<UnixStream>>, kind: &str, payload: Value) -> Resu
 }
 
 fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bool) -> Result<()> {
-    let mut patch_obj = match patch {
+    let patch_obj = match patch {
         Value::Object(obj) => obj,
         other => {
             let mut obj = serde_json::Map::new();
