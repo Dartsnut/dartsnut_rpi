@@ -94,6 +94,11 @@ SUPABASE_KEY="<key>" ./scripts/run_local_supabase_e2e.sh
 
 Never commit real API keys in docs, scripts, or shell snippets.
 
+## Logs
+
+- **Python service:** `journalctl -u dartsnut_python.service` (see [docs/logging.md](docs/logging.md)).
+- **Nightly `check_and_update.py` cron:** `/var/log/dartsnut_update.log` (same doc).
+
 ---
 
 For questions, please refer to the project repository or contact the developer.

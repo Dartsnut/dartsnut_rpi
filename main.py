@@ -5,6 +5,7 @@ Main entry point: display, device, context, state machine, and main loop.
 import base64
 import io
 import json
+import logging
 import os
 import struct
 import subprocess
@@ -72,7 +73,12 @@ from runtime.remote_sync_port import (
 from runtime.reset_workflow import request_confirm_and_forget_wifi
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
+from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
+
+_effective_log_level = configure_logging()
+_log = logging.getLogger(__name__)
+_log.info("Logging initialized (effective level: %s)", _effective_log_level)
 
 # -----------------------------------------------------------------------------
 # Display and device (used by context and dim logic)
@@ -206,7 +212,7 @@ def set_brightness(brightness):
             v = int(brightness)
             get_remote_sync().publish_partial_state({"brightness": v})
         except Exception as e:
-            print(f"Error updating device brightness while dimmed: {e}")
+            _log.warning("Error updating device brightness while dimmed: %s", e)
         return
 
     # Outside dim window: apply immediately and persist via service.
@@ -218,7 +224,7 @@ def set_brightness(brightness):
         v = int(brightness)
         get_remote_sync().publish_partial_state({"brightness": v})
     except Exception as e:
-        print(f"Error updating brightness: {e}")
+        _log.warning("Error updating brightness: %s", e)
 
 
 def set_volume(volume):
@@ -252,7 +258,7 @@ def set_volume(volume):
                 )
         get_remote_sync().publish_partial_state({"volume": int(volume)})
     except Exception as e:
-        print(f"Error updating volume: {e}")
+        _log.warning("Error updating volume: %s", e)
 
 
 def set_time_zone(time_zone):
@@ -271,7 +277,7 @@ def set_time_zone(time_zone):
             return None
         subprocess.run(["sudo", "timedatectl", "set-timezone", tz], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Failed to set time zone: {e}")
+        _log.error("Failed to set time zone: %s", e)
     return None
 
 
@@ -309,7 +315,7 @@ def _set_reset_in_progress(value: bool) -> None:
 def _run_device_reset_sequence() -> None:
     service = get_machine_state_service()
     if service is None:
-        print("Reset aborted: MachineStateService is not initialized")
+        _log.warning("Reset aborted: MachineStateService is not initialized")
         return
     if _is_reset_in_progress():
         return
@@ -325,21 +331,21 @@ def _run_device_reset_sequence() -> None:
         try:
             term_widget_processes(ctx.pages)
         except Exception as e:
-            print(f"Error terminating widget processes during reset: {e}")
+            _log.error("Error terminating widget processes during reset: %s", e)
         try:
             if ctx.game:
                 term_game_process(ctx.game)
                 ctx.game = None
         except Exception as e:
-            print(f"Error terminating game process during reset: {e}")
+            _log.error("Error terminating game process during reset: %s", e)
         try:
             machine_api.reset_user_data_file()
         except Exception as e:
-            print(f"Error resetting user data during device reset: {e}")
+            _log.error("Error resetting user data during device reset: %s", e)
         service.clear_apps_directory_contents()
         service.reset_device_to_factory_fields()
     except Exception as e:
-        print(f"Error during device reset sequence: {e}")
+        _log.error("Error during device reset sequence: %s", e)
     finally:
         _set_reset_in_progress(False)
 
@@ -653,9 +659,11 @@ def check_connection_loop():
                     )
                     request_network_state_refresh()
                 except Exception as e:
-                    print(f"Error restarting remote sync after connectivity established: {e}")
+                    _log.warning(
+                        "Error restarting remote sync after connectivity established: %s", e
+                    )
         except Exception as e:
-            print(f"Error checking connection: {e}")
+            _log.warning("Error checking connection: %s", e)
             _app_ctx.wifi_connected = False
             _app_ctx.internet_connected = False
         time.sleep(10)
@@ -704,7 +712,7 @@ def network_state_remote_loop():
                     if "ssid" in updates:
                         last_published_ssid = payload_ssid
         except Exception as e:
-            print(f"Error in network sync poller: {e}")
+            _log.warning("Error in network sync poller: %s", e)
 
         _network_state_refresh_event.wait(poll_interval_seconds)
 

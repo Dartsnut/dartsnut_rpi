@@ -5,12 +5,15 @@ Background threads and remote sync startup (BLE, WebSocket, Supabase, network po
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from typing import Any, Callable, Dict
 
 import assets
 from runtime.remote_sync_port import get_remote_sync
+
+_log = logging.getLogger(__name__)
 
 
 def _normalize_device_id(value: Any) -> str:
@@ -97,7 +100,7 @@ def start_background_subsystems(
         device_info["firmware_version"] = firmware_version
         remote_config_runtime.startup_firmware_version = firmware_version
     except Exception as e:
-        print(f"Error determining firmware version for remote initial state: {e}")
+        _log.warning("Error determining firmware version for remote initial state: %s", e)
     if "firmware_update" not in device_info:
         device_info["firmware_update"] = False
     set_volume(int(device_info.get("volume", "50")))
@@ -131,7 +134,7 @@ def start_background_subsystems(
             device_info or {}, reload_config, apply_remote_config
         )
     except Exception as e:
-        print(f"Failed to start Supabase sync: {e}")
+        _log.error("Failed to start Supabase sync: %s", e)
     else:
         try:
             get_remote_sync().request_set_all_games_ready()
@@ -139,4 +142,4 @@ def start_background_subsystems(
             remote_config_runtime.startup_games_ready_confirmed_at = None
             remote_config_runtime.startup_filter_playing_until_newer_update = False
         except Exception as e:
-            print(f"Error resetting remote game statuses to ready on startup: {e}")
+            _log.error("Error resetting remote game statuses to ready on startup: %s", e)

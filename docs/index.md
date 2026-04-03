@@ -67,6 +67,10 @@ Paste the following content according to your device type:
 sudo reboot
 ```
 
+## Logs
+
+Service output and the automatic update cron log are described in [Logs](logging).
+
 ---
 
 For questions, please refer to the [project repository](https://github.com/Dartsnut/dartsnut_rpi) or contact the developer.
