@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -27,6 +28,8 @@ _connectivity_callback: Optional[Callable[[bool], None]] = None
 _remote_game_ids: Optional[set[str]] = None
 _remote_game_ids_lock = threading.Lock()
 
+_log = logging.getLogger(__name__)
+
 
 def _set_connected(connected: bool) -> None:
     global _connected
@@ -35,6 +38,8 @@ def _set_connected(connected: bool) -> None:
         prev = _connected
         _connected = bool(connected)
         notify = prev != _connected
+    if notify:
+        _log.info("supabase sync bridge: connected=%s", bool(connected))
     if notify and _connectivity_callback is not None:
         try:
             _connectivity_callback(_connected)
@@ -492,7 +497,9 @@ def ensure_supabase_sync_running(
         launch_env.update(_load_supabase_env_overrides())
         executable_path = os.environ.get("DARTSNUT_SUPABASE_BRIDGE", _DEFAULT_BRIDGE_BIN)
         if not os.path.isfile(executable_path) or not os.access(executable_path, os.X_OK):
-            print(f"Supabase sync skipped: bridge binary unavailable at {executable_path}")
+            _log.warning(
+                "Supabase sync skipped: bridge binary unavailable at %s", executable_path
+            )
             return
         socket_path = os.environ.get("DARTSNUT_SUPABASE_SOCKET", SOCKET_PATH)
         _client = _SyncClient(
@@ -503,6 +510,7 @@ def ensure_supabase_sync_running(
         )
         _set_connected(False)
         _client.start_server()
+        _log.info("supabase sync: unix socket server started path=%s", socket_path)
 
         def _launch() -> None:
             global _bridge_proc
@@ -516,7 +524,7 @@ def ensure_supabase_sync_running(
                 with _bridge_lock:
                     _bridge_proc = proc
             except Exception as e:
-                print(f"Supabase sync: failed to launch bridge: {e}")
+                _log.error("Supabase sync: failed to launch bridge: %s", e)
 
         threading.Thread(target=_launch, daemon=True).start()
 

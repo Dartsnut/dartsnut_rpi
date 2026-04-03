@@ -1,6 +1,9 @@
 """Application context: display, assets, device, and all mutable app state."""
 # Optional type hint for current_state (avoids circular import at runtime)
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Optional, FrozenSet
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from states.base import BaseState
@@ -72,8 +75,16 @@ class AppContext:
 
     def transition_to(self, new_state: "BaseState") -> None:
         """Switch to a new state."""
+        prev = (
+            self.current_state.name()
+            if self.current_state is not None
+            else None
+        )
+        nxt = new_state.name()
         self.current_state = new_state
-        self.state_str = new_state.name()
+        self.state_str = nxt
+        if prev != nxt:
+            _log.info("ui state: %s -> %s", prev or "(none)", nxt)
 
     @property
     def set_brightness_hardware(self):

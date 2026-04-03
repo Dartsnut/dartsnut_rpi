@@ -13,6 +13,7 @@ on source-of-truth rules.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
+
+_log = logging.getLogger(__name__)
 
 
 class MachineStateService:
@@ -65,7 +68,7 @@ class MachineStateService:
             with open(path, "w") as f:
                 json.dump(device_info, f)
         except Exception as e:
-            print(f"Error writing device.json: {e}")
+            _log.error("Error writing device.json: %s", e)
 
     # ------------------------------------------------------------------
     # Public API
@@ -80,7 +83,7 @@ class MachineStateService:
             device_info["firmware_update"] = bool(update)
             self._write_device_info(device_info)
         except Exception as e:
-            print(f"Error updating firmware info in device.json: {e}")
+            _log.error("Error updating firmware info in device.json: %s", e)
 
     def set_brightness(self, brightness: int) -> None:
         """
@@ -91,14 +94,14 @@ class MachineStateService:
         try:
             self._set_brightness_hardware(brightness)
         except Exception as e:
-            print(f"Failed to set brightness hardware: {e}")
+            _log.warning("Failed to set brightness hardware: %s", e)
 
         try:
             device_info = self._get_device_info() or {}
             device_info["brightness"] = str(brightness)
             self._write_device_info(device_info)
         except Exception as e:
-            print(f"Error updating brightness in device.json: {e}")
+            _log.error("Error updating brightness in device.json: %s", e)
 
     def set_volume(self, volume: int) -> None:
         """
@@ -129,16 +132,16 @@ class MachineStateService:
                 stderr = e.stderr.decode().strip() if e.stderr else str(e)
             except Exception:
                 stderr = str(e)
-            print(f"Failed to set volume: {stderr}")
+            _log.warning("Failed to set volume: %s", stderr)
         except Exception as e:
-            print(f"Error setting volume: {e}")
+            _log.warning("Error setting volume: %s", e)
 
         try:
             device_info = self._get_device_info() or {}
             device_info["volume"] = str(volume)
             self._write_device_info(device_info)
         except Exception as e:
-            print(f"Error updating volume in device.json: {e}")
+            _log.error("Error updating volume in device.json: %s", e)
 
     def set_dim_window(self, config: Dict[str, Any]) -> None:
         """
@@ -181,7 +184,7 @@ class MachineStateService:
                     )
             self._write_device_info(device_info)
         except Exception as e:
-            print(f"Error updating dim window in device.json: {e}")
+            _log.error("Error updating dim window in device.json: %s", e)
 
     def set_pages(
         self,
@@ -230,8 +233,14 @@ class MachineStateService:
             with open(conf_path, "w") as f:
                 json.dump(payload, f)
         except Exception as e:
-            print(f"Error writing apps/conf.json: {e}")
+            _log.error("Error writing apps/conf.json: %s", e)
             return
+
+        _log.info(
+            "machine state: wrote %s pages to apps/conf.json (reload_pages=%s)",
+            len(normalized_pages),
+            reload_pages,
+        )
 
         if not reload_pages:
             return
@@ -239,7 +248,7 @@ class MachineStateService:
         try:
             self._reload_pages_from_conf(self._ctx)
         except Exception as e:
-            print(f"Error reloading pages from conf.json: {e}")
+            _log.error("Error reloading pages from conf.json: %s", e)
 
     def set_device_name(self, name: str) -> None:
         """
@@ -250,13 +259,14 @@ class MachineStateService:
             device_info["name"] = name
             self._write_device_info(device_info)
         except Exception as e:
-            print(f"Error setting device name in device.json: {e}")
+            _log.error("Error setting device name in device.json: %s", e)
 
     def clear_apps_directory_contents(self) -> None:
         """
         Remove all files and directories inside ./apps while keeping ./apps itself.
         Preserve apps/conf.json and rewrite it to an empty config with pages=[].
         """
+        _log.info("machine state: clearing apps directory contents (device reset path)")
         apps_dir = os.path.join(os.getcwd(), "apps")
         try:
             os.makedirs(apps_dir, exist_ok=True)
@@ -275,13 +285,14 @@ class MachineStateService:
             with open(conf_path, "w", encoding="utf-8") as f:
                 json.dump({"user": "", "date": "", "pages": []}, f)
         except Exception as e:
-            print(f"Error clearing apps directory contents: {e}")
+            _log.error("Error clearing apps directory contents: %s", e)
 
     def reset_device_to_factory_fields(self) -> None:
         """
         Rewrite device.json with only required factory fields:
         name, serial, model, brightness, volume.
         """
+        _log.info("machine state: resetting device.json to factory fields")
         try:
             existing = self._read_device_info() or {}
             model = str(existing.get("model", "") or "")
@@ -298,7 +309,7 @@ class MachineStateService:
             with open(path, "w") as f:
                 json.dump(payload, f)
         except Exception as e:
-            print(f"Error resetting device.json to factory fields: {e}")
+            _log.error("Error resetting device.json to factory fields: %s", e)
 
 
 _service: Optional[MachineStateService] = None

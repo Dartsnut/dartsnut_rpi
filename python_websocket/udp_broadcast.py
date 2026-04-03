@@ -1,10 +1,13 @@
-import subprocess
-import socket
-import time
 import json
+import logging
 import os
+import socket
+import subprocess
+import time
 from typing import Optional
 from network_utils import get_wifi_ipv4
+
+_log = logging.getLogger(__name__)
 
 
 def normalize_ip(ip: str) -> Optional[str]:
@@ -136,7 +139,7 @@ def udp_broadcast():
     wlan_mac = get_mac_address()
     ble_mac = get_ble_mac()
     
-    print("UDP Broadcast started on port 9252")
+    _log.info("UDP discovery broadcast started (port 9252)")
 
     while True:
         udp_socket = None
@@ -171,7 +174,7 @@ def udp_broadcast():
                     pass
             
         except Exception as e:
-            print(f"UDP broadcast error: {e}")
+            _log.warning("UDP broadcast error: %s", e)
         finally:
             if udp_socket:
                 try:

@@ -6,6 +6,7 @@ Dim-window runtime lives in DimWindowRuntime so set_brightness can share state.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time
@@ -14,6 +15,8 @@ from typing import Any, Callable, Type
 from PIL import Image
 
 from domain.app_context import AppContext
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,6 +64,7 @@ def run_main_loop(
                 or dim_rt.last_dim_check_time == 0
             ):
                 dim_rt.last_dim_check_time = time.time()
+                was_dim_window = dim_rt.currently_in_dim_window
                 di = get_device_info()
                 enabled = str(di.get("dim_window_enabled", "false")).lower() == "true"
                 start_s = (di.get("dim_window_start") or "").strip()
@@ -123,6 +127,12 @@ def run_main_loop(
                                 dim_rt.dim_force_normal_brightness = False
                                 dim_rt.dim_force_normal_start_time = None
 
+                if dim_rt.currently_in_dim_window != was_dim_window:
+                    _log.info(
+                        "dim window %s",
+                        "active (brightness reduced)" if dim_rt.currently_in_dim_window else "inactive (restored)",
+                    )
+
             ctx.state_str = ctx.current_state.name()
 
             if ctx.locate_device_intv:
@@ -130,9 +140,11 @@ def run_main_loop(
                 ctx.locate_device_intv -= 1
             elif ctx.reload_conf:
                 ctx.reload_conf = False
+                _log.info("reload_conf: hard widget re-init (init_widgets)")
                 init_widgets(ctx)
             elif getattr(ctx, "reload_pages", False):
                 ctx.reload_pages = False
+                _log.info("reload_pages: soft conf.json reload")
                 reload_pages_from_conf(ctx)
             elif ctx.start_game:
                 ctx.start_game = False
@@ -146,7 +158,7 @@ def run_main_loop(
                             ctx.game_id, "playing"
                         )
                     except Exception as e:
-                        print(f"Error updating remote game status to playing: {e}")
+                        _log.warning("Error updating remote game status to playing: %s", e)
             else:
                 ctx.current_state.update(ctx)
 
@@ -254,7 +266,7 @@ def run_main_loop(
                                     if buf[0] == 0:
                                         buf[0] = 1
                             except Exception as e:
-                                print(f"Error reading widget frame for {widget_id}: {e}")
+                                _log.warning("Error reading widget frame for %s: %s", widget_id, e)
 
                         widget_ready = False
                         if widget_frame is not None:
@@ -290,4 +302,4 @@ def run_main_loop(
 
                     page["framebuffer"] = bytearray(page_img.tobytes())
         except Exception as e:
-            print(f"Error in main loop: {e}")
+            _log.exception("Error in main loop: %s", e)

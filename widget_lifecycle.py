@@ -1,5 +1,6 @@
 """Widget lifecycle: page/widget process start, term, restart, update checks."""
 import json
+import logging
 import os
 import signal
 import threading
@@ -12,6 +13,8 @@ import requests
 from PIL import Image
 
 from core.helpers import set_pdeathsig, get_user_data_store_path
+
+_log = logging.getLogger(__name__)
 
 # Throttling and update tracking (used by check_page_widget_updates and kill_widget_if_page_inactive)
 widget_update_checks = {}
@@ -89,13 +92,17 @@ def check_and_update_widget_version(widget_id: str):
                 with open(conf_path, "r") as f:
                     local_version = json.load(f).get("version")
             except Exception as e:
-                print(f"Error reading conf.json for widget {widget_id}: {e}")
+                _log.warning("Error reading conf.json for widget %s: %s", widget_id, e)
         try:
             response = requests.get(
                 f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}"
             )
             if response.status_code != 200:
-                print(f"Failed to get download info for widget {widget_id}: {response.status_code}")
+                _log.warning(
+                    "Failed to get download info for widget %s: HTTP %s",
+                    widget_id,
+                    response.status_code,
+                )
                 return (False, None)
             download_info = response.json().get("data")
             if download_info is None:
@@ -109,10 +116,10 @@ def check_and_update_widget_version(widget_id: str):
                 return (True, download_info)
             return (False, download_info)
         except Exception as e:
-            print(f"Error fetching widget download info for {widget_id}: {e}")
+            _log.warning("Error fetching widget download info for %s: %s", widget_id, e)
             return (False, None)
     except Exception as e:
-        print(f"Error checking widget version for {widget_id}: {e}")
+        _log.warning("Error checking widget version for %s: %s", widget_id, e)
         return (False, None)
 
 
@@ -151,7 +158,7 @@ def download_app(url: str, md5: str) -> bool:
             return False
         return True
     except Exception as e:
-        print(f"Error downloading app: {e}")
+        _log.error("Error downloading app: %s", e)
         return False
 
 
@@ -160,7 +167,11 @@ def _kill_widget_process(widget_entry: dict, widget_id: str, reason: str = "") -
     try:
         process = widget_entry.get("process")
         if process and process.poll() is None:
-            print(f"Killing widget {widget_id} process" + (f" ({reason})" if reason else ""))
+            _log.info(
+                "widget: killing process id=%s%s",
+                widget_id,
+                f" ({reason})" if reason else "",
+            )
             os.kill(process.pid, signal.SIGCONT)
             os.kill(process.pid, signal.SIGKILL)
         shm = widget_entry.get("shm")
@@ -169,12 +180,12 @@ def _kill_widget_process(widget_entry: dict, widget_id: str, reason: str = "") -
                 shm.close()
                 shm.unlink()
             except Exception as e:
-                print(f"Error cleaning up shared memory for widget {widget_id}: {e}")
+                _log.warning("Error cleaning up shared memory for widget %s: %s", widget_id, e)
         widget_entry["process"] = None
         widget_entry["shm"] = None
         widget_entry["launched"] = False
     except Exception as e:
-        print(f"Error killing widget {widget_id} process: {e}")
+        _log.error("Error killing widget %s process: %s", widget_id, e)
 
 
 def kill_widget_if_page_inactive(widget_id: str, get_context) -> None:
@@ -192,8 +203,9 @@ def kill_widget_if_page_inactive(widget_id: str, get_context) -> None:
                     )
                 else:
                     widgets_updated.add(widget_id)
-                    print(
-                        f"Widget {widget_id} update complete, page is active - will restart when suspended"
+                    _log.info(
+                        "widget: %s update complete (active page; restart on suspend)",
+                        widget_id,
                     )
                 return
 
@@ -202,14 +214,14 @@ def download_widget_async(widget_id: str, url: str, md5: str, get_context) -> No
     """Download widget in background; on success call kill_widget_if_page_inactive."""
     def worker():
         try:
-            print(f"Starting background download for widget {widget_id}")
+            _log.info("widget: background download started id=%s", widget_id)
             if download_app(url, md5):
-                print(f"Successfully updated widget {widget_id}")
+                _log.info("widget: background download finished id=%s", widget_id)
                 kill_widget_if_page_inactive(widget_id, get_context)
             else:
-                print(f"Failed to update widget {widget_id}")
+                _log.warning("widget: background download failed id=%s", widget_id)
         except Exception as e:
-            print(f"Error in background download for widget {widget_id}: {e}")
+            _log.error("widget: background download error id=%s: %s", widget_id, e)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -262,9 +274,9 @@ def restart_widget_process(
         widget_entry["shm"] = shm
         widget_entry["launched"] = False
         widget_entry["has_small_widget"] = None
-        print(f"Successfully restarted widget {widget_id}")
+        _log.info("widget: restarted process id=%s pid=%s", widget_id, process.pid)
     except Exception as e:
-        print(f"Error restarting widget {widget_id}: {e}")
+        _log.error("Error restarting widget %s: %s", widget_id, e)
 
 
 def check_page_widget_updates(page: dict, get_context) -> None:
@@ -290,7 +302,7 @@ def check_page_widget_updates(page: dict, get_context) -> None:
                 if url and md5:
                     download_widget_async(widget_id, url, md5, get_context)
         except Exception as e:
-            print(f"Error checking widget version for {widget_id}: {e}")
+            _log.warning("Error checking widget version for %s: %s", widget_id, e)
 
 
 def start_page_process(page: dict) -> dict:
@@ -331,7 +343,7 @@ def start_page_process(page: dict) -> dict:
                     }
                 )
             except Exception as e:
-                print(f"Error starting default widget: {e}")
+                _log.error("Error starting default widget: %s", e)
             continue
         widget_path = os.path.join(os.getcwd(), "apps", widget["id"])
         if not os.path.isdir(widget_path):
@@ -347,9 +359,13 @@ def start_page_process(page: dict) -> dict:
                         if u and m:
                             download_app(u, m)
                 else:
-                    print(f"Failed to get download info for widget {widget['id']}: {response.status_code}")
+                    _log.warning(
+                        "Failed to get download info for widget %s: HTTP %s",
+                        widget["id"],
+                        response.status_code,
+                    )
             except Exception as e:
-                print(f"Error fetching widget download info: {e}")
+                _log.warning("Error fetching widget download info: %s", e)
         if os.path.isdir(widget_path):
             page_uuid = page["uuid"]
             shm_name = f"widget_{page_uuid}_{widget_index}_shm"
@@ -394,7 +410,7 @@ def start_page_process(page: dict) -> dict:
                     }
                 )
             except Exception as e:
-                print(f"Error starting widget {widget['id']}: {e}")
+                _log.error("Error starting widget %s: %s", widget["id"], e)
     if not widgets:
         return None
     img = Image.new("RGB", (128, 160), (0, 0, 0))
@@ -403,7 +419,7 @@ def start_page_process(page: dict) -> dict:
             os.kill(w["process"].pid, signal.SIGSTOP)
             w["launched"] = False
         except Exception as e:
-            print(f"Error pausing widget process: {e}")
+            _log.warning("Error pausing widget process: %s", e)
     return {
         "widgets": widgets,
         "duration": page["duration"],
@@ -454,6 +470,6 @@ def term_widget_processes(pages: list) -> None:
                     shm.unlink()
                 widget.clear()
             except Exception as e:
-                print(f"Error terminating widget: {e}")
+                _log.warning("Error terminating widget: %s", e)
         page.clear()
     pages.clear()

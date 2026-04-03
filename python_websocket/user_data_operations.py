@@ -3,8 +3,9 @@ User data operations module for persistent storage of user information and game 
 Data is stored in /var/lib/dartsnut/user_data.json to survive folder deletion.
 """
 
-import os
 import json
+import logging
+import os
 import time
 from python_websocket.error_handler import (
     ErrorCode,
@@ -16,6 +17,8 @@ from python_websocket.error_handler import (
 PERSISTENT_DATA_DIR = "/var/lib/dartsnut"
 PERSISTENT_DATA_FILE = "/var/lib/dartsnut/user_data.json"
 TEMP_GAME_START_FILE = "/tmp/dartsnut_game_start.json"
+
+_log = logging.getLogger(__name__)
 
 # Default data structure
 DEFAULT_USER_DATA = {
@@ -120,7 +123,7 @@ def reset_user_data_file() -> None:
             }
         )
     except Exception as e:
-        print(f"Error resetting user data file: {e}")
+        _log.error("Error resetting user data file: %s", e)
     try:
         _remove_temp_game_start_file()
     except Exception:

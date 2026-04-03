@@ -1,6 +1,7 @@
-from pathlib import Path
 import json
+import logging
 import os
+from pathlib import Path
 import base64
 import subprocess
 from python_websocket.error_handler import (
@@ -12,6 +13,8 @@ from machine_state_service import get_machine_state_service
 from runtime.remote_sync_port import get_remote_sync
 
 APPS_DIR = "apps"  # Update this to your desired save directory
+
+_log = logging.getLogger(__name__)
 
 
 def _apps_path(*parts):
@@ -93,7 +96,7 @@ def write_json_file(file_path, data):
                 if isinstance(pages, list):
                     svc.set_pages(pages)
         except Exception as e:
-            print(f"Error syncing pages after write_json conf.json: {e}")
+            _log.error("Error syncing pages after write_json conf.json: %s", e)
 
         return {"action": "write_json", "file_path": file_path, "message": "Success"}
     except PermissionError:

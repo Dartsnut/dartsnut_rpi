@@ -319,6 +319,7 @@ def _run_device_reset_sequence() -> None:
         return
     if _is_reset_in_progress():
         return
+    _log.info("device reset: sequence started")
     _set_reset_in_progress(True)
     _network_state_refresh_event.clear()
     try:
@@ -646,6 +647,11 @@ def check_connection_loop():
                     _app_ctx.internet_connected = False
             else:
                 _app_ctx.internet_connected = False
+
+            if previous_wifi != _app_ctx.wifi_connected:
+                _log.info("network: wifi_associated=%s", _app_ctx.wifi_connected)
+            if previous_internet != _app_ctx.internet_connected:
+                _log.info("network: internet_reachable=%s", _app_ctx.internet_connected)
 
             if (
                 not previous_internet

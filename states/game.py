@@ -1,12 +1,16 @@
 """Game states: game select (carousel) and in-game (render from shm)."""
+import logging
 import signal
 import time
+
 from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
 from states.base import BaseState
 import assets
 import runtime.machine_api as machine_api
+
+_log = logging.getLogger(__name__)
 
 
 class GameSelectState(BaseState):
@@ -50,11 +54,13 @@ class GameSelectState(BaseState):
                     if ctx.term_widget_processes and ctx.pages is not None:
                         ctx.term_widget_processes(ctx.pages)
                     ctx.game = game
+                    gid = str(ctx.game_list[ctx.game_index]["id"])
+                    _log.info("game select: starting local game_id=%s", gid)
                     try:
                         if ctx.set_game_status:
-                            ctx.set_game_status(str(ctx.game_list[ctx.game_index]["id"]), "playing")
+                            ctx.set_game_status(gid, "playing")
                     except Exception as e:
-                        print(f"Warning: Failed to set game status to playing: {e}")
+                        _log.warning("Failed to set game status to playing: %s", e)
                     ctx.transition_to(InGameState())
                 else:
                     ctx.reload_conf = True
@@ -98,12 +104,13 @@ class InGameState(BaseState):
             try:
                 machine_api.stop_game_tracking()
             except Exception as e:
-                print(f"Warning: Failed to stop game tracking: {e}")
+                _log.warning("Failed to stop game tracking: %s", e)
             try:
                 if game_id and ctx.set_game_status:
                     ctx.set_game_status(str(game_id), "ready")
             except Exception as e:
-                print(f"Warning: Failed to set game status to ready: {e}")
+                _log.warning("Failed to set game status to ready: %s", e)
+            _log.info("in_game: game process exited game_id=%s", game_id)
             ctx.reload_conf = True
             return
         if self._showing_pause_overlay:
@@ -148,7 +155,7 @@ class InGameState(BaseState):
                         game["pico8_first_frame_seen"] = True
                     game["pico8_prev_buf0"] = 1
                 except Exception as e:
-                    print(f"Error rendering pico8 frame: {e}")
+                    _log.warning("Error rendering pico8 frame: %s", e)
                     ctx.display.update_frame_buffer(assets.create_loading_image())
             else:
                 game["pico8_prev_buf0"] = 1
@@ -192,7 +199,8 @@ class InGameState(BaseState):
                     if game_id and ctx.set_game_status:
                         ctx.set_game_status(str(game_id), "ready")
                 except Exception as e:
-                    print(f"Warning: Failed to set game status to ready: {e}")
+                    _log.warning("Failed to set game status to ready: %s", e)
+                _log.info("in_game: user ended game from overlay game_id=%s", game_id)
                 self._showing_pause_overlay = False
                 self._resume_on_a_release = False
                 ctx.transition_to(MenuState())

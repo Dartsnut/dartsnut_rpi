@@ -1,15 +1,20 @@
+import asyncio
+import json
+import logging
+
+import uvicorn
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+
 from python_websocket.error_handler import (
     handle_exception,
 )
-from fastapi import FastAPI, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-import asyncio
-import json
-import uvicorn
 from runtime.machine_result import to_websocket_payload
 from runtime.websocket_actions import handle_action_message
 from runtime.websocket_ports import WebsocketEndpointConfig, WebsocketServiceRegistry
 from runtime.websocket_service_registry import build_default_websocket_registry
+
+_log = logging.getLogger(__name__)
 
 app = FastAPI()
 _service_registry: WebsocketServiceRegistry = build_default_websocket_registry()
@@ -49,7 +54,7 @@ async def websocket_endpoint(websocket: WebSocket):
     async def send_response(req_id, data):
         response = dict(to_websocket_payload(data))
         response["req_id"] = req_id
-        print("response: ", response)
+        _log.debug("websocket response: %s", response)
         await websocket.send_text(json.dumps(response))
 
     try:
@@ -69,7 +74,7 @@ async def websocket_endpoint(websocket: WebSocket):
             message = payload
             action = message.get("action")
             req_id = message.get("req_id")
-            print("action: ", action)
+            _log.debug("websocket action: %s", action)
 
             try:
                 await handle_action_message(
@@ -81,7 +86,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
 
             except Exception as e:
-                print(f"error: {e}")
+                _log.warning("websocket action %s failed: %s", action, e)
                 try:
                     error_response = handle_exception(action or "unknown", e, "An unexpected error occurred")
                     error_response["req_id"] = req_id
@@ -121,4 +126,10 @@ def start_websocket_server(
         set_volume=set_volume,
         trigger_dim_check=trigger_dim_check,
     )
-    uvicorn.run(app, host="0.0.0.0", port=9251)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=9251,
+        log_level="warning",
+        access_log=False,
+    )

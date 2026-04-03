@@ -1,6 +1,7 @@
 from base64 import b64encode, b64decode
-import os
 import json
+import logging
+import os
 import shutil
 import hashlib
 import requests
@@ -15,6 +16,8 @@ from python_websocket.error_handler import (
 )
 
 from machine_state_service import get_machine_state_service
+
+_log = logging.getLogger(__name__)
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 DOWNLOAD_DIR = "downloads"
@@ -193,7 +196,7 @@ def receive_file(websocket, data):
                 if isinstance(pages, list):
                     svc.set_pages(pages)
         except Exception as e:
-            print(f"Error syncing pages after conf.json upload: {e}")
+            _log.error("Error syncing pages after conf.json upload: %s", e)
 
         return {"action": "send_file", "file_name": file_name, "message": "Success"}
     except PermissionError:

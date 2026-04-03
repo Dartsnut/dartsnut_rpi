@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Callable
 
 from python_websocket.error_handler import ErrorCode, create_error_response, handle_exception
 from runtime.machine_result import MachineResult
 from runtime.websocket_ports import WebsocketEndpointConfig
+
+_log = logging.getLogger(__name__)
 
 
 def ok(action: str, **fields: Any) -> MachineResult:
@@ -94,6 +97,7 @@ async def locate_device_service(*, endpoint_config: WebsocketEndpointConfig) -> 
 async def reload_conf_service(*, endpoint_config: WebsocketEndpointConfig) -> MachineResult:
     if endpoint_config.reload_config:
         await asyncio.to_thread(endpoint_config.reload_config)
+        _log.info("reload_conf: widget/apps configuration reloaded from disk")
     return ok("reload_conf", message="Success")
 
 
@@ -105,8 +109,10 @@ async def start_game_service(
     if not endpoint_config.start_game_process:
         return error("start_game", ErrorCode.FUNCTION_NOT_AVAILABLE, "This feature is not available")
     try:
-        started = await asyncio.to_thread(endpoint_config.start_game_process, message.get("game_id"))
+        game_id = message.get("game_id")
+        started = await asyncio.to_thread(endpoint_config.start_game_process, game_id)
         if started:
+            _log.info("start_game: WebSocket accepted game_id=%s (main loop will launch)", game_id)
             return ok("start_game", message="Game started")
         return error("start_game", ErrorCode.COMMAND_FAILED, "Unable to start the game")
     except Exception as exc:  # pragma: no cover - defensive boundary

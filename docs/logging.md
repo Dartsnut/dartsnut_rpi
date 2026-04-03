@@ -23,7 +23,11 @@ journalctl -u dartsnut_python.service -f
 
 ### Log level (optional)
 
-The service reads **`DARTSNUT_LOG_LEVEL`** (default **`INFO`**). Set it in a systemd drop-in or the unit file, for example `DEBUG` for more verbose output. Invalid values fall back to `INFO`.
+The service reads **`DARTSNUT_LOG_LEVEL`** (default **`INFO`**). Set it in a systemd drop-in or the unit file, for example `DEBUG` for more verbose output (includes WebSocket action/response traces). Invalid values fall back to `INFO`.
+
+Framework noise is capped by default: **uvicorn** / **FastAPI** log at WARNING so you do not get server startup banners on every boot; **bluezero** avoids duplicate lines by routing BLE logs through the root handler only.
+
+At **INFO**, expect lines for: UI state changes (`domain.app_context` → `ui state: old -> new`), network Wi‑Fi/internet transitions, Supabase bridge connect/disconnect, remote config snapshots, game/widget lifecycle, BLE connect/disconnect, dim-window enter/exit, and machine-state persistence. Use **DEBUG** for BLE UART payloads and WebSocket request/response dumps.
 
 ## Automatic git update check (cron)
 

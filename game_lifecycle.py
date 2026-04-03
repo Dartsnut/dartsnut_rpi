@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import logging
 import os
 import signal
 from multiprocessing import shared_memory
@@ -17,6 +18,8 @@ from python_websocket.user_data_operations import (
 from widget_lifecycle import download_app
 import assets
 from PIL import Image
+
+_log = logging.getLogger(__name__)
 
 
 def get_local_game_version(gameid: str) -> str:
@@ -56,9 +59,11 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         local_version = get_local_game_version(gameid)
         if local_version == expected_version:
             return True
-        print(
-            f"Game {gameid} local version {local_version or '(empty)'} does not match target "
-            f"{expected_version}; downloading update"
+        _log.info(
+            "Game %s local version %s != target %s; downloading update",
+            gameid,
+            local_version or "(empty)",
+            expected_version,
         )
     try:
         response = requests.get(
@@ -72,9 +77,13 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                 if u and m:
                     download_app(u, m)
         else:
-            print(f"Failed to get download info for game {gameid}: {response.status_code}")
+            _log.warning(
+                "Failed to get download info for game %s: HTTP %s",
+                gameid,
+                response.status_code,
+            )
     except Exception as e:
-        print(f"Error fetching game download info: {e}")
+        _log.warning("Error fetching game download info: %s", e)
     if expected_version:
         return get_local_game_version(gameid) == expected_version
     return os.path.isdir(game_path)
@@ -115,7 +124,12 @@ def start_game_process(gameid: str) -> dict:
         try:
             start_game_tracking(gameid)
         except Exception as e:
-            print(f"Warning: Failed to start game tracking: {e}")
+            _log.warning("Failed to start game tracking: %s", e)
+        _log.info(
+            "game process started game_id=%s pid=%s",
+            gameid,
+            getattr(process, "pid", None),
+        )
         return {
             "process": process,
             "shm": shm,
@@ -124,7 +138,7 @@ def start_game_process(gameid: str) -> dict:
             "pico8_first_frame_seen": False,
         }
     except Exception as e:
-        print(f"Error starting game {gameid}: {e}")
+        _log.error("Error starting game %s: %s", gameid, e)
         return None
 
 
@@ -136,7 +150,7 @@ def term_game_process(g: dict) -> None:
         try:
             stop_game_tracking()
         except Exception as e:
-            print(f"Warning: Failed to stop game tracking: {e}")
+            _log.warning("Failed to stop game tracking: %s", e)
         if g.get("process") and g["process"].poll() is None:
             os.kill(g["process"].pid, signal.SIGCONT)
             os.kill(g["process"].pid, signal.SIGKILL)
@@ -145,7 +159,7 @@ def term_game_process(g: dict) -> None:
             g["shm"].unlink()
         g.clear()
     except Exception as e:
-        print(f"Error terminating game: {e}")
+        _log.error("Error terminating game: %s", e)
     return None
 
 
@@ -185,7 +199,7 @@ def load_game_list() -> list:
                 conf["preview"] = images
             game_list.append(conf)
         except Exception as e:
-            print(f"Error loading game config for {name}: {e}")
+            _log.warning("Error loading game config for %s: %s", name, e)
     return game_list
 
 

@@ -1,7 +1,8 @@
-import subprocess
-import re
 import json
+import logging
 import os
+import re
+import subprocess
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -9,6 +10,8 @@ from python_websocket.error_handler import (
     create_error_response
 )
 from machine_state_service import get_machine_state_service
+
+_log = logging.getLogger(__name__)
 
 
 def _device_info_path() -> str:
@@ -54,7 +57,7 @@ def forget_wifi():
         subprocess.run(["nmcli", "radio", "wifi", "off"], check=False)
         subprocess.run(["nmcli", "radio", "wifi", "on"], check=False)
     except Exception as e:
-        print(f"Error forgetting wifi: {e}")
+        _log.warning("Error forgetting wifi: %s", e)
 
 def reboot():
     subprocess.run(["sudo", "reboot"])

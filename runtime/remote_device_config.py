@@ -6,6 +6,7 @@ Extracted from main for testing and to keep the composition root thinner.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ from domain.game_remote_sync import (
     are_remote_playing_games_cleared,
     handle_incoming_game_status,
 )
+
+_log = logging.getLogger(__name__)
 
 
 def parse_iso_ts(value: Any) -> Optional[datetime]:
@@ -125,6 +128,16 @@ class RemoteDeviceConfigApplier:
         if not isinstance(config, dict):
             return
 
+        _log.info(
+            "remote config: apply snapshot source=%s pages=%s games=%s firmware_update=%s",
+            str(config.get("last_update_source", "") or "").strip() or "?",
+            isinstance(config.get("pages"), list),
+            isinstance(config.get("games"), list),
+            bool((config.get("firmware") or {}).get("update"))
+            if isinstance(config.get("firmware"), dict)
+            else False,
+        )
+
         deps = self._deps
         rt = self._runtime
         ctx = deps.app_ctx
@@ -163,12 +176,13 @@ class RemoteDeviceConfigApplier:
             and str(config.get("last_update_source", "")).strip().lower() == "supabase_bridge"
         ):
             if debug_reset_gate:
-                print(
-                    "[reset-gate] pending snapshot without games; "
-                    f"source={str(config.get('last_update_source', ''))!r} "
-                    f"cfg_ts={config.get('device_updated_at') or config.get('updated_at')!r} "
-                    f"baseline_ts={rt.startup_games_reset_requested_at!r} "
-                    f"awaiting={rt.awaiting_games_ready_confirmation}"
+                _log.debug(
+                    "[reset-gate] pending snapshot without games; source=%r cfg_ts=%r "
+                    "baseline_ts=%r awaiting=%s",
+                    str(config.get("last_update_source", "")),
+                    config.get("device_updated_at") or config.get("updated_at"),
+                    rt.startup_games_reset_requested_at,
+                    rt.awaiting_games_ready_confirmation,
                 )
             # Bridge-originated snapshots may omit `games`; do not auto-confirm reset.
             # Keep waiting for explicit games-state confirmation and periodically
@@ -191,7 +205,7 @@ class RemoteDeviceConfigApplier:
                 service.set_pages(pages, reload_pages=False)
                 ctx.reload_pages = True
         except Exception as e:
-            print(f"Error applying remote pages config: {e}")
+            _log.error("Error applying remote pages config: %s", e)
 
         try:
             bluetooth_cfg = config.get("bluetooth")
@@ -204,7 +218,7 @@ class RemoteDeviceConfigApplier:
                         connect_address.strip()
                     )
         except Exception as e:
-            print(f"Error handling remote bluetooth config: {e}")
+            _log.warning("Error handling remote bluetooth config: %s", e)
 
         try:
             if "brightness" in config or "Brightness" in config:
@@ -273,25 +287,27 @@ class RemoteDeviceConfigApplier:
                                         str(g.get("version") or ""),
                                     )
                                 )
-                        print(
-                            "[reset-gate] evaluate "
-                            f"source={str(config.get('last_update_source', ''))!r} "
-                            f"cfg_ts={config.get('device_updated_at') or config.get('updated_at')!r} "
-                            f"parsed_cfg_ts={cfg_ts!r} "
-                            f"baseline_ts={baseline_ts!r} "
-                            f"stable_games={stable_games} "
-                            f"has_newer_ts={has_newer_ts} "
-                            f"awaiting={rt.awaiting_games_ready_confirmation} "
-                            f"startup_filter_playing_until_newer_update={rt.startup_filter_playing_until_newer_update} "
-                            f"games={game_states}"
+                        _log.debug(
+                            "[reset-gate] evaluate source=%r cfg_ts=%r parsed_cfg_ts=%r "
+                            "baseline_ts=%r stable_games=%s has_newer_ts=%s awaiting=%s "
+                            "startup_filter_playing_until_newer_update=%s games=%s",
+                            str(config.get("last_update_source", "")),
+                            config.get("device_updated_at") or config.get("updated_at"),
+                            cfg_ts,
+                            baseline_ts,
+                            stable_games,
+                            has_newer_ts,
+                            rt.awaiting_games_ready_confirmation,
+                            rt.startup_filter_playing_until_newer_update,
+                            game_states,
                         )
                     if stable_games and has_newer_ts:
                         rt.awaiting_games_ready_confirmation = False
                         rt.startup_games_ready_confirmed_at = cfg_ts
                         rt.startup_filter_playing_until_newer_update = True
                         confirmed_in_this_call = True
-                        print(
-                            "Remote game reset confirmed; enabling game command handling"
+                        _log.info(
+                            "remote config: startup game reset confirmed; enabling remote game commands"
                         )
                         # Defer normal game command handling to the next inbound snapshot.
                         return
@@ -345,8 +361,11 @@ class RemoteDeviceConfigApplier:
                         try:
                             deps.request_set_game_status(gid, next_status)
                         except Exception as e:
-                            print(
-                                f"Error updating remote game status to {next_status} for {gid}: {e}"
+                            _log.warning(
+                                "Error updating remote game status to %s for %s: %s",
+                                next_status,
+                                gid,
+                                e,
                             )
 
                     def _request_launch(gid: str) -> None:
@@ -382,7 +401,7 @@ class RemoteDeviceConfigApplier:
                     if status == "playing":
                         break
         except Exception as e:
-            print(f"Error applying remote device config: {e}")
+            _log.error("Error applying remote device config: %s", e)
 
         try:
             if rt.startup_firmware_version:
@@ -395,16 +414,16 @@ class RemoteDeviceConfigApplier:
                 try:
                     deps.publish_partial_state(payload)
                 except Exception as e:
-                    print(f"Error notifying remote sync of startup firmware version: {e}")
+                    _log.warning("Error notifying remote sync of startup firmware version: %s", e)
 
                 try:
                     service.set_firmware_info(rt.startup_firmware_version, False)
                 except Exception as e:
-                    print(f"Error persisting startup firmware info locally: {e}")
+                    _log.warning("Error persisting startup firmware info locally: %s", e)
 
                 rt.startup_firmware_version = None
         except Exception as e:
-            print(f"Error handling startup firmware version publish: {e}")
+            _log.warning("Error handling startup firmware version publish: %s", e)
 
         try:
             firmware_cfg = config.get("firmware") or {}
@@ -415,6 +434,7 @@ class RemoteDeviceConfigApplier:
             if rt.firmware_update_in_progress:
                 return
             rt.firmware_update_in_progress = True
+            _log.info("remote config: firmware update (git) starting")
 
             update_result = deps.perform_update()
             if isinstance(update_result, dict) and not update_result.get("error"):
@@ -428,7 +448,7 @@ class RemoteDeviceConfigApplier:
                     ):
                         new_version = str(version_result.get("version"))
                 except Exception as e:
-                    print(f"Error determining firmware version after update: {e}")
+                    _log.warning("Error determining firmware version after update: %s", e)
 
                 payload = {
                     "firmware": {
@@ -439,15 +459,18 @@ class RemoteDeviceConfigApplier:
                 try:
                     deps.publish_partial_state(payload)
                 except Exception as e:
-                    print(f"Error notifying remote sync of firmware update completion: {e}")
+                    _log.warning("Error notifying remote sync of firmware update completion: %s", e)
 
                 try:
                     service.set_firmware_info(new_version, False)
                 except Exception as e:
-                    print(f"Error persisting firmware info locally after update: {e}")
+                    _log.warning("Error persisting firmware info locally after update: %s", e)
             else:
-                print(f"Firmware update requested via remote sync but perform_update failed: {update_result}")
+                _log.error(
+                    "Firmware update requested via remote sync but perform_update failed: %s",
+                    update_result,
+                )
         except Exception as e:
-            print(f"Error handling remote firmware update config: {e}")
+            _log.error("Error handling remote firmware update config: %s", e)
         finally:
             rt.firmware_update_in_progress = False
