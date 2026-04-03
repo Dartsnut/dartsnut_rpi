@@ -104,6 +104,35 @@ def test_load_game_list_decodes_preview_and_get_games_summary(monkeypatch, tmp_p
     assert summary == [{"id": "chess", "version": "1.2.0", "status": "ready"}]
 
 
+def test_load_game_list_bad_preview_still_includes_game_and_summary(monkeypatch, tmp_path):
+    """Corrupt base64 in preview must not drop the game from list or sync summary."""
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "dart_checker"
+    app_dir.mkdir(parents=True)
+    (app_dir / "conf.json").write_text(
+        json.dumps(
+            {
+                "id": "dart_checker",
+                "name": "Dart Checker",
+                "type": "game",
+                "version": "2.0.0",
+                "preview": ["!!!not-valid-base64!!!"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    game_list = gl.load_game_list()
+    summary = gl.get_games_summary()
+
+    assert len(game_list) == 1
+    assert game_list[0]["id"] == "dart_checker"
+    assert game_list[0]["version"] == "2.0.0"
+    assert isinstance(game_list[0]["preview"][0], bytearray)
+    assert len(game_list[0]["preview"][0]) == 128 * 160 * 3
+    assert summary == [{"id": "dart_checker", "version": "2.0.0", "status": "ready"}]
+
+
 def test_get_local_game_version_returns_empty_on_invalid_json(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "broken"

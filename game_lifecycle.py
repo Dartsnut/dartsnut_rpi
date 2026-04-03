@@ -22,6 +22,43 @@ from PIL import Image
 _log = logging.getLogger(__name__)
 
 
+def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
+    """
+    Decode base64-encoded preview images into RGB buffers for the game picker.
+
+    Malformed or corrupt frames are skipped so a bad ``preview`` field does not
+    exclude the game from ``load_game_list()`` / ``get_games_summary()``.
+    """
+    images: list = []
+    if not isinstance(preview_raw, list):
+        _log.warning(
+            "Invalid preview for %s (expected list, got %s); using blank frame",
+            game_label,
+            type(preview_raw).__name__,
+        )
+    else:
+        for img_b64 in preview_raw:
+            try:
+                if not isinstance(img_b64, str):
+                    continue
+                chunk = img_b64.strip().replace("\n", "").replace("\r", "")
+                pad = (-len(chunk)) % 4
+                if pad:
+                    chunk += "=" * pad
+                img_data = base64.b64decode(chunk, validate=False)
+                img = Image.open(io.BytesIO(img_data))
+                img = img.convert("RGB").resize((128, 128), Image.LANCZOS)
+                image = Image.new("RGB", (128, 160), (0, 0, 0))
+                image.paste(img, (0, 0))
+                images.append(bytearray(image.tobytes()))
+            except Exception as e:
+                _log.warning("Skipping bad preview frame for %s: %s", game_label, e)
+    if not images:
+        blank = Image.new("RGB", (128, 160), (0, 0, 0))
+        return [bytearray(blank.tobytes())]
+    return images
+
+
 def get_local_game_version(gameid: str) -> str:
     """Read local game version from ./apps/<gameid>/conf.json."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
@@ -188,15 +225,7 @@ def load_game_list() -> list:
             # downloading) can be layered on top where appropriate.
             conf.setdefault("status", "ready")
             if "preview" in conf:
-                images = []
-                for img_b64 in conf["preview"]:
-                    img_data = base64.b64decode(img_b64)
-                    img = Image.open(io.BytesIO(img_data))
-                    img = img.convert("RGB").resize((128, 128), Image.LANCZOS)
-                    image = Image.new("RGB", (128, 160), (0, 0, 0))
-                    image.paste(img, (0, 0))
-                    images.append(bytearray(image.tobytes()))
-                conf["preview"] = images
+                conf["preview"] = _decode_game_preview_frames(conf.get("preview"), name)
             game_list.append(conf)
         except Exception as e:
             _log.warning("Error loading game config for %s: %s", name, e)
