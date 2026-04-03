@@ -20,6 +20,15 @@ def test_settings_rssi_and_level_mappings():
     assert ssettings._volume_level_to_raw(99) == 100
 
 
+def test_brightness_level_mapping_uses_444f_values():
+    di_444f = {"hardware_version": "444f"}
+    di_444e = {"hardware_version": "444e"}
+
+    assert ssettings._brightness_level_to_raw_for_device(2, di_444f) == 21
+    assert ssettings._brightness_level_to_raw_for_device(2, di_444e) == 20
+    assert ssettings._brightness_raw_to_level_for_device(42, di_444f) == 4
+
+
 def test_menu_firmware_flag_helpers(monkeypatch):
     removed = []
     monkeypatch.setattr(smenu.os.path, "isfile", lambda _p: True)

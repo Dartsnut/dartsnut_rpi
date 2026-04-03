@@ -21,6 +21,62 @@ def _apps_path(*parts):
     return os.path.join(os.getcwd(), APPS_DIR, *parts)
 
 
+def _hardware_cache_path():
+    return os.path.join(os.getcwd(), ".hardware_version.json")
+
+
+def _extract_pixeldarts_pid(lsusb_output):
+    for line in (lsusb_output or "").splitlines():
+        if "PIXELDARTS" not in line.upper():
+            continue
+        parts = line.split("ID ", 1)
+        if len(parts) != 2:
+            continue
+        vendor_product = parts[1].split(None, 1)[0]
+        if ":" not in vendor_product:
+            continue
+        _, pid = vendor_product.split(":", 1)
+        pid = pid.strip().lower()
+        if pid:
+            return pid
+    return ""
+
+
+def _read_cached_hardware_version():
+    try:
+        with open(_hardware_cache_path(), "r", encoding="utf-8") as file:
+            payload = json.load(file)
+        if not isinstance(payload, dict):
+            return ""
+        value = str(payload.get("hardware_version", "")).strip().lower()
+        return value
+    except Exception:
+        return ""
+
+
+def _write_cached_hardware_version(version):
+    try:
+        with open(_hardware_cache_path(), "w", encoding="utf-8") as file:
+            json.dump({"hardware_version": version}, file)
+    except Exception as e:
+        _log.debug("Failed to persist hardware cache: %s", e)
+
+
+def _get_hardware_version():
+    cached = _read_cached_hardware_version()
+    if cached:
+        return cached
+    try:
+        output = subprocess.check_output(["lsusb"]).decode("utf-8", errors="ignore")
+        version = _extract_pixeldarts_pid(output)
+        if version:
+            _write_cached_hardware_version(version)
+            return version
+    except Exception:
+        pass
+    return ""
+
+
 def _normalize_relative_path(path_value):
     if os.path.isabs(path_value):
         return path_value.lstrip("/")
@@ -152,6 +208,9 @@ def get_device_info():
         device_info["supabase_connected"] = connected
         # Backward compatibility for older clients.
         device_info["remote_connected"] = connected
+        hardware_version = _get_hardware_version()
+        if hardware_version:
+            device_info["hardware_version"] = hardware_version
 
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:
