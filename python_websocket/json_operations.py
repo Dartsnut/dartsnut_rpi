@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import base64
+import re
 import subprocess
 from python_websocket.error_handler import (
     ErrorCode,
@@ -11,6 +12,66 @@ from python_websocket.error_handler import (
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 HOME_DIR = ""
+
+
+def _hardware_cache_path():
+    return os.path.join(os.getcwd(), ".hardware_version.json")
+
+
+def _extract_pixeldarts_pid(lsusb_output):
+    for line in (lsusb_output or "").splitlines():
+        # Accept extra spacing before product name, e.g. " ... ID 2d80:444e  PIXELDARTS".
+        match = re.search(
+            r"\bID\s+[0-9a-fA-F]{4}:([0-9a-fA-F]{4})\b.*\bPIXELDARTS\b",
+            line.strip(),
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).lower()
+    return ""
+
+
+def _read_cached_hardware_version():
+    try:
+        with open(_hardware_cache_path(), "r", encoding="utf-8") as file:
+            payload = json.load(file)
+        if not isinstance(payload, dict):
+            return ""
+        return str(payload.get("hardware_version", "")).strip().lower()
+    except Exception:
+        return ""
+
+
+def _write_cached_hardware_version(version):
+    try:
+        with open(_hardware_cache_path(), "w", encoding="utf-8") as file:
+            json.dump({"hardware_version": version}, file)
+    except Exception:
+        pass
+
+
+def _get_hardware_version():
+    cached = _read_cached_hardware_version()
+    if cached:
+        return cached
+    try:
+        output = subprocess.check_output(["lsusb"]).decode("utf-8", errors="ignore")
+        version = _extract_pixeldarts_pid(output)
+        if version:
+            _write_cached_hardware_version(version)
+            return version
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_pixeldarts_hardware_version():
+    """Read cache or run lsusb once; persist to .hardware_version.json on success.
+
+    Safe to call from websocket, main loop, or settings — shared cache avoids
+    repeated lsusb.
+    """
+    return _get_hardware_version()
 
 
 def read_json_file(file_path):
@@ -110,6 +171,9 @@ def get_device_info():
         except Exception as e:
             ssid = ""
         device_info["ssid"] = ssid
+        hardware_version = resolve_pixeldarts_hardware_version()
+        if hardware_version:
+            device_info["hardware_version"] = hardware_version
 
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:

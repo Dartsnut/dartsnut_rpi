@@ -38,6 +38,7 @@ from pydartsnut import Dartsnut
 from python_ble.ble_server import start_ble_server
 from python_websocket.websocket_server import start_websocket_server
 from python_websocket.device_operations import _parse_hhmm, forget_wifi
+from python_websocket.json_operations import resolve_pixeldarts_hardware_version
 
 import assets
 from app_context import AppContext
@@ -134,7 +135,15 @@ def get_device_info():
             with open(file_path, "r") as file:
                 get_device_info._cached_device_info = json.load(file)
             get_device_info._last_mtime = current_mtime
-        return get_device_info._cached_device_info
+        base = get_device_info._cached_device_info
+        if not isinstance(base, dict):
+            return {}
+        hw = resolve_pixeldarts_hardware_version()
+        if hw:
+            merged = dict(base)
+            merged["hardware_version"] = hw
+            return merged
+        return base
     except Exception:
         return {}
 
