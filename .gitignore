@@ -15,6 +15,7 @@ downloads/
 
 # Ignore device.json file
 device.json
+.hardware_version.json
 
 .DS_Store
 .cursor/
