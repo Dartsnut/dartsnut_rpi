@@ -100,6 +100,9 @@ if [ -d "${SERVICES_DIR}" ]; then
     if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
         sudo systemctl daemon-reload
     fi
+
+    # Ensure splash service remains enabled on regular updates too.
+    sudo systemctl enable dartsnut_splash.service
 else
     echo "Warning: services directory not found at ${SERVICES_DIR}; skipping early-boot splash update."
 fi

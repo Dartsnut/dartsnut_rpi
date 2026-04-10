@@ -178,7 +178,7 @@ fi
 
 sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
-sudo systemctl enable dartsnut_splash.service 2>/dev/null || true
+sudo systemctl enable dartsnut_splash.service
 
 echo "Service setup steps complete."
 
