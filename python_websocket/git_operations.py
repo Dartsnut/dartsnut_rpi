@@ -73,39 +73,20 @@ def perform_update():
             check=True,
         )
 
-        # Check if setup.sh has changed
-        diff_result = subprocess.run(
-            ["git", "diff", "--name-only", old_commit, "HEAD", "--", "setup.sh"],
-            cwd="/home/rpi/dartsnut_rpi",
-            stdout=subprocess.PIPE,
-            text=True,
+        # Always run update.sh for git-based updates.
+        # setup.sh is reserved for first-time machine provisioning.
+        subprocess.run(
+            ["sudo", "./update.sh"], cwd="/home/rpi/dartsnut_rpi", check=True
         )
 
-        if "setup.sh" in diff_result.stdout:
-            subprocess.run(
-                ["sudo", "./setup.sh"], cwd="/home/rpi/dartsnut_rpi", check=True
-            )
-            # Create flag file to indicate successful update
-            flag_path = "/tmp/firmware_updated.flag"
-            try:
-                with open(flag_path, "w") as f:
-                    f.write("")
-            except Exception:
-                pass  # Ignore errors creating flag file
-            return {"action": "perform_update", "message": "Update successful"}
-        else:
-            # Run update.sh to update dependencies and restart service
-            subprocess.run(
-                ["sudo", "./update.sh"], cwd="/home/rpi/dartsnut_rpi", check=True
-            )
-            # Create flag file to indicate successful update
-            flag_path = "/tmp/firmware_updated.flag"
-            try:
-                with open(flag_path, "w") as f:
-                    f.write("")
-            except Exception:
-                pass  # Ignore errors creating flag file
-            return {"action": "perform_update", "message": "Update successful"}
+        # Create flag file to indicate successful update
+        flag_path = "/tmp/firmware_updated.flag"
+        try:
+            with open(flag_path, "w") as f:
+                f.write("")
+        except Exception:
+            pass  # Ignore errors creating flag file
+        return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
         # Rollback to old commit
         try:

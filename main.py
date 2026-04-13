@@ -14,11 +14,11 @@ import glob
 import urllib.request
 from datetime import datetime, time as dt_time
 
-# Start the RGB matrix explicitly when the Python service starts.
-# We keep `dartsnut_matrix.service` from auto-starting at boot so the
-# splash can appear as early as possible, and then `Conflicts=` will
-# stop the splash as soon as the matrix is up.
-subprocess.run(["systemctl", "start", "dartsnut_matrix.service"], check=False)
+# Optional legacy startup path: Python can still start matrix service explicitly.
+# Default is disabled so matrix ownership/timing lives in systemd boot sequence.
+_start_matrix_on_python_start = os.getenv("DARTSNUT_START_MATRIX_ON_PYTHON_START", "0").strip().lower()
+if _start_matrix_on_python_start in ("1", "true", "yes", "on"):
+    subprocess.run(["systemctl", "start", "dartsnut_matrix.service"], check=False)
 
 # Wait briefly for the matrix to initialize its shared memory.
 # `Dartsnut()` will exit if shared memory isn't available.
