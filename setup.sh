@@ -26,17 +26,10 @@ install_or_update_service_unit() {
     fi
 }
 
-install_splash_assets_if_present() {
+install_boot_assets_if_present() {
     if [ ! -d "${SERVICES_DIR}" ]; then
-        echo "Warning: services directory not found at ${SERVICES_DIR}; skipping early-boot splash setup."
+        echo "Warning: services directory not found at ${SERVICES_DIR}; skipping boot logo setup."
         return 0
-    fi
-
-    if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
-        echo "Installing splash_matrix to /usr/local/bin/splash_matrix"
-        sudo install -m 0755 "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix
-    else
-        echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary install."
     fi
 
     local splash_dest_ppm="/boot/logo.ppm"
@@ -73,6 +66,15 @@ install_splash_assets_if_present() {
     else
         echo "device.json already present at ${device_json_dest}"
     fi
+}
+
+cleanup_legacy_splash_service() {
+    echo "Cleaning up legacy splash service/binary"
+    sudo systemctl disable dartsnut_splash.service >/dev/null 2>&1 || true
+    sudo systemctl stop dartsnut_splash.service >/dev/null 2>&1 || true
+    sudo rm -f /etc/systemd/system/dartsnut_splash.service
+    sudo rm -f /etc/systemd/system/sysinit.target.wants/dartsnut_splash.service
+    sudo rm -f /usr/local/bin/splash_matrix
 }
 
 echo "== Boot configuration (Bookworm) =="
@@ -159,26 +161,26 @@ sudo udevadm trigger
 sudo sed -i 's/^#ReverseServiceDiscovery = true/ReverseServiceDiscovery = false/' /etc/bluetooth/main.conf
 echo "Updated ReverseServiceDiscovery in /etc/bluetooth/main.conf"
 
-echo "== Services and splash assets =="
+echo "== Services and boot assets =="
 
 if [ ! -d "${SERVICES_DIR}" ]; then
     echo "Error: services directory not found at ${SERVICES_DIR}; cannot install systemd units."
     exit 1
 fi
 
-install_splash_assets_if_present
+install_boot_assets_if_present
 
 install_or_update_service_unit "dartsnut_matrix.service"
 install_or_update_service_unit "dartsnut_python.service"
-install_or_update_service_unit "dartsnut_splash.service"
 
 if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
     sudo systemctl daemon-reload
 fi
 
+cleanup_legacy_splash_service
+sudo systemctl daemon-reload
 sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
-sudo systemctl enable dartsnut_splash.service
 
 echo "Service setup steps complete."
 

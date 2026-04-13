@@ -26,6 +26,15 @@ install_or_update_service_unit() {
     fi
 }
 
+cleanup_legacy_splash_service() {
+    echo "Cleaning up legacy splash service/binary"
+    sudo systemctl disable dartsnut_splash.service >/dev/null 2>&1 || true
+    sudo systemctl stop dartsnut_splash.service >/dev/null 2>&1 || true
+    sudo rm -f /etc/systemd/system/dartsnut_splash.service
+    sudo rm -f /etc/systemd/system/sysinit.target.wants/dartsnut_splash.service
+    sudo rm -f /usr/local/bin/splash_matrix
+}
+
 echo "== Boot configuration (Bookworm) =="
 
 if ! grep -q "^disable_splash=1" /boot/firmware/config.txt; then
@@ -49,19 +58,11 @@ else
     echo "quiet already present in /boot/firmware/cmdline.txt"
 fi
 
-echo "== Services and splash assets =="
+echo "== Services and boot assets =="
 
 if [ -d "${SERVICES_DIR}" ]; then
     install_or_update_service_unit "dartsnut_matrix.service"
     install_or_update_service_unit "dartsnut_python.service"
-    install_or_update_service_unit "dartsnut_splash.service"
-
-    if [ -f "${SERVICES_DIR}/splash_matrix" ]; then
-        echo "Updating splash_matrix at /usr/local/bin/splash_matrix"
-        sudo install -m 0755 "${SERVICES_DIR}/splash_matrix" /usr/local/bin/splash_matrix
-    else
-        echo "Warning: splash_matrix not found in ${SERVICES_DIR}; skipping binary update."
-    fi
 
     SPLASH_DEST_PPM="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
@@ -101,10 +102,11 @@ if [ -d "${SERVICES_DIR}" ]; then
         sudo systemctl daemon-reload
     fi
 
-    # Ensure splash service remains enabled on regular updates too.
-    sudo systemctl enable dartsnut_splash.service
+    cleanup_legacy_splash_service
+    sudo systemctl daemon-reload
+    sudo systemctl enable dartsnut_matrix.service
 else
-    echo "Warning: services directory not found at ${SERVICES_DIR}; skipping early-boot splash update."
+    echo "Warning: services directory not found at ${SERVICES_DIR}; skipping boot asset update."
 fi
 
 echo "== Python deps refresh =="
