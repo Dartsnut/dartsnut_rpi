@@ -42,7 +42,6 @@ install_if_changed() {
         echo "${name} already up to date, skipping."
     fi
 }
-
 cleanup_legacy_splash_service() {
     echo "Cleaning up legacy splash service/binary"
     sudo systemctl disable dartsnut_splash.service >/dev/null 2>&1 || true
