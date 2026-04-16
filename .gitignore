@@ -19,3 +19,5 @@ device.json
 
 .DS_Store
 .cursor/
+
+*.swp
