@@ -147,7 +147,7 @@ fn send_msg(writer: &Arc<Mutex<UnixStream>>, kind: &str, payload: Value) -> Resu
 }
 
 fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bool) -> Result<()> {
-    let patch_obj = match patch {
+    let mut patch_obj = match patch {
         Value::Object(obj) => obj,
         other => {
             let mut obj = serde_json::Map::new();
@@ -155,6 +155,9 @@ fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bo
             obj
         }
     };
+    if !full {
+        merge_games_patch_with_remote_state(client, cfg, &mut patch_obj);
+    }
     let url = format!("{}/rest/v1/rpc/apply_remote_device_patch", cfg.url.trim_end_matches('/'));
     client
         .post(url)
@@ -171,6 +174,101 @@ fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bo
         .send()?
         .error_for_status()?;
     Ok(())
+}
+
+fn merge_games_patch_with_remote_state(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    patch_obj: &mut serde_json::Map<String, Value>,
+) {
+    let incoming_games = match patch_obj.get("games").and_then(|v| v.as_array()) {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => return,
+    };
+
+    let mut url = match Url::parse(&format!(
+        "{}/rest/v1/remote_devices",
+        cfg.url.trim_end_matches('/')
+    )) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    url.query_pairs_mut()
+        .append_pair("select", "state")
+        .append_pair("device_id", &format!("eq.{}", cfg.device_id))
+        .append_pair("limit", "1");
+
+    let rows: Vec<Value> = match client
+        .get(url)
+        .header("apikey", &cfg.key)
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .send()
+    {
+        Ok(resp) => match resp.error_for_status() {
+            Ok(ok) => match ok.json() {
+                Ok(parsed) => parsed,
+                Err(_) => return,
+            },
+            Err(_) => return,
+        },
+        Err(_) => return,
+    };
+    let existing_games = rows
+        .first()
+        .and_then(|row| row.get("state"))
+        .and_then(|state| state.get("games"))
+        .and_then(|games| games.as_array());
+    let Some(existing_games) = existing_games else {
+        return;
+    };
+
+    let mut merged_games = existing_games.clone();
+    for incoming in &incoming_games {
+        let incoming_id = match incoming.get("id").and_then(|v| v.as_str()) {
+            Some(v) if !v.trim().is_empty() => v.to_string(),
+            _ => continue,
+        };
+        let mut replaced = false;
+        for existing in &mut merged_games {
+            if existing.get("id").and_then(|v| v.as_str()) == Some(incoming_id.as_str()) {
+                *existing = incoming.clone();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            merged_games.push(incoming.clone());
+        }
+    }
+    patch_obj.insert("games".to_string(), Value::Array(merged_games));
+}
+
+fn remote_device_exists(client: &Client, cfg: &SupabaseConfig) -> Result<bool> {
+    let mut url = Url::parse(&format!(
+        "{}/rest/v1/remote_devices",
+        cfg.url.trim_end_matches('/')
+    ))
+    .context("invalid remote_devices url")?;
+    url.query_pairs_mut()
+        .append_pair("select", "device_id")
+        .append_pair("device_id", &format!("eq.{}", cfg.device_id))
+        .append_pair("limit", "1");
+
+    let rows: Vec<Value> = client
+        .get(url)
+        .header("apikey", &cfg.key)
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .send()?
+        .error_for_status()?
+        .json()?;
+    Ok(!rows.is_empty())
+}
+
+fn strip_games_for_existing_device_initial_state(mut patch: Value) -> Value {
+    if let Some(obj) = patch.as_object_mut() {
+        obj.remove("games");
+    }
+    patch
 }
 
 fn build_realtime_ws_url(cfg: &SupabaseConfig) -> Result<Url> {
@@ -452,7 +550,20 @@ fn main() -> Result<()> {
         };
         match msg.kind.as_str() {
             "initial_state" => {
-                let _ = rpc_apply_patch(&client, &cfg, msg.payload, true);
+                let mut patch = msg.payload;
+                match remote_device_exists(&client, &cfg) {
+                    Ok(false) => {
+                        let _ = rpc_apply_patch(&client, &cfg, patch, true);
+                    }
+                    Ok(true) => {
+                        patch = strip_games_for_existing_device_initial_state(patch);
+                        let _ = rpc_apply_patch(&client, &cfg, patch, false);
+                    }
+                    Err(e) => {
+                        eprintln!("bridge: remote row lookup failed, falling back to full init: {e}");
+                        let _ = rpc_apply_patch(&client, &cfg, patch, true);
+                    }
+                }
             }
             "device_state" => {
                 let _ = rpc_apply_patch(&client, &cfg, msg.payload, false);
@@ -522,5 +633,67 @@ mod tests {
             Some("mobile_app_test")
         );
         assert!(payload.get("games").is_some());
+    }
+
+    #[test]
+    fn strip_games_for_existing_device_initial_state_removes_games_field() {
+        let patch = json!({
+            "games": [{"id": "chess", "status": "ready"}],
+            "volume": 50
+        });
+        let out = strip_games_for_existing_device_initial_state(patch);
+        assert!(out.get("games").is_none());
+        assert_eq!(out.get("volume").and_then(|v| v.as_i64()), Some(50));
+    }
+
+    #[test]
+    fn merge_games_patch_replaces_matching_game_and_preserves_others() {
+        let mut patch_obj = serde_json::Map::new();
+        patch_obj.insert(
+            "games".to_string(),
+            json!([{"id": "chess", "status": "downloading", "version": "2.0.0"}]),
+        );
+        let existing_games = json!([
+            {"id": "chess", "status": "ready", "version": "1.0.0"},
+            {"id": "pong", "status": "ready", "version": "1.1.0"}
+        ])
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+        let mut merged_games = existing_games.clone();
+        for incoming in patch_obj
+            .get("games")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let incoming_id = incoming
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let mut replaced = false;
+            for existing in &mut merged_games {
+                if existing.get("id").and_then(|v| v.as_str()) == Some(incoming_id.as_str()) {
+                    *existing = incoming.clone();
+                    replaced = true;
+                    break;
+                }
+            }
+            if !replaced {
+                merged_games.push(incoming.clone());
+            }
+        }
+        patch_obj.insert("games".to_string(), Value::Array(merged_games));
+
+        let games = patch_obj.get("games").and_then(|v| v.as_array()).cloned();
+        assert_eq!(
+            games,
+            Some(vec![
+                json!({"id": "chess", "status": "downloading", "version": "2.0.0"}),
+                json!({"id": "pong", "status": "ready", "version": "1.1.0"})
+            ])
+        );
     }
 }

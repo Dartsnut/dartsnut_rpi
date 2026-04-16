@@ -482,20 +482,14 @@ def request_set_game_status(game_id: str, status: str) -> None:
 
         games = get_games_summary()
         remote_ids = _current_remote_game_ids()
-        if remote_ids is not None:
-            games = [
-                g
-                for g in games
-                if isinstance(g, dict) and str(g.get("id") or "") in remote_ids
-            ]
-        found = False
+        if remote_ids is not None and str(game_id) not in remote_ids:
+            return
+        game_payload = {"id": game_id, "version": "", "status": status}
         for g in games:
             if isinstance(g, dict) and g.get("id") == game_id:
-                g["status"] = status
-                found = True
-        if not found:
-            games.append({"id": game_id, "version": "", "status": status})
-        publish_device_state_update({"games": games})
+                game_payload["version"] = str(g.get("version") or "")
+                break
+        publish_device_state_update({"games": [game_payload]})
     except Exception:
         pass
 
@@ -504,17 +498,27 @@ def request_set_all_games_ready() -> None:
     try:
         from game_lifecycle import get_games_summary
 
-        games = get_games_summary()
         remote_ids = _current_remote_game_ids()
-        if remote_ids is not None:
-            games = [
-                g
-                for g in games
-                if isinstance(g, dict) and str(g.get("id") or "") in remote_ids
-            ]
+        if remote_ids is None:
+            return
+        games = get_games_summary()
+        local_games_by_id: Dict[str, Dict[str, Any]] = {}
         for g in games:
-            if isinstance(g, dict):
-                g["status"] = "ready"
+            if not isinstance(g, dict):
+                continue
+            gid = str(g.get("id") or "").strip()
+            if gid:
+                local_games_by_id[gid] = g
+        games = []
+        for gid in sorted(remote_ids):
+            local = local_games_by_id.get(gid, {})
+            games.append(
+                {
+                    "id": gid,
+                    "version": str(local.get("version") or ""),
+                    "status": "ready",
+                }
+            )
         if games:
             publish_device_state_update({"games": games})
     except Exception:

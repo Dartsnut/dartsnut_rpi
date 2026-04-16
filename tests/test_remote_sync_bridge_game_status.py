@@ -63,3 +63,57 @@ def test_request_set_game_status_does_not_readd_remote_removed_game(monkeypatch)
     assert sent == [
         {"games": [{"id": "g-install", "version": "2.0.0", "status": "downloading"}]}
     ]
+
+
+def test_request_set_game_status_only_publishes_target_game(monkeypatch):
+    sent = []
+    monkeypatch.setattr(rsb._ssb, "_remote_game_ids", None)
+
+    monkeypatch.setattr(
+        "game_lifecycle.get_games_summary",
+        lambda: [
+            {"id": "chess", "version": "1.0.0", "status": "ready"},
+            {"id": "pong", "version": "2.1.0", "status": "ready"},
+        ],
+    )
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload: sent.append(payload),
+    )
+
+    rsb.request_set_game_status("chess", "playing")
+
+    assert sent == [{"games": [{"id": "chess", "version": "1.0.0", "status": "playing"}]}]
+
+
+def test_request_set_all_games_ready_publishes_remote_ids_even_when_local_missing(
+    monkeypatch,
+):
+    sent = []
+    monkeypatch.setattr("game_lifecycle.get_games_summary", lambda: [])
+    monkeypatch.setattr(rsb._ssb, "_remote_game_ids", {"chess"})
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload: sent.append(payload),
+    )
+
+    rsb.request_set_all_games_ready()
+
+    assert sent == [{"games": [{"id": "chess", "version": "", "status": "ready"}]}]
+
+
+def test_request_set_all_games_ready_skips_when_remote_ids_unknown(monkeypatch):
+    sent = []
+    monkeypatch.setattr(rsb._ssb, "_remote_game_ids", None)
+    monkeypatch.setattr("game_lifecycle.get_games_summary", lambda: [{"id": "chess"}])
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload: sent.append(payload),
+    )
+
+    rsb.request_set_all_games_ready()
+
+    assert sent == []
