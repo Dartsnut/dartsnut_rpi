@@ -398,7 +398,9 @@ class RemoteDeviceConfigApplier:
                         request_launch=_request_launch,
                         terminate_running_game=_terminate_running_game,
                     )
-                    if status == "playing":
+                    # Continue scanning non-playing entries so install/download commands
+                    # are not skipped when a currently playing game appears first.
+                    if status == "playing" and ctx.start_game and ctx.game_id == game_id:
                         break
         except Exception as e:
             _log.error("Error applying remote device config: %s", e)

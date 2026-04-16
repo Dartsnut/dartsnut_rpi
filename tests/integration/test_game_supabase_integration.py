@@ -138,6 +138,30 @@ def test_inbound_downloading_with_matching_local_version_publishes_ready(remote_
     assert events["ensure_download_calls"] == []
 
 
+def test_inbound_downloading_is_processed_even_with_existing_playing_entry(
+    remote_config_harness,
+):
+    apply = remote_config_harness["apply"]
+    events = remote_config_harness["events"]
+    runtime = remote_config_harness["runtime"]
+    app_ctx = remote_config_harness["app_ctx"]
+    runtime.startup_games_reset_initialized = True
+    runtime.awaiting_games_ready_confirmation = False
+    app_ctx.game = {"game_id": "chess", "process": object(), "shm": None}
+
+    apply(
+        {
+            "games": [
+                {"id": "chess", "status": "playing", "version": "1.0.0"},
+                {"id": "pong", "status": "downloading", "version": "2.0.0"},
+            ]
+        }
+    )
+
+    assert ("pong", "downloading") in events["status_updates"]
+    assert ("pong", "2.0.0") in events["ensure_download_calls"]
+
+
 # Startup gate behavior
 def test_startup_games_ready_retry_then_newer_playing_is_applied(remote_config_harness):
     apply = remote_config_harness["apply"]
