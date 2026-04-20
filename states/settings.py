@@ -205,17 +205,29 @@ class SettingsState(BaseState):
             volume = 50
         ip_address = get_wifi_ipv4()
         try:
-            version = (
+            branch = (
                 subprocess.run(
-                    ["git", "describe", "--tags", "--abbrev=0"],
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     capture_output=True,
                     text=True,
                     check=True,
                 )
                 .stdout.strip()
             )
+            if branch == "release":
+                version = (
+                    subprocess.run(
+                        ["git", "describe", "--tags", "--abbrev=0"],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    .stdout.strip()
+                )
+            else:
+                version = "v100.0.0"
         except Exception:
-            version = "v1.0.0"
+            version = "v100.0.0"
         try:
             device_path = os.path.join(os.getcwd(), "device.json")
             with open(device_path, "r", encoding="utf-8") as f:

@@ -75,25 +75,39 @@ def _get_current_branch():
 
 def get_version():
     try:
-        result = subprocess.run(
-            ["git", "describe", "--tags", "--abbrev=0"],
-            cwd=GIT_REPO_CWD,
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        version_tag = result.stdout.strip()
+        branch = _get_current_branch()
+        if branch != "release":
+            version_tag = _fallback_version_from_head()
+        else:
+            try:
+                result = subprocess.run(
+                    ["git", "describe", "--tags", "--abbrev=0"],
+                    cwd=GIT_REPO_CWD,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                version_tag = result.stdout.strip()
+            except subprocess.CalledProcessError:
+                version_tag = _fallback_version_from_head()
         return {"action": "get_version", "version": version_tag}
-    except subprocess.CalledProcessError as e:
-        return handle_command_error(
-            "get_version", "git describe", e.returncode, e.stderr
-        )
     except Exception as e:
         return handle_exception("get_version", e, "Failed to get version")
 
 
 def _short_sha(full_hex: str) -> str:
     return full_hex[:7] if len(full_hex) >= 7 else full_hex
+
+
+def _fallback_version_from_head() -> str:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=GIT_REPO_CWD,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return f"v100.0.{_short_sha(head.stdout.strip())}"
 
 
 def check_update():
@@ -111,14 +125,17 @@ def check_update():
                 text=True,
             )
             latest_tag = latest.stdout.strip()
-            current = subprocess.run(
-                ["git", "describe", "--tags", "--abbrev=0"],
-                cwd=GIT_REPO_CWD,
-                check=True,
-                stdout=subprocess.PIPE,
-                text=True,
-            )
-            current_tag = current.stdout.strip()
+            try:
+                current = subprocess.run(
+                    ["git", "describe", "--tags", "--abbrev=0"],
+                    cwd=GIT_REPO_CWD,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                current_tag = current.stdout.strip()
+            except subprocess.CalledProcessError:
+                current_tag = _fallback_version_from_head()
             return {
                 "action": "check_update",
                 "latest_version": latest_tag,

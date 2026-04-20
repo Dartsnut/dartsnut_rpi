@@ -142,3 +142,60 @@ def test_check_update_release_uses_tag_commands(monkeypatch):
     assert result["current_version"] == "v1.2.2"
     assert result["latest_version"] == "v1.2.3"
     assert result["needs_update"] is True
+
+
+def test_get_version_falls_back_to_v100_with_head_hash(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return _cp("release\n")
+        if cmd == ["git", "describe", "--tags", "--abbrev=0"]:
+            raise subprocess.CalledProcessError(128, cmd, stderr="no tag")
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("0123456789abcdef0123456789abcdef01234567\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.get_version()
+    assert result["action"] == "get_version"
+    assert result["version"] == "v100.0.0123456"
+
+
+def test_get_version_non_release_uses_head_hash_without_describe(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return _cp("master\n")
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("89abcdef0123456789abcdef0123456789abcdef\n")
+        if cmd[:2] == ["git", "describe"]:
+            raise AssertionError("Tag command should not run on non-release branches")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.get_version()
+    assert result["action"] == "get_version"
+    assert result["version"] == "v100.0.89abcde"
+
+
+def test_check_update_release_falls_back_current_version_when_no_tag(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "fetch", "origin"]:
+            return _cp("")
+        if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return _cp("release\n")
+        if cmd == ["git", "describe", "--tags", "origin/release", "--abbrev=0"]:
+            return _cp("v1.2.3\n")
+        if cmd == ["git", "describe", "--tags", "--abbrev=0"]:
+            raise subprocess.CalledProcessError(128, cmd, stderr="no tag")
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("abcdef0123456789abcdef0123456789abcdef01\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.check_update()
+    assert result["action"] == "check_update"
+    assert result["current_version"] == "v100.0.abcdef0"
+    assert result["latest_version"] == "v1.2.3"
+    assert result["needs_update"] is True
