@@ -7,8 +7,8 @@ BRIDGE_DIR="${REPO_ROOT}/supabase_bridge"
 OUT_BIN="${REPO_ROOT}/bridge"
 TMP_OUT_BIN="${REPO_ROOT}/bridge.new"
 
-EMBED_URL="https://csofgmhsoswpqobxmftm.supabase.co"
-EMBED_KEY="sb_publishable_5IXiYDDpMlgP4xJuX-on9A_m-A25T5H"
+EMBED_URL="https://base.dartsnut.com"
+EMBED_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzc2NjE0NDAwLCJleHAiOjE5MzQzODA4MDB9.3ay1VYFklSZb3Qkfqc8dqZH5bML8Ib9W9H_mPtHkGvc"
 
 echo "Building Supabase bridge with embedded credentials..."
 cd "${BRIDGE_DIR}"
