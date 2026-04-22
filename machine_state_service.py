@@ -283,28 +283,36 @@ class MachineStateService:
                         pass
             conf_path = os.path.join(apps_dir, "conf.json")
             with open(conf_path, "w", encoding="utf-8") as f:
-                json.dump({"user": "", "date": "", "pages": []}, f)
+                json.dump(
+                    {
+                        "user": "",
+                        "date": "",
+                        "pages": [],
+                        "pages_updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                )
         except Exception as e:
             _log.error("Error clearing apps directory contents: %s", e)
 
     def reset_device_to_factory_fields(self) -> None:
         """
-        Rewrite device.json with only required factory fields:
-        name, serial, model, brightness, volume.
+        Reset mutable factory fields while preserving device identity metadata.
         """
         _log.info("machine state: resetting device.json to factory fields")
         try:
             existing = self._read_device_info() or {}
-            model = str(existing.get("model", "") or "")
-            serial = str(existing.get("serial", "") or "")
-            payload = {
-                "name": model,
-                "serial": serial,
-                "model": model,
-                "brightness": 100,
-                "volume": 100,
-            }
-            # Use direct write to keep output fields strict (no extra timestamp).
+            payload = dict(existing)
+            payload["brightness"] = 100
+            payload["volume"] = 100
+            payload["ssid"] = ""
+            payload["ip_address"] = ""
+            payload["dim_window_enabled"] = False
+            payload["dim_window_start"] = "22:00"
+            payload["dim_window_end"] = "8:00"
+            payload["dim_level"] = 10
+            payload["dim_restore_seconds"] = 5
+            payload["updated_at"] = datetime.now(timezone.utc).isoformat()
             path = self._device_json_path()
             with open(path, "w") as f:
                 json.dump(payload, f)

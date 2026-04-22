@@ -1,3 +1,5 @@
+import json
+
 import supabase_sync_bridge as ssb
 
 
@@ -68,6 +70,38 @@ def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     assert merged["pages"] == []
     assert merged["games"] == []
 
+
+
+def test_load_device_json_reads_device_json(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(tmp_path / "device.json", "w", encoding="utf-8") as f:
+        json.dump({"id": "11:22:33:44:55:66", "name": "Lab"}, f)
+    assert ssb._load_device_json() == {"id": "11:22:33:44:55:66", "name": "Lab"}
+
+
+def test_request_device_reset_state_includes_device_info_from_file(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ssb, "_resolve_hardware_version", lambda: "")
+    with open(tmp_path / "device.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "id": "AA:BB:CC:DD:EE:FF",
+                "serial": "S1",
+                "model": "PixelDart",
+                "name": "Den",
+            },
+            f,
+        )
+    captured = []
+    monkeypatch.setattr(ssb, "publish_device_state_update", lambda p: captured.append(p))
+    ssb.request_device_reset_state()
+    assert len(captured) == 1
+    assert captured[0]["device_info"] == {
+        "id": "AA:BB:CC:DD:EE:FF",
+        "sn": "S1",
+        "model": "PixelDart",
+        "name": "Den",
+    }
 
 
 def test_build_initial_state_adds_hardware_version_when_missing(monkeypatch):

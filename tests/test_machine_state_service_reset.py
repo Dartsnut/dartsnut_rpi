@@ -21,10 +21,16 @@ def test_reset_device_to_factory_fields_keeps_only_required_keys(tmp_path, monke
                 "name": "Custom Name",
                 "serial": "SN001",
                 "model": "PixelBoard",
+                "id": "AA:BB:CC:DD:EE:FF",
                 "brightness": 42,
                 "volume": 7,
                 "ip_address": "1.2.3.4",
                 "ssid": "my-wifi",
+                "dim_window_enabled": True,
+                "dim_window_start": "21:00",
+                "dim_window_end": "07:00",
+                "dim_level": 3,
+                "dim_restore_seconds": 9,
             },
             f,
         )
@@ -35,13 +41,21 @@ def test_reset_device_to_factory_fields_keeps_only_required_keys(tmp_path, monke
     with open("device.json", "r", encoding="utf-8") as f:
         payload = json.load(f)
 
-    assert payload == {
-        "name": "PixelBoard",
-        "serial": "SN001",
-        "model": "PixelBoard",
-        "brightness": 100,
-        "volume": 100,
-    }
+    assert payload["name"] == "Custom Name"
+    assert payload["serial"] == "SN001"
+    assert payload["model"] == "PixelBoard"
+    assert payload["id"] == "AA:BB:CC:DD:EE:FF"
+    assert payload["brightness"] == 100
+    assert payload["volume"] == 100
+    assert payload["ssid"] == ""
+    assert payload["ip_address"] == ""
+    assert payload["dim_window_enabled"] is False
+    assert payload["dim_window_start"] == "22:00"
+    assert payload["dim_window_end"] == "8:00"
+    assert payload["dim_level"] == 10
+    assert payload["dim_restore_seconds"] == 5
+    assert isinstance(payload.get("updated_at"), str)
+    assert payload["updated_at"] != ""
 
 
 def test_clear_apps_directory_contents_removes_all_items(tmp_path, monkeypatch):
@@ -59,7 +73,12 @@ def test_clear_apps_directory_contents_removes_all_items(tmp_path, monkeypatch):
     assert os.path.isdir("apps")
     assert os.listdir("apps") == ["conf.json"]
     with open("apps/conf.json", "r", encoding="utf-8") as f:
-        assert json.load(f) == {"user": "", "date": "", "pages": []}
+        payload = json.load(f)
+    assert payload["user"] == ""
+    assert payload["date"] == ""
+    assert payload["pages"] == []
+    assert isinstance(payload.get("pages_updated_at"), str)
+    assert payload["pages_updated_at"] != ""
 
 
 def test_set_pages_deferred_reload_writes_conf_without_invoking_reload(tmp_path, monkeypatch):

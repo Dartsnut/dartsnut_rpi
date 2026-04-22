@@ -10,7 +10,7 @@ import socket
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 SOCKET_PATH = "/tmp/dartsnut-supabase-sync.sock"
@@ -180,7 +180,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         volume = 0
 
     resolved_device_id = _normalize_device_id(
-device_info.get("id")
+        device_info.get("id")
         or device_info.get("ble_mac")
         or device_info.get("mac_address")
     )
@@ -248,6 +248,17 @@ device_info.get("id")
     if raw_ip and raw_ip != "0.0.0.0":
         state["ip_address"] = raw_ip
     return state
+
+
+def _load_device_json() -> Dict[str, Any]:
+    """Read flat device identity/settings from ./device.json (same path as merge logic)."""
+    path = os.path.join(os.getcwd(), "device.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
@@ -526,13 +537,31 @@ def request_set_all_games_ready() -> None:
 
 
 def request_device_reset_state() -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    local_info: Dict[str, Any] = {}
+    try:
+        local_info = _build_initial_state(_load_device_json()).get("device_info", {})
+    except Exception:
+        local_info = {}
+
     publish_device_state_update(
         {
             "ip_address": "",
             "ssid": "",
             "pages": [],
             "games": [],
-            "dim_window": {"dim_window_enabled": False},
+            "brightness": 100,
+            "volume": 100,
+            "dim_window": {
+                "dim_window_enabled": False,
+                "dim_window_start": "22:00",
+                "dim_window_end": "8:00",
+                "dim_level": 10,
+                "dim_restore_seconds": 5,
+            },
+            "device_info": local_info,
+            "device_updated_at": timestamp,
+            "pages_updated_at": timestamp,
         }
     )
 
