@@ -15,7 +15,7 @@ from python_websocket.error_handler import (
     create_error_response,
     handle_exception,
 )
-from network_utils import get_wifi_ipv4
+from network_utils import get_primary_ipv4
 
 _log = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ class UARTDevice:
             try:
                 result = subprocess.run(['nmcli', 'dev', 'wifi', 'connect', ssid, 'password', password], capture_output=True, text=True, check=True)
                 # Get IP address
-                ip_address = get_wifi_ipv4()
+                ip_address = get_primary_ipv4()
                 cls.send_data({"command": "connect_wifi", "status": "success", "ip_address": ip_address})
             except subprocess.CalledProcessError as inner_e:
                 # Check for specific error codes that shouldn't trigger fallback
@@ -136,7 +136,7 @@ class UARTDevice:
                 # Bring up the connection
                 result = subprocess.run(['nmcli', 'con', 'up', ssid], capture_output=True, text=True, check=True)
                 # Get IP address
-                ip_address = get_wifi_ipv4()
+                ip_address = get_primary_ipv4()
                 cls.send_data({"command": "connect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
             _log.warning("Failed to connect to WiFi: %s", e)
@@ -160,7 +160,7 @@ class UARTDevice:
             subprocess.run(['nmcli', 'dev', 'connect', 'wlan0'], capture_output=True, text=True, check=True)
             time.sleep(2)
             # Get IP address
-            ip_address = get_wifi_ipv4()
+            ip_address = get_primary_ipv4()
             cls.send_data({"command": "reconnect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
             _log.warning("Failed to reconnect WiFi: %s", e)
@@ -202,7 +202,7 @@ class UARTDevice:
                         if connected_info:
                             _, ssid = connected_info[0].split(':')
                             # Get the IP address of the connected WiFi
-                            ip_address = get_wifi_ipv4()
+                            ip_address = get_primary_ipv4()
                             cls.send_data({"command": "wifi_status", "wifi_enabled": True, "connected": True, "ssid": ssid, "ip_address": ip_address})
                         else:
                             cls.send_data({"command": "wifi_status", "wifi_enabled": True, "connected": False})

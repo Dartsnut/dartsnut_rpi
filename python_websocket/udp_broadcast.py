@@ -5,7 +5,7 @@ import socket
 import subprocess
 import time
 from typing import Optional
-from network_utils import get_wifi_ipv4
+from network_utils import get_primary_ipv4
 
 _log = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def normalize_ssid(ssid: str) -> Optional[str]:
 
 
 def get_ip_address() -> str:
-    return get_wifi_ipv4()
+    return get_primary_ipv4()
 
 def get_mac_address():
     try:

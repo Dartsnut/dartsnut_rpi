@@ -7,7 +7,7 @@ import time
 from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
-from network_utils import get_wifi_ipv4
+from network_utils import get_primary_ipv4
 from states.base import BaseState
 
 # Rate limit WiFi RSSI: refresh every ~5 seconds
@@ -203,7 +203,7 @@ class SettingsState(BaseState):
         except Exception:
             brightness = 50
             volume = 50
-        ip_address = get_wifi_ipv4()
+        ip_address = get_primary_ipv4()
         try:
             branch = (
                 subprocess.run(
