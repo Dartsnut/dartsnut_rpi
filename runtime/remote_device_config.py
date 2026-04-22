@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
@@ -90,6 +91,9 @@ class RemoteConfigRuntimeState:
     startup_firmware_version: Optional[str] = None
     firmware_update_in_progress: bool = False
     remote_downloading_game_ids: set[str] = field(default_factory=set)
+    last_applied_pages_updated_at: Optional[datetime] = None
+    last_applied_pages_fingerprint: Optional[str] = None
+    has_seen_remote_pages_snapshot: bool = False
 
 
 @dataclass
@@ -242,7 +246,29 @@ class RemoteDeviceConfigApplier:
             pages = config.get("pages")
             if isinstance(pages, list):
                 service.set_pages(pages, reload_pages=False)
-                ctx.reload_pages = True
+                source = str(config.get("last_update_source", "") or "").strip().lower()
+                pages_updated_at = parse_iso_ts(config.get("pages_updated_at"))
+                pages_fingerprint = json.dumps(
+                    pages, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+                )
+                should_reload_pages = False
+
+                if source == "supabase_bridge":
+                    if pages_updated_at is not None:
+                        baseline = rt.last_applied_pages_updated_at
+                        should_reload_pages = (
+                            baseline is None or pages_updated_at > baseline
+                        )
+                        rt.last_applied_pages_updated_at = pages_updated_at
+                    elif rt.has_seen_remote_pages_snapshot:
+                        should_reload_pages = (
+                            pages_fingerprint != rt.last_applied_pages_fingerprint
+                        )
+                    rt.has_seen_remote_pages_snapshot = True
+                    rt.last_applied_pages_fingerprint = pages_fingerprint
+
+                if should_reload_pages:
+                    ctx.reload_pages = True
         except Exception as e:
             _log.error("Error applying remote pages config: %s", e)
 

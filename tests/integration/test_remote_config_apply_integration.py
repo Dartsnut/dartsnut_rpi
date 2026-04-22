@@ -23,6 +23,8 @@ def test_remote_config_applies_multi_field_snapshot(remote_config_harness, app_c
 
     apply(
         {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": "2026-04-22T10:00:00",
             "pages": [{"uuid": "p1", "widgets": []}],
             "brightness": 77,
             "volume": 31,

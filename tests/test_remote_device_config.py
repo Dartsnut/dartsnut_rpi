@@ -43,7 +43,7 @@ def test_is_remote_reset_confirmed_requires_empty_network_and_dim_disabled():
 
 
 # Non-game remote config application
-def test_apply_sets_pages_and_reload_flag_without_calling_game_logic(
+def test_apply_sets_pages_without_reload_when_not_remote_update(
     tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
@@ -86,7 +86,56 @@ def test_apply_sets_pages_and_reload_flag_without_calling_game_logic(
     args, kwargs = svc.set_pages.call_args
     assert args[0] == [{"uuid": "p1", "widgets": []}]
     assert kwargs.get("reload_pages") is False
+    assert ctx.reload_pages is False
+
+
+def test_apply_sets_reload_flag_only_for_newer_remote_pages_update():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": "2026-04-22T10:00:00",
+            "pages": [{"uuid": "p1", "widgets": []}],
+        }
+    )
     assert ctx.reload_pages is True
+
+    ctx.reload_pages = False
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": "2026-04-22T10:00:00",
+            "pages": [{"uuid": "p1", "widgets": []}],
+        }
+    )
+    assert ctx.reload_pages is False
 
 
 def test_apply_triggers_bluetooth_scan_when_requested():
