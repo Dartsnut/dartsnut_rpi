@@ -85,6 +85,8 @@ class RemoteConfigRuntimeState:
     startup_games_ready_confirmed_at: Optional[datetime] = None
     startup_filter_playing_until_newer_update: bool = False
     startup_ready_retry_last_at: float = 0.0
+    startup_config_refresh_requested: bool = False
+    startup_missing_ready_games_recovery_done: bool = False
     startup_firmware_version: Optional[str] = None
     firmware_update_in_progress: bool = False
     remote_downloading_game_ids: set[str] = field(default_factory=set)
@@ -107,6 +109,7 @@ class RemoteDeviceConfigDependencies:
     get_version: Callable[[], dict]
     is_reset_in_progress: Callable[[], bool]
     on_reset_confirmed: Callable[[], None]
+    request_config_refresh: Callable[[], None] = lambda: None
 
 
 class RemoteDeviceConfigApplier:
@@ -123,6 +126,36 @@ class RemoteDeviceConfigApplier:
     @property
     def runtime(self) -> RemoteConfigRuntimeState:
         return self._runtime
+
+    def _recover_missing_ready_games_on_startup(
+        self,
+        games_cfg: list[dict[str, Any]],
+    ) -> None:
+        """
+        Startup-only recovery for SSH wipe scenarios:
+        remote games can remain `ready` while local ./apps/<id> is missing.
+        Trigger local download recovery without changing remote game statuses.
+        """
+        rt = self._runtime
+        if rt.startup_missing_ready_games_recovery_done:
+            return
+
+        rt.startup_missing_ready_games_recovery_done = True
+        deps = self._deps
+        for g in games_cfg:
+            if not isinstance(g, dict):
+                continue
+            game_id = str(g.get("id") or "").strip()
+            status = str(g.get("status") or "").strip().lower()
+            expected_version = str(g.get("version") or "").strip()
+            if not game_id or status != "ready":
+                continue
+            if os.path.isdir(os.path.join(os.getcwd(), "apps", game_id)):
+                continue
+            try:
+                deps.ensure_game_downloaded(game_id, expected_version)
+            except Exception:
+                pass
 
     def apply(self, config: dict) -> None:
         if not isinstance(config, dict):
@@ -161,6 +194,12 @@ class RemoteDeviceConfigApplier:
                 deps.request_set_all_games_ready()
             except Exception:
                 pass
+            if not rt.startup_config_refresh_requested:
+                rt.startup_config_refresh_requested = True
+                try:
+                    deps.request_config_refresh()
+                except Exception:
+                    pass
 
         if isinstance(games_cfg, list):
             ctx.remote_menu_ready_game_ids = frozenset(
@@ -309,6 +348,9 @@ class RemoteDeviceConfigApplier:
                         _log.info(
                             "remote config: startup game reset confirmed; enabling remote game commands"
                         )
+                        # Run startup missing-game recovery immediately after gate confirmation
+                        # so a follow-up snapshot is not required to trigger local downloads.
+                        self._recover_missing_ready_games_on_startup(games_cfg)
                         # Defer normal game command handling to the next inbound snapshot.
                         return
                     else:
@@ -320,6 +362,7 @@ class RemoteDeviceConfigApplier:
                             except Exception:
                                 pass
                         return
+                self._recover_missing_ready_games_on_startup(games_cfg)
 
                 for g in games_cfg:
                     if not isinstance(g, dict):

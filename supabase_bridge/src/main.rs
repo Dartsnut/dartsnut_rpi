@@ -264,6 +264,62 @@ fn remote_device_exists(client: &Client, cfg: &SupabaseConfig) -> Result<bool> {
     Ok(!rows.is_empty())
 }
 
+fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: Value) -> Result<()> {
+    let max_attempts = 8u32;
+    let mut backoff_seconds = 1u64;
+    let mut last_err: Option<anyhow::Error> = None;
+
+    for attempt in 1..=max_attempts {
+        match remote_device_exists(client, cfg) {
+            Ok(false) => match rpc_apply_patch(client, cfg, patch.clone(), true) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    eprintln!(
+                        "bridge: initial full state write failed (attempt {attempt}/{max_attempts}): {e}"
+                    );
+                    last_err = Some(e);
+                }
+            },
+            Ok(true) => {
+                let delta_patch = strip_games_for_existing_device_initial_state(patch.clone());
+                match rpc_apply_patch(client, cfg, delta_patch, false) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        eprintln!(
+                            "bridge: initial delta state write failed (attempt {attempt}/{max_attempts}): {e}"
+                        );
+                        last_err = Some(e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
+                match rpc_apply_patch(client, cfg, patch.clone(), true) {
+                    Ok(()) => return Ok(()),
+                    Err(write_err) => {
+                        eprintln!(
+                            "bridge: fallback full init failed (attempt {attempt}/{max_attempts}): {write_err}"
+                        );
+                        last_err = Some(write_err);
+                    }
+                }
+            }
+        }
+
+        if attempt < max_attempts {
+            thread::sleep(Duration::from_secs(backoff_seconds));
+            backoff_seconds = (backoff_seconds * 2).min(30);
+        }
+    }
+
+    match last_err {
+        Some(e) => Err(e),
+        None => Err(anyhow::anyhow!(
+            "failed to apply initial state for unknown reason after retries"
+        )),
+    }
+}
+
 fn strip_games_for_existing_device_initial_state(mut patch: Value) -> Value {
     if let Some(obj) = patch.as_object_mut() {
         obj.remove("games");
@@ -550,19 +606,10 @@ fn main() -> Result<()> {
         };
         match msg.kind.as_str() {
             "initial_state" => {
-                let mut patch = msg.payload;
-                match remote_device_exists(&client, &cfg) {
-                    Ok(false) => {
-                        let _ = rpc_apply_patch(&client, &cfg, patch, true);
-                    }
-                    Ok(true) => {
-                        patch = strip_games_for_existing_device_initial_state(patch);
-                        let _ = rpc_apply_patch(&client, &cfg, patch, false);
-                    }
-                    Err(e) => {
-                        eprintln!("bridge: remote row lookup failed, falling back to full init: {e}");
-                        let _ = rpc_apply_patch(&client, &cfg, patch, true);
-                    }
+                if let Err(e) = apply_initial_state_with_retry(&client, &cfg, msg.payload) {
+                    eprintln!(
+                        "bridge: giving up initial state write after retries: {e}"
+                    );
                 }
             }
             "device_state" => {

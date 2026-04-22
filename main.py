@@ -380,6 +380,9 @@ _remote_config_applier = RemoteDeviceConfigApplier(
             gid, s
         ),
         request_set_all_games_ready=lambda: get_remote_sync().request_set_all_games_ready(),
+        request_config_refresh=lambda: get_remote_sync().restart_sync(
+            get_device_info() or {}, reload_config, _apply_remote_config
+        ),
         set_time_zone=set_time_zone,
         term_game_process=term_game_process,
         ensure_game_downloaded=ensure_game_downloaded,
