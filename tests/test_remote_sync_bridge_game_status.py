@@ -94,6 +94,9 @@ def test_request_set_all_games_ready_publishes_remote_ids_even_when_local_missin
     monkeypatch.setattr("game_lifecycle.get_games_summary", lambda: [])
     monkeypatch.setattr(rsb._ssb, "_remote_game_ids", {"chess"})
     monkeypatch.setattr(
+        rsb._ssb, "_remote_games_by_id", {"chess": {"id": "chess", "version": "1.0.0"}}
+    )
+    monkeypatch.setattr(
         rsb._ssb,
         "publish_device_state_update",
         lambda payload: sent.append(payload),
@@ -101,7 +104,28 @@ def test_request_set_all_games_ready_publishes_remote_ids_even_when_local_missin
 
     rsb.request_set_all_games_ready()
 
-    assert sent == [{"games": [{"id": "chess", "version": "", "status": "ready"}]}]
+    assert sent == [{"games": [{"id": "chess", "version": "1.0.0", "status": "ready"}]}]
+
+
+def test_request_set_all_games_ready_prefers_local_version_over_remote(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "game_lifecycle.get_games_summary",
+        lambda: [{"id": "chess", "version": "2.0.0", "status": "ready"}],
+    )
+    monkeypatch.setattr(rsb._ssb, "_remote_game_ids", {"chess"})
+    monkeypatch.setattr(
+        rsb._ssb, "_remote_games_by_id", {"chess": {"id": "chess", "version": "1.0.0"}}
+    )
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload: sent.append(payload),
+    )
+
+    rsb.request_set_all_games_ready()
+
+    assert sent == [{"games": [{"id": "chess", "version": "2.0.0", "status": "ready"}]}]
 
 
 def test_request_set_all_games_ready_skips_when_remote_ids_unknown(monkeypatch):

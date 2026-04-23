@@ -62,6 +62,11 @@ def test_coerce_pages_games_lists():
     assert out == {"pages": [], "games": []}
 
 
+def test_normalize_config_payload_defaults_bridge_source():
+    out = ssb._normalize_config_payload({"pages": [], "games": []})
+    assert out["last_update_source"] == "supabase_bridge"
+
+
 def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
     monkeypatch.setattr(ssb, "_build_initial_state", lambda _d: {"device_info": {"id": "AA:BB:CC:DD:EE:FF"}})
@@ -69,7 +74,43 @@ def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     assert merged["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
     assert merged["pages"] == []
     assert merged["games"] == []
+    assert merged["last_update_source"] == "supabase_bridge"
 
+
+
+def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_device(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        ssb,
+        "_build_initial_state",
+        lambda _d: {
+            "time_zone": "UTC",
+            "volume": 10,
+            "brightness": 20,
+            "games": [{"id": "local-only", "version": "1.0.0", "status": "ready"}],
+            "dim_window": {"dim_window_enabled": False},
+            "device_info": {"id": "AA:BB:CC:DD:EE:FF"},
+            "firmware": {"version": "local-fw", "update": False},
+        },
+    )
+    monkeypatch.setattr(ssb, "_load_device_json", lambda: {"updated_at": "2026-04-23T12:00:00"})
+    monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
+
+    remote = {
+        "device_updated_at": "2026-04-23T11:00:00",
+        "games": [
+            {"id": "01dartgame", "version": "1.0.6", "status": "ready"},
+            {"id": "cricket", "version": "1.2.0", "status": "ready"},
+            {"id": "splashgame", "version": "1.0.1", "status": "ready"},
+        ],
+    }
+    merged = ssb._merge_remote_and_local(remote)
+    assert [g.get("id") for g in merged["games"]] == [
+        "01dartgame",
+        "cricket",
+        "splashgame",
+    ]
 
 
 def test_load_device_json_reads_device_json(tmp_path, monkeypatch):

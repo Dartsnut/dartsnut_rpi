@@ -27,6 +27,7 @@ _connected = False
 _connected_lock = threading.Lock()
 _connectivity_callback: Optional[Callable[[bool], None]] = None
 _remote_game_ids: Optional[set[str]] = None
+_remote_games_by_id: Optional[Dict[str, Dict[str, Any]]] = None
 _remote_game_ids_lock = threading.Lock()
 
 _log = logging.getLogger(__name__)
@@ -80,6 +81,10 @@ def _normalize_config_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(cfg, dict):
         return {}
     normalized = dict(cfg)
+    # Inbound snapshots delivered by this bridge should be treated as remote-origin
+    # updates even when upstream omits an explicit source marker.
+    if not str(normalized.get("last_update_source", "")).strip():
+        normalized["last_update_source"] = "supabase_bridge"
     for key in ("pages", "games"):
         if key in normalized and normalized.get(key) is None:
             normalized[key] = []
@@ -102,15 +107,20 @@ def _remember_remote_game_ids(config: Dict[str, Any]) -> None:
         return
     games = config.get("games")
     next_ids: set[str] = set()
+    next_games_by_id: Dict[str, Dict[str, Any]] = {}
     if isinstance(games, list):
-        next_ids = {
-            str(g.get("id"))
-            for g in games
-            if isinstance(g, dict) and g.get("id") is not None
-        }
+        for g in games:
+            if not isinstance(g, dict):
+                continue
+            gid = str(g.get("id") or "").strip()
+            if not gid:
+                continue
+            next_ids.add(gid)
+            next_games_by_id[gid] = dict(g)
     with _remote_game_ids_lock:
-        global _remote_game_ids
+        global _remote_game_ids, _remote_games_by_id
         _remote_game_ids = next_ids
+        _remote_games_by_id = next_games_by_id
 
 
 def _current_remote_game_ids() -> Optional[set[str]]:
@@ -118,6 +128,13 @@ def _current_remote_game_ids() -> Optional[set[str]]:
         if _remote_game_ids is None:
             return None
         return set(_remote_game_ids)
+
+
+def _current_remote_games_by_id() -> Optional[Dict[str, Dict[str, Any]]]:
+    with _remote_game_ids_lock:
+        if _remote_games_by_id is None:
+            return None
+        return {k: dict(v) for k, v in _remote_games_by_id.items()}
 
 
 def _normalize_device_id(value: Any) -> str:
@@ -263,6 +280,8 @@ def _load_device_json() -> Dict[str, Any]:
 
 def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     merged: Dict[str, Any] = dict(remote or {})
+    if not str(merged.get("last_update_source", "")).strip():
+        merged["last_update_source"] = "supabase_bridge"
 
     local_device: Dict[str, Any] = {}
     try:
@@ -301,7 +320,6 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
             "volume",
             "ip_address",
             "brightness",
-            "games",
             "dim_window",
             "device_info",
             "firmware",
@@ -510,6 +528,7 @@ def request_set_all_games_ready() -> None:
         from game_lifecycle import get_games_summary
 
         remote_ids = _current_remote_game_ids()
+        remote_games = _current_remote_games_by_id() or {}
         if remote_ids is None:
             return
         games = get_games_summary()
@@ -523,10 +542,14 @@ def request_set_all_games_ready() -> None:
         games = []
         for gid in sorted(remote_ids):
             local = local_games_by_id.get(gid, {})
+            remote = remote_games.get(gid, {})
+            version = str(local.get("version") or "").strip()
+            if not version:
+                version = str(remote.get("version") or "").strip()
             games.append(
                 {
                     "id": gid,
-                    "version": str(local.get("version") or ""),
+                    "version": version,
                     "status": "ready",
                 }
             )
@@ -574,7 +597,9 @@ def ensure_supabase_sync_running(
     global _client, _bridge_proc, _remote_game_ids
     with _bridge_lock:
         with _remote_game_ids_lock:
+            global _remote_games_by_id
             _remote_game_ids = None
+            _remote_games_by_id = None
         if _bridge_proc is not None and _bridge_proc.poll() is None:
             return
         launch_env = os.environ.copy()

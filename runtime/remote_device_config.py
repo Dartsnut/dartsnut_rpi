@@ -145,10 +145,12 @@ class RemoteDeviceConfigApplier:
         """
         rt = self._runtime
         if rt.startup_missing_ready_games_recovery_done:
+            _log.info("remote config: startup missing-game recovery already complete; skipping")
             return
 
-        rt.startup_missing_ready_games_recovery_done = True
         deps = self._deps
+        had_missing_ready_games = False
+        all_missing_ready_games_recovered = True
         for g in games_cfg:
             if not isinstance(g, dict):
                 continue
@@ -158,11 +160,49 @@ class RemoteDeviceConfigApplier:
             if not game_id or status != "ready":
                 continue
             if os.path.isdir(os.path.join(os.getcwd(), "apps", game_id)):
+                _log.info(
+                    "remote config: startup recovery skip game_id=%s reason=already_present local_version=%s",
+                    game_id,
+                    expected_version or "(empty)",
+                )
                 continue
+            had_missing_ready_games = True
+            _log.info(
+                "remote config: startup recovery attempt game_id=%s expected_version=%s",
+                game_id,
+                expected_version or "(empty)",
+            )
             try:
-                deps.ensure_game_downloaded(game_id, expected_version)
+                ok = deps.ensure_game_downloaded(game_id, expected_version)
+                if ok:
+                    _log.info(
+                        "remote config: startup recovery success game_id=%s",
+                        game_id,
+                    )
+                else:
+                    all_missing_ready_games_recovered = False
+                    _log.warning(
+                        "remote config: startup recovery failed game_id=%s (will retry)",
+                        game_id,
+                    )
             except Exception:
-                pass
+                all_missing_ready_games_recovered = False
+                _log.exception(
+                    "remote config: startup recovery exception game_id=%s (will retry)",
+                    game_id,
+                )
+
+        # Keep retrying on subsequent snapshots when startup recovery fails due to
+        # transient network/IO issues.
+        rt.startup_missing_ready_games_recovery_done = (
+            not had_missing_ready_games or all_missing_ready_games_recovered
+        )
+        if not had_missing_ready_games:
+            _log.info(
+                "remote config: startup recovery no missing ready games detected; marking complete"
+            )
+        elif rt.startup_missing_ready_games_recovery_done:
+            _log.info("remote config: startup recovery complete")
 
     def apply(self, config: dict) -> None:
         if not isinstance(config, dict):
@@ -348,6 +388,7 @@ class RemoteDeviceConfigApplier:
                     has_newer_ts = (
                         baseline_ts is not None and cfg_ts is not None and cfg_ts > baseline_ts
                     )
+                    missing_ts_fallback = baseline_ts is None or cfg_ts is None
                     stable_games = are_remote_gate_stable_games(games_cfg)
                     if debug_reset_gate:
                         game_states = []
@@ -362,7 +403,7 @@ class RemoteDeviceConfigApplier:
                                 )
                         _log.debug(
                             "[reset-gate] evaluate source=%r cfg_ts=%r parsed_cfg_ts=%r "
-                            "baseline_ts=%r stable_games=%s has_newer_ts=%s awaiting=%s "
+                            "baseline_ts=%r stable_games=%s has_newer_ts=%s missing_ts_fallback=%s awaiting=%s "
                             "startup_filter_playing_until_newer_update=%s games=%s",
                             str(config.get("last_update_source", "")),
                             config.get("device_updated_at") or config.get("updated_at"),
@@ -370,11 +411,12 @@ class RemoteDeviceConfigApplier:
                             baseline_ts,
                             stable_games,
                             has_newer_ts,
+                            missing_ts_fallback,
                             rt.awaiting_games_ready_confirmation,
                             rt.startup_filter_playing_until_newer_update,
                             game_states,
                         )
-                    if stable_games and has_newer_ts:
+                    if stable_games and (has_newer_ts or missing_ts_fallback):
                         rt.awaiting_games_ready_confirmation = False
                         rt.startup_games_ready_confirmed_at = cfg_ts
                         rt.startup_filter_playing_until_newer_update = True

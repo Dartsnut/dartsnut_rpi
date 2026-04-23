@@ -899,6 +899,52 @@ def test_startup_missing_ready_recovery_runs_only_once(tmp_path, monkeypatch):
     assert download_calls == [("g1", "1")]
 
 
+def test_startup_missing_ready_recovery_retries_after_failed_download(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps", exist_ok=True)
+
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    attempts = {"n": 0}
+
+    def _ensure(gid, ver):
+        attempts["n"] += 1
+        return attempts["n"] >= 2
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=_ensure,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_games_reset_initialized = True
+    rt.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
+    assert attempts["n"] == 1
+    assert rt.startup_missing_ready_games_recovery_done is False
+
+    applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
+    assert attempts["n"] == 2
+    assert rt.startup_missing_ready_games_recovery_done is True
+
+
 def test_startup_missing_ready_recovery_waits_until_gate_completes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     os.makedirs("apps", exist_ok=True)
@@ -987,6 +1033,58 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
         {
             "last_update_source": "supabase_bridge",
             "updated_at": "2026-04-01T13:00:01",
+            "games": [{"id": "g1", "status": "ready", "version": "1"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is False
+    assert download_calls == [("g1", "1")]
+
+
+def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps", exist_ok=True)
+
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    download_calls = []
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    # No parseable timestamps in startup snapshot.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "games": [{"id": "g1", "status": "playing", "version": "1"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is True
+    assert download_calls == []
+
+    # A stable snapshot without timestamps should still confirm gate and recover.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
             "games": [{"id": "g1", "status": "ready", "version": "1"}],
         }
     )
