@@ -138,6 +138,172 @@ def test_apply_sets_reload_flag_only_for_newer_remote_pages_update():
     assert ctx.reload_pages is False
 
 
+def test_supabase_pages_skips_full_reload_in_widget_mode_when_soft_apply_succeeds(
+    monkeypatch,
+):
+    from widget_lifecycle import try_soft_apply_remote_supabase_pages
+
+    monkeypatch.setattr(
+        "widget_lifecycle.restart_widget_process", lambda *_a, **_k: None
+    )
+
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    ctx.state_str = "widget"
+    ctx.page_index = 0
+    ctx.pages = [
+        {
+            "uuid": "p1",
+            "duration": "60",
+            "enabled": True,
+            "widgets": [
+                {
+                    "widget": {
+                        "id": "w1",
+                        "position": [0, 0, 10, 10],
+                        "fields": {"x": 1},
+                    }
+                }
+            ],
+        }
+    ]
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        try_soft_apply_remote_supabase_pages=try_soft_apply_remote_supabase_pages,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": "2026-04-22T10:00:00",
+            "pages": [
+                {
+                    "uuid": "p1",
+                    "duration": "30",
+                    "enabled": True,
+                    "widgets": [
+                        {
+                            "id": "w1",
+                            "position": [0, 0, 10, 10],
+                            "fields": {"x": 1},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    assert ctx.reload_pages is False
+    assert ctx.pages[0]["duration"] == "30"
+
+
+def test_supabase_pages_soft_apply_updates_active_widget_fields_and_restarts(
+    monkeypatch,
+):
+    from widget_lifecycle import try_soft_apply_remote_supabase_pages
+
+    restarts: list[tuple] = []
+
+    def _track_restart(widget_entry, page, widget_index):
+        restarts.append((widget_entry, page["uuid"], widget_index))
+
+    monkeypatch.setattr("widget_lifecycle.restart_widget_process", _track_restart)
+    monkeypatch.setattr("widget_lifecycle._kill_widget_process", lambda *_a, **_k: None)
+
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    ctx.state_str = "widget"
+    ctx.page_index = 0
+    ctx.pages = [
+        {
+            "uuid": "p1",
+            "duration": "60",
+            "enabled": True,
+            "widgets": [
+                {
+                    "widget": {
+                        "id": "w1",
+                        "position": [0, 0, 10, 10],
+                        "fields": {"x": 1},
+                    }
+                }
+            ],
+        }
+    ]
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        try_soft_apply_remote_supabase_pages=try_soft_apply_remote_supabase_pages,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": "2026-04-22T12:00:00",
+            "pages": [
+                {
+                    "uuid": "p1",
+                    "duration": "60",
+                    "widgets": [
+                        {
+                            "id": "w1",
+                            "position": [0, 0, 10, 10],
+                            "fields": {"x": 2},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    assert ctx.reload_pages is False
+    assert len(restarts) == 1
+    assert restarts[0][1] == "p1"
+    assert restarts[0][2] == 0
+    assert ctx.pages[0]["widgets"][0]["widget"]["fields"]["x"] == 2
+
+
 def test_apply_triggers_bluetooth_scan_when_requested():
     ctx = AppContext(
         display=MagicMock(),

@@ -12,7 +12,7 @@ import time
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
 from domain.game_remote_sync import (
@@ -114,6 +114,9 @@ class RemoteDeviceConfigDependencies:
     is_reset_in_progress: Callable[[], bool]
     on_reset_confirmed: Callable[[], None]
     request_config_refresh: Callable[[], None] = lambda: None
+    try_soft_apply_remote_supabase_pages: Optional[
+        Callable[[AppContext, List[Dict[str, Any]]], bool]
+    ] = None
 
 
 class RemoteDeviceConfigApplier:
@@ -268,7 +271,12 @@ class RemoteDeviceConfigApplier:
                     rt.last_applied_pages_fingerprint = pages_fingerprint
 
                 if should_reload_pages:
-                    ctx.reload_pages = True
+                    did_soft = (
+                        deps.try_soft_apply_remote_supabase_pages is not None
+                        and deps.try_soft_apply_remote_supabase_pages(ctx, pages)
+                    )
+                    if not did_soft:
+                        ctx.reload_pages = True
         except Exception as e:
             _log.error("Error applying remote pages config: %s", e)
 

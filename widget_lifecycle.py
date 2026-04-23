@@ -1,4 +1,7 @@
 """Widget lifecycle: page/widget process start, term, restart, update checks."""
+from __future__ import annotations
+
+import copy
 import json
 import logging
 import os
@@ -13,6 +16,7 @@ import requests
 from PIL import Image
 
 from core.helpers import set_pdeathsig, get_user_data_store_path
+from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
 
@@ -277,6 +281,112 @@ def restart_widget_process(
         _log.info("widget: restarted process id=%s pid=%s", widget_id, process.pid)
     except Exception as e:
         _log.error("Error restarting widget %s: %s", widget_id, e)
+
+
+def _normalize_pages_list(pages_in: list) -> list[dict]:
+    """Match MachineStateService.set_pages widget-list normalization."""
+    normalized: list[dict] = []
+    for page in pages_in or []:
+        if not isinstance(page, dict):
+            continue
+        page_copy = dict(page)
+        widgets = page_copy.get("widgets")
+        if not isinstance(widgets, list):
+            page_copy["widgets"] = []
+        normalized.append(page_copy)
+    return normalized
+
+
+def _widget_config_fingerprint(widget: dict) -> str:
+    return json.dumps(
+        {
+            "id": widget.get("id"),
+            "position": widget.get("position"),
+            "fields": widget.get("fields"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def try_soft_apply_remote_supabase_pages(ctx: AppContext, new_pages: list) -> bool:
+    """
+    After conf.json was written from a Supabase pages snapshot, patch ctx.pages so
+    the main loop can skip reload_pages when safe.
+
+    Returns True to skip full soft reload when:
+    - UI is in widget mode (a page may be visible).
+    - Content page UUIDs match the snapshot in the same order (synthetic ``0`` tail ignored).
+    - Per-widget ``id`` / ``position`` / ``fields`` changes kill stale processes; the
+      active page's changed widgets are restarted immediately.
+    """
+    if ctx.state_str != "widget" or not ctx.pages:
+        return False
+
+    normalized = _normalize_pages_list(new_pages)
+    by_uuid = {p["uuid"]: p for p in normalized if isinstance(p, dict) and p.get("uuid")}
+
+    content_uuids_rt = [p.get("uuid") for p in ctx.pages if p.get("uuid") != "0"]
+    content_uuids_new = [p.get("uuid") for p in normalized if p.get("uuid")]
+    if content_uuids_rt != content_uuids_new:
+        return False
+
+    pi = ctx.page_index
+    if pi < 0 or pi >= len(ctx.pages):
+        return False
+
+    try:
+        for page in ctx.pages:
+            pu = page.get("uuid")
+            if not pu or pu == "0":
+                continue
+            new_cfg = by_uuid.get(pu)
+            if new_cfg is None:
+                return False
+            old_entries = page.get("widgets") or []
+            new_cfgs = new_cfg.get("widgets") or []
+            if len(old_entries) != len(new_cfgs):
+                return False
+            for we in old_entries:
+                if not isinstance(we.get("widget"), dict):
+                    return False
+
+        for page_idx, page in enumerate(ctx.pages):
+            pu = page.get("uuid")
+            if not pu or pu == "0":
+                continue
+            new_cfg = by_uuid[pu]
+            for key in ("duration", "title", "combination"):
+                if key in new_cfg:
+                    page[key] = new_cfg[key]
+            if "enabled" in new_cfg:
+                page["enabled"] = bool(new_cfg.get("enabled", True))
+
+            old_entries = page.get("widgets") or []
+            new_cfgs = new_cfg.get("widgets") or []
+            for j, new_w in enumerate(new_cfgs):
+                if not isinstance(new_w, dict):
+                    return False
+                widget_entry = old_entries[j]
+                inner = widget_entry["widget"]
+                if _widget_config_fingerprint(inner) == _widget_config_fingerprint(new_w):
+                    continue
+                old_id = str(inner.get("id") or "")
+                _kill_widget_process(
+                    widget_entry, old_id, "supabase pages widget config change"
+                )
+                widget_entry["widget"] = copy.deepcopy(new_w)
+                if page_idx == pi:
+                    restart_widget_process(widget_entry, page, j)
+    except Exception as e:
+        _log.warning(
+            "supabase pages soft apply failed; falling back to full reload: %s", e
+        )
+        return False
+
+    _log.info("supabase pages: soft-applied in widget mode (skipped reload_pages)")
+    return True
 
 
 def check_page_widget_updates(page: dict, get_context) -> None:

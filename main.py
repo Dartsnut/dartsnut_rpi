@@ -47,6 +47,7 @@ from widget_lifecycle import (
     init_pages,
     term_widget_processes,
     check_widget_ready,
+    try_soft_apply_remote_supabase_pages,
 )
 from game_lifecycle import (
     load_menu_game_list,
@@ -392,6 +393,7 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         get_version=machine_api.get_version,
         is_reset_in_progress=_is_reset_in_progress,
         on_reset_confirmed=_reset_remote_confirm_event.set,
+        try_soft_apply_remote_supabase_pages=try_soft_apply_remote_supabase_pages,
     ),
     _remote_config_runtime,
 )
@@ -407,9 +409,9 @@ def locate_device():
 
 
 def reload_config():
-    # WebSocket-driven config reloads should be soft: update pages from ./apps/conf.json
-    # without forcing a hard reset back to menu/widgets or killing any running game.
-    _app_ctx.reload_pages = True
+    # Supabase inbound callbacks invoke this for any row change, including non-page
+    # fields such as volume/brightness. Page reload intent is set explicitly by the
+    # remote config applier via ctx.reload_pages when pages truly changed.
     refresh_menu_game_list_if_requested(_app_ctx)
 
 
