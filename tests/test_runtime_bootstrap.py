@@ -76,3 +76,30 @@ def test_ensure_device_info_id_reads_missing_identity_from_boot(
     assert persisted["id"] == "AA:BB:CC:DD:EE:FF"
     assert persisted["serial"] == "BOOT-SN"
     assert persisted["model"] == "PixelBoard"
+
+
+def test_ensure_device_info_id_backfills_identity_when_id_already_exists(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    device_path = tmp_path / "device.json"
+    device_path.write_text(
+        json.dumps({"id": "AA:BB:CC:DD:EE:FF"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        bootstrap,
+        "_load_boot_device_identity",
+        lambda: {"serial": "BOOT-SN2", "model": "PixelDart"},
+    )
+
+    out = bootstrap._ensure_device_info_id({"id": "AA:BB:CC:DD:EE:FF"})
+
+    assert out["id"] == "AA:BB:CC:DD:EE:FF"
+    assert out["serial"] == "BOOT-SN2"
+    assert out["model"] == "PixelDart"
+    persisted = json.loads(device_path.read_text(encoding="utf-8"))
+    assert persisted["id"] == "AA:BB:CC:DD:EE:FF"
+    assert persisted["serial"] == "BOOT-SN2"
+    assert persisted["model"] == "PixelDart"

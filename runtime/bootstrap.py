@@ -58,11 +58,9 @@ def _load_boot_device_identity() -> Dict[str, Any]:
 def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
     info = dict(device_info or {})
     existing_id = _normalize_device_id(info.get("id"))
-    if existing_id:
-        info["id"] = existing_id
-        return info
-
-    resolved = _normalize_device_id(info.get("ble_mac") or info.get("mac_address"))
+    resolved = existing_id or _normalize_device_id(
+        info.get("ble_mac") or info.get("mac_address")
+    )
     if not resolved:
         try:
             from bluezero import adapter  # type: ignore
