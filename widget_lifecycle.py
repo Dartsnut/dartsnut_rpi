@@ -23,6 +23,8 @@ _log = logging.getLogger(__name__)
 # Throttling and update tracking (used by check_page_widget_updates and kill_widget_if_page_inactive)
 widget_update_checks = {}
 widgets_updated = set()
+_missing_widget_download_attempts = {}
+_missing_widget_download_inflight = set()
 
 
 def _get_flattened_data_compat(img):
@@ -214,20 +216,67 @@ def kill_widget_if_page_inactive(widget_id: str, get_context) -> None:
                 return
 
 
-def download_widget_async(widget_id: str, url: str, md5: str, get_context) -> None:
+def download_widget_async(
+    widget_id: str, url: str, md5: str, get_context=None, on_complete=None
+) -> None:
     """Download widget in background; on success call kill_widget_if_page_inactive."""
     def worker():
         try:
             _log.info("widget: background download started id=%s", widget_id)
             if download_app(url, md5):
                 _log.info("widget: background download finished id=%s", widget_id)
-                kill_widget_if_page_inactive(widget_id, get_context)
+                if get_context is not None:
+                    kill_widget_if_page_inactive(widget_id, get_context)
             else:
                 _log.warning("widget: background download failed id=%s", widget_id)
         except Exception as e:
             _log.error("widget: background download error id=%s: %s", widget_id, e)
+        finally:
+            if on_complete is not None:
+                try:
+                    on_complete()
+                except Exception:
+                    pass
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def _request_missing_widget_download(widget_id: str, *, force: bool = False) -> None:
+    """Ensure missing widget app download is attempted in background with throttling."""
+    if not widget_id or widget_id == "0":
+        return
+    if os.path.isdir(os.path.join(os.getcwd(), "apps", widget_id)):
+        return
+    if widget_id in _missing_widget_download_inflight:
+        return
+    now = time.time()
+    last_attempt = _missing_widget_download_attempts.get(widget_id, 0.0)
+    if not force and (now - last_attempt) < 30:
+        return
+    _missing_widget_download_attempts[widget_id] = now
+    _missing_widget_download_inflight.add(widget_id)
+
+    def _clear_inflight():
+        _missing_widget_download_inflight.discard(widget_id)
+
+    try:
+        needs_update, download_info = check_and_update_widget_version(widget_id)
+    except Exception as e:
+        _log.warning("widget: missing-widget download check failed id=%s: %s", widget_id, e)
+        _clear_inflight()
+        return
+
+    if not needs_update or not isinstance(download_info, dict):
+        _clear_inflight()
+        return
+
+    url = download_info.get("widget_download_url")
+    md5 = download_info.get("widget_download_md5")
+    if not url or not md5:
+        _clear_inflight()
+        return
+
+    download_widget_async(widget_id, url, md5, get_context=None, on_complete=_clear_inflight)
 
 
 def restart_widget_process(
@@ -242,6 +291,7 @@ def restart_widget_process(
         return
     widget_path = os.path.join(os.getcwd(), "apps", widget_id)
     if not os.path.isdir(widget_path):
+        _request_missing_widget_download(widget_id)
         return
     try:
         page_uuid = page["uuid"]
@@ -421,6 +471,13 @@ def start_page_process(page: dict) -> dict:
     for widget_index in range(len(page["widgets"])):
         widget = page["widgets"][widget_index]
         if widget["id"] == "0":
+            fallback_entry = {
+                "process": None,
+                "shm": None,
+                "widget": widget,
+                "launched": False,
+                "has_small_widget": None,
+            }
             page_uuid = page["uuid"]
             shm_name = f"widget_{page_uuid}_{widget_index}_shm"
             shm_size = (widget["position"][2] - widget["position"][0] + 1) * (
@@ -454,28 +511,21 @@ def start_page_process(page: dict) -> dict:
                 )
             except Exception as e:
                 _log.error("Error starting default widget: %s", e)
+                widgets.append(fallback_entry)
             continue
         widget_path = os.path.join(os.getcwd(), "apps", widget["id"])
         if not os.path.isdir(widget_path):
-            try:
-                response = requests.get(
-                    f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget['id']}"
-                )
-                if response.status_code == 200:
-                    data = response.json().get("data")
-                    if data:
-                        u = data.get("widget_download_url")
-                        m = data.get("widget_download_md5")
-                        if u and m:
-                            download_app(u, m)
-                else:
-                    _log.warning(
-                        "Failed to get download info for widget %s: HTTP %s",
-                        widget["id"],
-                        response.status_code,
-                    )
-            except Exception as e:
-                _log.warning("Error fetching widget download info: %s", e)
+            _request_missing_widget_download(widget["id"], force=True)
+            widgets.append(
+                {
+                    "process": None,
+                    "shm": None,
+                    "widget": widget,
+                    "launched": False,
+                    "has_small_widget": None,
+                }
+            )
+            continue
         if os.path.isdir(widget_path):
             page_uuid = page["uuid"]
             shm_name = f"widget_{page_uuid}_{widget_index}_shm"
@@ -521,8 +571,15 @@ def start_page_process(page: dict) -> dict:
                 )
             except Exception as e:
                 _log.error("Error starting widget %s: %s", widget["id"], e)
-    if not widgets:
-        return None
+                widgets.append(
+                    {
+                        "process": None,
+                        "shm": None,
+                        "widget": widget,
+                        "launched": False,
+                        "has_small_widget": None,
+                    }
+                )
     img = Image.new("RGB", (128, 160), (0, 0, 0))
     for w in widgets:
         try:

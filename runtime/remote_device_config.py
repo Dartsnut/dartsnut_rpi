@@ -78,6 +78,34 @@ def _debug_reset_gate_enabled() -> bool:
     }
 
 
+def _content_page_uuids_from_runtime_pages(pages: Any) -> list[str]:
+    uuids: list[str] = []
+    if not isinstance(pages, list):
+        return uuids
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        pu = str(page.get("uuid") or "").strip()
+        if not pu or pu == "0":
+            continue
+        uuids.append(pu)
+    return uuids
+
+
+def _content_page_uuids_from_remote_pages(pages: Any) -> list[str]:
+    uuids: list[str] = []
+    if not isinstance(pages, list):
+        return uuids
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        pu = str(page.get("uuid") or "").strip()
+        if not pu:
+            continue
+        uuids.append(pu)
+    return uuids
+
+
 @dataclass
 class RemoteConfigRuntimeState:
     startup_games_reset_initialized: bool = False
@@ -299,10 +327,24 @@ class RemoteDeviceConfigApplier:
                 if source == "supabase_bridge":
                     if pages_updated_at is not None:
                         baseline = rt.last_applied_pages_updated_at
-                        should_reload_pages = (
-                            baseline is None or pages_updated_at > baseline
-                        )
+                        is_newer = baseline is None or pages_updated_at > baseline
+                        if is_newer:
+                            should_reload_pages = True
+                        elif rt.has_seen_remote_pages_snapshot:
+                            # If timestamp precision/collision prevents strict "newer",
+                            # still reload when payload content actually changed.
+                            should_reload_pages = (
+                                pages_fingerprint != rt.last_applied_pages_fingerprint
+                            )
                         rt.last_applied_pages_updated_at = pages_updated_at
+                    elif not rt.has_seen_remote_pages_snapshot:
+                        # First bridge snapshot can omit pages_updated_at.
+                        # In that case, compare runtime content-page order against
+                        # remote content-page order so appended/reordered pages are
+                        # not silently cached without applying to UI runtime.
+                        runtime_uuids = _content_page_uuids_from_runtime_pages(ctx.pages)
+                        remote_uuids = _content_page_uuids_from_remote_pages(pages)
+                        should_reload_pages = runtime_uuids != remote_uuids
                     elif rt.has_seen_remote_pages_snapshot:
                         should_reload_pages = (
                             pages_fingerprint != rt.last_applied_pages_fingerprint

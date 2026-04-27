@@ -138,6 +138,113 @@ def test_apply_sets_reload_flag_only_for_newer_remote_pages_update():
     assert ctx.reload_pages is False
 
 
+def test_apply_sets_reload_flag_on_first_supabase_snapshot_without_pages_updated_at_when_pages_differ():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    # Runtime currently has one content page loaded.
+    ctx.pages = [
+        {"uuid": "existing", "widgets": [], "enabled": True},
+        {"uuid": "0", "widgets": [], "enabled": True},
+    ]
+    ctx.reload_pages = False
+
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+
+    # First bridge snapshot does not include pages_updated_at but includes
+    # a newly appended page in list order.
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages": [
+                {"uuid": "existing", "widgets": []},
+                {"uuid": "newly-appended", "widgets": []},
+            ],
+        }
+    )
+
+    assert ctx.reload_pages is True
+
+
+def test_apply_sets_reload_when_pages_updated_at_unchanged_but_pages_fingerprint_differs():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+
+    first_pages = [{"uuid": "p1", "widgets": []}]
+    same_ts = "2026-04-27T07:00:00+00:00"
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": same_ts,
+            "pages": first_pages,
+        }
+    )
+    assert ctx.reload_pages is True
+
+    # Simulate main loop consuming reload flag between snapshots.
+    ctx.reload_pages = False
+    second_pages = [
+        {"uuid": "p1", "widgets": []},
+        {"uuid": "p2", "widgets": []},
+    ]
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "pages_updated_at": same_ts,
+            "pages": second_pages,
+        }
+    )
+    assert ctx.reload_pages is True
+
+
 def test_supabase_pages_skips_full_reload_in_widget_mode_when_soft_apply_succeeds(
     monkeypatch,
 ):

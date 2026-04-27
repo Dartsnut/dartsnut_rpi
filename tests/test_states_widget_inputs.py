@@ -73,3 +73,29 @@ def test_widget_btn_home_other_model_transitions_to_menu(monkeypatch):
     WidgetState().handle_input(ctx, {"btn_home": True})
     assert ctx.transitions[-1] == "MenuState"
 
+
+def test_widget_navigation_includes_page_with_unlaunched_widgets(monkeypatch):
+    pages = [
+        {"uuid": "0", "enabled": True, "widgets": []},
+        {
+            "uuid": "missing-widget-page",
+            "enabled": True,
+            "widgets": [
+                {
+                    "process": None,
+                    "shm": None,
+                    "widget": {"id": "digitalclock", "position": [0, 0, 127, 127], "fields": {}},
+                    "launched": False,
+                    "has_small_widget": None,
+                }
+            ],
+        },
+        {"uuid": "other-page", "enabled": True, "widgets": []},
+    ]
+    ctx = _Ctx(pages=pages, page_index=2)
+    monkeypatch.setattr(swidget.time, "time", lambda: 77.0)
+
+    WidgetState().handle_input(ctx, {"btn_left": True})
+    assert ctx.page_index == 1
+    assert ctx.page_tick == 77.0
+
