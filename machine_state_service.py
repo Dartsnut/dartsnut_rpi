@@ -57,9 +57,22 @@ class MachineStateService:
     @classmethod
     def _write_device_info(cls, device_info: Dict[str, Any]) -> None:
         path = cls._device_json_path()
-        # Always update the device-level timestamp whenever we persist.
+        # Preserve immutable identity fields from disk and never introduce them
+        # through generic mutation paths.
         try:
-            device_info = dict(device_info)
+            persisted = cls._read_device_info()
+        except Exception:
+            persisted = {}
+
+        try:
+            device_info = dict(device_info or {})
+            for key in ("serial", "model"):
+                persisted_value = str((persisted or {}).get(key, "")).strip()
+                if persisted_value:
+                    device_info[key] = persisted_value
+                else:
+                    device_info.pop(key, None)
+            # Always update the device-level timestamp whenever we persist.
             device_info["updated_at"] = datetime.now(timezone.utc).isoformat()
         except Exception:
             # If timestamping fails for any reason, fall back to raw write.
@@ -312,10 +325,7 @@ class MachineStateService:
             payload["dim_window_end"] = "8:00"
             payload["dim_level"] = 10
             payload["dim_restore_seconds"] = 5
-            payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-            path = self._device_json_path()
-            with open(path, "w") as f:
-                json.dump(payload, f)
+            self._write_device_info(payload)
         except Exception as e:
             _log.error("Error resetting device.json to factory fields: %s", e)
 

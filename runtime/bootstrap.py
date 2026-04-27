@@ -26,6 +26,35 @@ def _normalize_device_id(value: Any) -> str:
     return raw
 
 
+def _has_identity_fields(device_info: Dict[str, Any]) -> bool:
+    if not isinstance(device_info, dict):
+        return False
+    serial = str(device_info.get("serial", "")).strip()
+    model = str(device_info.get("model", "")).strip()
+    return bool(serial and model)
+
+
+def _load_boot_device_identity() -> Dict[str, Any]:
+    try:
+        boot_path = "/boot/device.json"
+        if not os.path.isfile(boot_path):
+            return {}
+        with open(boot_path, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+        if not isinstance(payload, dict):
+            return {}
+        serial = str(payload.get("serial", "")).strip()
+        model = str(payload.get("model", "")).strip()
+        out: Dict[str, Any] = {}
+        if serial:
+            out["serial"] = serial
+        if model:
+            out["model"] = model
+        return out
+    except Exception:
+        return {}
+
+
 def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
     info = dict(device_info or {})
     existing_id = _normalize_device_id(info.get("id"))
@@ -54,7 +83,29 @@ def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 persisted = json.load(f) or {}
+
+        if not _has_identity_fields(persisted):
+            boot_identity = _load_boot_device_identity()
+            if boot_identity:
+                persisted = dict(persisted)
+                for key in ("serial", "model"):
+                    val = str(boot_identity.get(key, "")).strip()
+                    if val:
+                        persisted[key] = val
+                for key in ("serial", "model"):
+                    if not str(info.get(key, "")).strip() and str(
+                        persisted.get(key, "")
+                    ).strip():
+                        info[key] = persisted[key]
+
+        if not _has_identity_fields(persisted) and not _has_identity_fields(info):
+            return info
         persisted["id"] = resolved
+        for key in ("serial", "model"):
+            if not str(persisted.get(key, "")).strip():
+                incoming = str(info.get(key, "")).strip()
+                if incoming:
+                    persisted[key] = incoming
         with open(path, "w", encoding="utf-8") as f:
             json.dump(persisted, f)
     except Exception:

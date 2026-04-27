@@ -123,3 +123,61 @@ def test_set_pages_default_behavior_still_reload_immediately(tmp_path, monkeypat
 
     service.set_pages([{"uuid": "page-1", "widgets": []}])
     assert calls["reload"] == 1
+
+
+def test_set_brightness_preserves_existing_identity_fields(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("device.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "serial": "SN-ORIGINAL",
+                "model": "PixelBoard",
+                "brightness": "25",
+                "volume": "30",
+            },
+            f,
+        )
+
+    service = MachineStateService(
+        ctx=None,
+        set_brightness_hardware=lambda _v: None,
+        get_device_info=lambda: {
+            "serial": "SN-HACKED",
+            "model": "ChangedModel",
+            "brightness": "33",
+        },
+        reload_pages_from_conf=lambda _ctx: None,
+    )
+
+    service.set_brightness(90)
+
+    with open("device.json", "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    assert payload["serial"] == "SN-ORIGINAL"
+    assert payload["model"] == "PixelBoard"
+    assert payload["brightness"] == "90"
+
+
+def test_set_volume_does_not_introduce_identity_when_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("device.json", "w", encoding="utf-8") as f:
+        json.dump({"brightness": "20", "volume": "10"}, f)
+
+    service = MachineStateService(
+        ctx=None,
+        set_brightness_hardware=lambda _v: None,
+        get_device_info=lambda: {
+            "serial": "SN-NEW",
+            "model": "PixelDart",
+            "volume": "88",
+        },
+        reload_pages_from_conf=lambda _ctx: None,
+    )
+
+    service.set_volume(55)
+
+    with open("device.json", "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    assert "serial" not in payload
+    assert "model" not in payload
+    assert payload["volume"] == "55"
