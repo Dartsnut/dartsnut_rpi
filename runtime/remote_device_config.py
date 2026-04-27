@@ -495,7 +495,9 @@ class RemoteDeviceConfigApplier:
                     def _terminate_running_game(gid: str) -> None:
                         if ctx.game and isinstance(ctx.game, dict):
                             running_id = str(ctx.game.get("game_id") or "")
-                            if running_id == gid:
+                            if gid and running_id != gid:
+                                return
+                            if running_id:
                                 deps.term_game_process(ctx.game)
                                 ctx.game = None
                                 ctx.reload_conf = True

@@ -40,6 +40,12 @@ def handle_incoming_game_status(
         return
 
     if normalized == "playing":
+        running_game_id = str(current_game_id or "").strip()
+        if running_game_id and running_game_id == game_id:
+            return
+        if running_game_id and running_game_id != game_id:
+            terminate_running_game(running_game_id)
+            set_game_status(running_game_id, "ready")
         if not game_exists(game_id):
             set_game_status(game_id, "downloading")
             if not ensure_game_downloaded(game_id, expected_version):

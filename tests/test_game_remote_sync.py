@@ -110,6 +110,42 @@ def test_handle_playing_status_downloads_then_requests_launch_when_missing():
     assert events == [("chess", "downloading"), ("launch", "chess")]
 
 
+def test_handle_playing_status_switches_running_game_before_launch():
+    events = []
+
+    handle_incoming_game_status(
+        "pong",
+        "playing",
+        expected_version="",
+        current_game_id="chess",
+        game_exists=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        set_game_status=lambda gid, status: events.append((gid, status)),
+        request_launch=lambda gid: events.append(("launch", gid)),
+        terminate_running_game=lambda gid: events.append(("terminate", gid)),
+    )
+
+    assert events == [("terminate", "chess"), ("chess", "ready"), ("launch", "pong")]
+
+
+def test_handle_playing_status_same_running_game_is_noop():
+    events = []
+
+    handle_incoming_game_status(
+        "chess",
+        "playing",
+        expected_version="",
+        current_game_id="chess",
+        game_exists=lambda _gid: True,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        set_game_status=lambda gid, status: events.append((gid, status)),
+        request_launch=lambda gid: events.append(("launch", gid)),
+        terminate_running_game=lambda gid: events.append(("terminate", gid)),
+    )
+
+    assert events == []
+
+
 def test_handle_ready_status_terminates_matching_running_game():
     events = []
 
