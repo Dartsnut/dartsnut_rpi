@@ -53,15 +53,24 @@ def test_remote_scan_controller_publishes_scan_result_and_resets_flag():
             break
         threading.Event().wait(0.01)
 
-    assert published == [
-        {
-            "bluetooth": {
-                "is_scan": False,
-                "list": [{"address": "AA", "name": "Pad", "status": "connected"}],
-                "timestamp": "2026-03-23T12:34:56+00:00",
-            }
+    assert published[0] == {
+        "bluetooth": {
+            "is_scan": True,
+            "controllers": [],
+            "scan_results": [],
+            "last_scan_at": "",
         }
-    ]
+    }
+    assert published[1] == {
+        "bluetooth": {
+            "is_scan": False,
+            "controllers": [],
+            "scan_results": [
+                {"name": "Pad", "mac": "AA", "status": "connected"},
+            ],
+            "last_scan_at": "2026-03-23T12:34:56+00:00",
+        }
+    }
 
 
 def test_remote_scan_controller_ignores_reentrant_request_until_done():
@@ -88,8 +97,8 @@ def test_remote_scan_controller_ignores_reentrant_request_until_done():
             break
         threading.Event().wait(0.01)
 
-    assert len(published) == 1
-    assert published[0]["bluetooth"]["is_scan"] is False
+    assert len(published) == 2
+    assert published[-1]["bluetooth"]["is_scan"] is False
 
 
 def test_remote_scan_controller_handles_scan_failure_with_empty_list():
@@ -108,18 +117,17 @@ def test_remote_scan_controller_handles_scan_failure_with_empty_list():
             break
         threading.Event().wait(0.01)
 
-    assert published == [
-        {
-            "bluetooth": {
-                "is_scan": False,
-                "list": [],
-                "timestamp": "2026-03-23T12:36:56+00:00",
-            }
+    assert published[-1] == {
+        "bluetooth": {
+            "is_scan": False,
+            "controllers": [],
+            "scan_results": [],
+            "last_scan_at": "2026-03-23T12:36:56+00:00",
         }
-    ]
+    }
 
 
-def test_remote_scan_controller_skips_unchanged_list_payload():
+def test_remote_scan_controller_clears_then_republishes_scan_results_each_scan():
     published = []
     scan_result = [{"address": "AA", "name": "Pad", "status": "connected"}]
 
@@ -132,25 +140,28 @@ def test_remote_scan_controller_skips_unchanged_list_payload():
 
     assert controller.start_scan_if_requested() is True
     for _ in range(40):
-        if len(published) >= 1:
+        if len(published) >= 2:
             break
         threading.Event().wait(0.01)
 
     assert controller.start_scan_if_requested() is True
     for _ in range(40):
-        if len(published) >= 2:
+        if len(published) >= 4:
             break
         threading.Event().wait(0.01)
 
-    assert len(published) == 2
-    assert published[0] == {
+    assert len(published) == 4
+    assert published[0]["bluetooth"]["scan_results"] == []
+    assert published[1] == {
         "bluetooth": {
             "is_scan": False,
-            "list": scan_result,
-            "timestamp": "2026-03-23T12:37:56+00:00",
+            "controllers": [],
+            "scan_results": [{"name": "Pad", "mac": "AA", "status": "connected"}],
+            "last_scan_at": "2026-03-23T12:37:56+00:00",
         }
     }
-    assert published[1] == {"bluetooth": {"is_scan": False}}
+    assert published[2]["bluetooth"]["scan_results"] == []
+    assert published[3]["bluetooth"]["last_scan_at"] == "2026-03-23T12:37:56+00:00"
 
 
 def test_remote_connect_controller_success_sets_connected_and_clears_connect():
@@ -163,27 +174,17 @@ def test_remote_connect_controller_success_sets_connected_and_clears_connect():
         connect_device=lambda address: (True, ""),
     )
 
-    assert controller.start_connect_if_requested("AA:BB:CC:DD:EE:FF") is True
+    assert controller.start_connect_if_requested("AA:BB:CC:DD:EE:FF", "scan_results") is True
     for _ in range(40):
         if published:
             break
         threading.Event().wait(0.01)
 
-    assert published == [
-        {
-            "bluetooth": {
-                "connect": "",
-                "timestamp": "2026-03-23T12:40:56+00:00",
-                "error": "",
-                "list": [
-                    {
-                        "address": "AA:BB:CC:DD:EE:FF",
-                        "name": "",
-                        "status": "connected",
-                    }
-                ],
-            }
-        }
+    assert published[-1]["bluetooth"]["scan_results"] == [
+        {"name": "", "mac": "AA:BB:CC:DD:EE:FF", "status": "connected"}
+    ]
+    assert published[-1]["bluetooth"]["controllers"] == [
+        {"name": "", "mac": "AA:BB:CC:DD:EE:FF", "status": "connected"}
     ]
 
 
@@ -197,25 +198,17 @@ def test_remote_connect_controller_failure_sets_error_and_clears_connect():
         connect_device=lambda address: (False, "Auth failed"),
     )
 
-    assert controller.start_connect_if_requested("11:22:33:44:55:66") is True
+    assert controller.start_connect_if_requested("11:22:33:44:55:66", "controllers") is True
     for _ in range(40):
         if published:
             break
         threading.Event().wait(0.01)
 
-    assert published == [
+    assert published[-1]["bluetooth"]["controllers"] == [
         {
-            "bluetooth": {
-                "connect": "",
-                "timestamp": "2026-03-23T12:41:56+00:00",
-                "error": "Auth failed",
-                "list": [
-                    {
-                        "address": "11:22:33:44:55:66",
-                        "name": "",
-                        "status": "disconnected",
-                    }
-                ],
-            }
+            "name": "",
+            "mac": "11:22:33:44:55:66",
+            "status": "error",
+            "last_error": "Auth failed",
         }
     ]

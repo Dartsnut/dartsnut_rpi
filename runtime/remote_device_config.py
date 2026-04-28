@@ -122,6 +122,7 @@ class RemoteConfigRuntimeState:
     last_applied_pages_updated_at: Optional[datetime] = None
     last_applied_pages_fingerprint: Optional[str] = None
     has_seen_remote_pages_snapshot: bool = False
+    last_remote_controller_macs: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -142,6 +143,7 @@ class RemoteDeviceConfigDependencies:
     is_reset_in_progress: Callable[[], bool]
     on_reset_confirmed: Callable[[], None]
     request_config_refresh: Callable[[], None] = lambda: None
+    disconnect_and_unpair_device: Callable[[str], dict] = lambda _mac: {}
     try_soft_apply_remote_supabase_pages: Optional[
         Callable[[AppContext, List[Dict[str, Any]]], bool]
     ] = None
@@ -367,11 +369,52 @@ class RemoteDeviceConfigApplier:
             if isinstance(bluetooth_cfg, dict):
                 if bool(bluetooth_cfg.get("is_scan")):
                     deps.bluetooth_scan_controller.start_scan_if_requested()
-                connect_address = bluetooth_cfg.get("connect")
-                if isinstance(connect_address, str) and connect_address.strip():
-                    deps.bluetooth_scan_controller.start_connect_if_requested(
-                        connect_address.strip()
-                    )
+                controllers = (
+                    bluetooth_cfg.get("controllers")
+                    if isinstance(bluetooth_cfg.get("controllers"), list)
+                    else []
+                )
+                scan_results = (
+                    bluetooth_cfg.get("scan_results")
+                    if isinstance(bluetooth_cfg.get("scan_results"), list)
+                    else []
+                )
+                # Trigger connects from either list when app marks a row connecting.
+                for source_list, rows in (
+                    ("controllers", controllers),
+                    ("scan_results", scan_results),
+                ):
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        status = str(row.get("status") or "").strip().lower()
+                        if status not in {"connecting", "connect"}:
+                            continue
+                        mac = str(row.get("mac") or row.get("address") or "").strip()
+                        if mac:
+                            deps.bluetooth_scan_controller.start_connect_if_requested(
+                                mac, source_list
+                            )
+
+                # Detect controller removals and unpair removed devices.
+                current_controller_macs: set[str] = set()
+                for row in controllers:
+                    if not isinstance(row, dict):
+                        continue
+                    mac = str(row.get("mac") or row.get("address") or "").strip().upper()
+                    if mac:
+                        current_controller_macs.add(mac)
+                removed_macs = rt.last_remote_controller_macs - current_controller_macs
+                for removed_mac in removed_macs:
+                    try:
+                        deps.disconnect_and_unpair_device(removed_mac)
+                    except Exception as e:
+                        _log.warning(
+                            "Error removing remote bluetooth controller mac=%s: %s",
+                            removed_mac,
+                            e,
+                        )
+                rt.last_remote_controller_macs = current_controller_macs
         except Exception as e:
             _log.warning("Error handling remote bluetooth config: %s", e)
 

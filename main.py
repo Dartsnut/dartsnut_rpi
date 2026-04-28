@@ -381,6 +381,9 @@ _remote_config_applier = RemoteDeviceConfigApplier(
             gid, s
         ),
         request_set_all_games_ready=lambda: get_remote_sync().request_set_all_games_ready(),
+        disconnect_and_unpair_device=(
+            _websocket_service_registry.bluetooth_ops.disconnect_and_unpair_device
+        ),
         request_config_refresh=lambda: get_remote_sync().restart_sync(
             get_device_info() or {}, reload_config, _apply_remote_config
         ),

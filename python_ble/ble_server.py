@@ -281,13 +281,13 @@ def start_ble_server(locate_device=None):
             time.sleep(0.2)
     except Exception as e:
         _log.warning("Failed to power Bluetooth adapter: %s", e)
-    
+
     # Set the adapter alias to match the local name
     try:
         bt_adapter.alias = local_name
     except Exception as e:
         _log.warning("Failed to set adapter alias: %s", e)
-    
+
     ble_uart = peripheral.Peripheral(adapter_address, local_name=local_name)
     ble_uart.add_service(srv_id=1, uuid=UART_SERVICE, primary=True)
     ble_uart.add_characteristic(srv_id=1, chr_id=1, uuid=RX_CHARACTERISTIC,

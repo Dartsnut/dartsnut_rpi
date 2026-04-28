@@ -96,6 +96,28 @@ SUPABASE_KEY="<supabase-key>" ./scripts/run_local_supabase_e2e.sh
 - Supabase bridge resolves `device_id` from BLE adapter MAC in Rust.
 - Stored and published in uppercase with `:` separators (for example `AA:BB:CC:DD:EE:FF`).
 
+## Bluetooth state contract
+
+Remote sync uses a canonical `state.bluetooth` object:
+
+- `is_scan` (boolean): app sets `true` to request a scan; Python bridge resets to `false` after scan completes.
+- `controllers` (array): paired/known controllers, unique by `mac`.
+- `scan_results` (array): most recent scan snapshot, unique by `mac`.
+- `last_scan_at` (ISO string): timestamp of the latest completed scan, used by app freshness logic.
+
+Each row in `controllers` and `scan_results` uses:
+
+- `name` (string)
+- `mac` (string, uppercase `AA:BB:CC:DD:EE:FF`)
+- `status` (`idle | connecting | connected | error`)
+- `last_error` (optional string, populated when status is `error`)
+
+Behavior notes:
+
+- Scan start clears `scan_results` first, then writes new results when scan completes.
+- If app sets an entry status to `connecting` (in either list), firmware attempts connection and updates status to `connected` or `error`.
+- If app removes an entry from `controllers`, firmware unpairs/disconnects that `mac` (same behavior as websocket `bluetooth_remove`).
+
 ## OSS strip boundary
 
 Remove these paths before publishing:

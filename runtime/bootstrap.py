@@ -14,6 +14,7 @@ import assets
 from runtime.remote_sync_port import get_remote_sync
 
 _log = logging.getLogger(__name__)
+_UDP_BROADCAST_THREAD_ENABLED = False
 
 
 def _normalize_device_id(value: Any) -> str:
@@ -135,6 +136,11 @@ def start_background_subsystems(
     remote_config_runtime: Any,
     websocket_service_registry: Any = None,
 ) -> None:
+    # Keep UDP discovery broadcasts disabled in this branch.
+    # IP/SSID reads still come from machine_api -> udp_broadcast helpers.
+    if not _UDP_BROADCAST_THREAD_ENABLED:
+        _log.info("UDP discovery broadcast thread disabled")
+
     device_info = _ensure_device_info_id(device_info)
     dartsnut.update_frame_buffer(assets.create_loading_image())
     try:

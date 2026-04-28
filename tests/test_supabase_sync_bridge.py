@@ -31,6 +31,12 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
     assert state["volume"] == 50
     assert state["pages"] == []
     assert state["games"] == []
+    assert state["bluetooth"] == {
+        "is_scan": False,
+        "controllers": [],
+        "scan_results": [],
+        "last_scan_at": "",
+    }
     assert state["dim_window"]["dim_window_enabled"] is True
     assert state["device_info"] == {
         "id": "AA:BB:CC:DD:EE:FF",

@@ -69,6 +69,7 @@ def test_apply_sets_pages_without_reload_when_not_remote_update(
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
         request_set_all_games_ready=lambda: None,
+        disconnect_and_unpair_device=lambda _mac: {},
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -473,6 +474,82 @@ def test_apply_updates_brightness_via_service():
     applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
     applier.apply({"brightness": 77})
     svc.set_brightness.assert_called_once_with(77)
+
+
+def test_apply_bluetooth_connecting_rows_trigger_connect_for_both_lists():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+    applier.apply(
+        {
+            "bluetooth": {
+                "controllers": [{"mac": "AA:11", "status": "connecting"}],
+                "scan_results": [{"mac": "BB:22", "status": "connecting"}],
+            }
+        }
+    )
+    ble.start_connect_if_requested.assert_any_call("AA:11", "controllers")
+    ble.start_connect_if_requested.assert_any_call("BB:22", "scan_results")
+
+
+def test_apply_bluetooth_removed_controller_calls_unpair():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    removed = []
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        disconnect_and_unpair_device=lambda mac: removed.append(mac) or {},
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    runtime = RemoteConfigRuntimeState()
+    applier = RemoteDeviceConfigApplier(deps, runtime)
+    applier.apply({"bluetooth": {"controllers": [{"mac": "AA:BB", "status": "idle"}]}})
+    applier.apply({"bluetooth": {"controllers": []}})
+    assert removed == ["AA:BB"]
 
 
 # Game command handling

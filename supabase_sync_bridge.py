@@ -88,6 +88,7 @@ def _normalize_config_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("pages", "games"):
         if key in normalized and normalized.get(key) is None:
             normalized[key] = []
+    normalized = _coerce_bluetooth_schema(normalized)
     return normalized
 
 
@@ -99,6 +100,79 @@ def _coerce_pages_games_lists(payload: Dict[str, Any]) -> Dict[str, Any]:
         v = out[key]
         if v is None or not isinstance(v, list):
             out[key] = []
+    out = _coerce_bluetooth_schema(out)
+    return out
+
+
+def _canonical_bluetooth_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    if status in {"idle", "connecting", "connected", "error"}:
+        return status
+    # Backward compatibility for older local payloads.
+    if status in {"connect"}:
+        return "connecting"
+    if status in {"disconnected"}:
+        return "idle"
+    return "idle"
+
+
+def _coerce_bluetooth_entry(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    raw_mac = str(value.get("mac") or value.get("address") or "").strip().upper()
+    if not raw_mac:
+        return None
+    out: Dict[str, Any] = {
+        "mac": raw_mac,
+        "name": str(value.get("name") or "").strip(),
+        "status": _canonical_bluetooth_status(value.get("status")),
+    }
+    last_error = str(value.get("last_error") or value.get("error") or "").strip()
+    if last_error:
+        out["last_error"] = last_error[:200]
+    updated_at = str(value.get("updated_at") or "").strip()
+    if updated_at:
+        out["updated_at"] = updated_at
+    return out
+
+
+def _coerce_bluetooth_entry_list(value: Any) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    out: list[Dict[str, Any]] = []
+    seen_macs: set[str] = set()
+    for item in value:
+        entry = _coerce_bluetooth_entry(item)
+        if entry is None:
+            continue
+        mac = entry["mac"]
+        if mac in seen_macs:
+            continue
+        seen_macs.add(mac)
+        out.append(entry)
+    return out
+
+
+def _coerce_bluetooth_schema(payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(payload)
+    bluetooth_raw = out.get("bluetooth")
+    bluetooth = bluetooth_raw if isinstance(bluetooth_raw, dict) else {}
+
+    # Accept legacy key aliases during transition but persist canonical shape.
+    controllers_raw = bluetooth.get("controllers")
+    scan_results_raw = bluetooth.get("scan_results")
+    if controllers_raw is None:
+        controllers_raw = bluetooth.get("list")
+    if scan_results_raw is None:
+        scan_results_raw = bluetooth.get("list")
+
+    normalized_bluetooth: Dict[str, Any] = {
+        "is_scan": bool(bluetooth.get("is_scan", False)),
+        "controllers": _coerce_bluetooth_entry_list(controllers_raw),
+        "scan_results": _coerce_bluetooth_entry_list(scan_results_raw),
+        "last_scan_at": str(bluetooth.get("last_scan_at") or bluetooth.get("timestamp") or "").strip(),
+    }
+    out["bluetooth"] = normalized_bluetooth
     return out
 
 
@@ -260,6 +334,12 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         "pages_updated_at": pages_updated_at,
         "device_info": device_meta,
         "firmware": firmware,
+        "bluetooth": {
+            "is_scan": False,
+            "controllers": [],
+            "scan_results": [],
+            "last_scan_at": "",
+        },
     }
     raw_ip = str(device_info.get("ip_address", "")).strip()
     if raw_ip and raw_ip != "0.0.0.0":

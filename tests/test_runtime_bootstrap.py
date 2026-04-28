@@ -103,3 +103,66 @@ def test_ensure_device_info_id_backfills_identity_when_id_already_exists(
     assert persisted["id"] == "AA:BB:CC:DD:EE:FF"
     assert persisted["serial"] == "BOOT-SN2"
     assert persisted["model"] == "PixelDart"
+
+
+def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeypatch):
+    started_targets = []
+
+    class _FakeThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started_targets.append(self.target)
+
+    class _FakeRemoteSync:
+        def set_connectivity_callback(self, _cb):
+            return None
+
+        def start_sync_if_available(self, *_args, **_kwargs):
+            return None
+
+        def request_set_all_games_ready(self):
+            return None
+
+    class _FakeDartsnut:
+        def update_frame_buffer(self, _img):
+            return None
+
+    class _FakeRemoteConfigRuntime:
+        awaiting_games_ready_confirmation = False
+        startup_games_ready_confirmed_at = None
+        startup_filter_playing_until_newer_update = False
+        startup_firmware_version = None
+
+    monkeypatch.setattr(bootstrap.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(bootstrap, "get_remote_sync", lambda: _FakeRemoteSync())
+    monkeypatch.setattr(bootstrap.assets, "create_loading_image", lambda: object())
+
+    bootstrap.start_background_subsystems(
+        dartsnut=_FakeDartsnut(),
+        device_info={},
+        get_version=lambda: {"version": "1.2.3"},
+        set_volume=lambda _v: None,
+        start_ble_server=lambda *_a, **_k: None,
+        locate_device=lambda: None,
+        start_websocket_server=lambda *_a, **_k: None,
+        set_brightness=lambda _v: None,
+        reload_config=lambda: None,
+        set_time_zone=lambda _tz: None,
+        get_widgets_framebuffer=lambda: [],
+        start_game_from_websocket=lambda _gid: True,
+        trigger_dim_check=lambda: None,
+        check_connection_loop=lambda: None,
+        network_state_remote_loop=lambda: None,
+        apply_remote_config=lambda _cfg: None,
+        on_remote_connectivity_changed=lambda _c: None,
+        request_network_state_refresh=lambda: None,
+        remote_config_runtime=_FakeRemoteConfigRuntime(),
+    )
+
+    target_names = {getattr(target, "__name__", "") for target in started_targets}
+    assert "udp_broadcast" not in target_names
+    assert len(started_targets) == 4
