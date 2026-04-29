@@ -73,6 +73,16 @@ def test_normalize_config_payload_defaults_bridge_source():
     assert out["last_update_source"] == "supabase_bridge"
 
 
+def test_coerce_bluetooth_schema_is_scan_only_does_not_emit_empty_controller_lists():
+    out = ssb._coerce_bluetooth_schema({"bluetooth": {"is_scan": True}})
+    assert out["bluetooth"] == {"is_scan": True}
+
+
+def test_coerce_pages_games_lists_does_not_invent_bluetooth():
+    out = ssb._coerce_pages_games_lists({"brightness": 70})
+    assert "bluetooth" not in out
+
+
 def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
     monkeypatch.setattr(ssb, "_build_initial_state", lambda _d: {"device_info": {"id": "AA:BB:CC:DD:EE:FF"}})

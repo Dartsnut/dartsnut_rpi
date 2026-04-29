@@ -154,24 +154,57 @@ def _coerce_bluetooth_entry_list(value: Any) -> list[Dict[str, Any]]:
 
 
 def _coerce_bluetooth_schema(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize bluetooth fields for JSON merges.
+
+    Omits ``controllers`` / ``scan_results`` when no value was supplied for that
+    side (and no legacy ``list`` fallback applies) so patches such as
+    ``{bluetooth: {is_scan: true}}`` do not serialize as empty lists, which would
+    clear paired controllers in merged remote state.
+    """
     out = dict(payload)
+    if "bluetooth" not in out:
+        return out
+
     bluetooth_raw = out.get("bluetooth")
-    bluetooth = bluetooth_raw if isinstance(bluetooth_raw, dict) else {}
+    if not isinstance(bluetooth_raw, dict):
+        del out["bluetooth"]
+        return out
+
+    bluetooth = dict(bluetooth_raw)
+    normalized_bluetooth: Dict[str, Any] = {}
+
+    if "is_scan" in bluetooth:
+        normalized_bluetooth["is_scan"] = bool(bluetooth.get("is_scan"))
+
+    if "last_scan_at" in bluetooth or "timestamp" in bluetooth:
+        normalized_bluetooth["last_scan_at"] = str(
+            bluetooth.get("last_scan_at") or bluetooth.get("timestamp") or ""
+        ).strip()
 
     # Accept legacy key aliases during transition but persist canonical shape.
     controllers_raw = bluetooth.get("controllers")
-    scan_results_raw = bluetooth.get("scan_results")
     if controllers_raw is None:
         controllers_raw = bluetooth.get("list")
+    scan_results_raw = bluetooth.get("scan_results")
     if scan_results_raw is None:
         scan_results_raw = bluetooth.get("list")
 
-    normalized_bluetooth: Dict[str, Any] = {
-        "is_scan": bool(bluetooth.get("is_scan", False)),
-        "controllers": _coerce_bluetooth_entry_list(controllers_raw),
-        "scan_results": _coerce_bluetooth_entry_list(scan_results_raw),
-        "last_scan_at": str(bluetooth.get("last_scan_at") or bluetooth.get("timestamp") or "").strip(),
-    }
+    emit_controllers = "controllers" in bluetooth or (
+        "list" in bluetooth and bluetooth.get("controllers") is None
+    )
+    emit_scan_results = "scan_results" in bluetooth or (
+        "list" in bluetooth and bluetooth.get("scan_results") is None
+    )
+
+    if emit_controllers:
+        normalized_bluetooth["controllers"] = _coerce_bluetooth_entry_list(
+            controllers_raw
+        )
+    if emit_scan_results:
+        normalized_bluetooth["scan_results"] = _coerce_bluetooth_entry_list(
+            scan_results_raw
+        )
+
     out["bluetooth"] = normalized_bluetooth
     return out
 

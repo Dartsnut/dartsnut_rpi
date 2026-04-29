@@ -369,19 +369,22 @@ class RemoteDeviceConfigApplier:
             if isinstance(bluetooth_cfg, dict):
                 if bool(bluetooth_cfg.get("is_scan")):
                     deps.bluetooth_scan_controller.start_scan_if_requested()
-                controllers = (
-                    bluetooth_cfg.get("controllers")
-                    if isinstance(bluetooth_cfg.get("controllers"), list)
-                    else []
-                )
+                # Only treat controllers as authoritative when the key is present; an
+                # omitted key must not behave like [] (would spuriously unpair devices).
+                if "controllers" in bluetooth_cfg:
+                    _cval = bluetooth_cfg.get("controllers")
+                    controllers = _cval if isinstance(_cval, list) else []
+                else:
+                    controllers = None
                 scan_results = (
                     bluetooth_cfg.get("scan_results")
                     if isinstance(bluetooth_cfg.get("scan_results"), list)
                     else []
                 )
+                ctrl_rows = controllers if controllers is not None else []
                 # Trigger connects from either list when app marks a row connecting.
                 for source_list, rows in (
-                    ("controllers", controllers),
+                    ("controllers", ctrl_rows),
                     ("scan_results", scan_results),
                 ):
                     for row in rows:
@@ -397,24 +400,25 @@ class RemoteDeviceConfigApplier:
                             )
 
                 # Detect controller removals and unpair removed devices.
-                current_controller_macs: set[str] = set()
-                for row in controllers:
-                    if not isinstance(row, dict):
-                        continue
-                    mac = str(row.get("mac") or row.get("address") or "").strip().upper()
-                    if mac:
-                        current_controller_macs.add(mac)
-                removed_macs = rt.last_remote_controller_macs - current_controller_macs
-                for removed_mac in removed_macs:
-                    try:
-                        deps.disconnect_and_unpair_device(removed_mac)
-                    except Exception as e:
-                        _log.warning(
-                            "Error removing remote bluetooth controller mac=%s: %s",
-                            removed_mac,
-                            e,
-                        )
-                rt.last_remote_controller_macs = current_controller_macs
+                if controllers is not None:
+                    current_controller_macs: set[str] = set()
+                    for row in controllers:
+                        if not isinstance(row, dict):
+                            continue
+                        mac = str(row.get("mac") or row.get("address") or "").strip().upper()
+                        if mac:
+                            current_controller_macs.add(mac)
+                    removed_macs = rt.last_remote_controller_macs - current_controller_macs
+                    for removed_mac in removed_macs:
+                        try:
+                            deps.disconnect_and_unpair_device(removed_mac)
+                        except Exception as e:
+                            _log.warning(
+                                "Error removing remote bluetooth controller mac=%s: %s",
+                                removed_mac,
+                                e,
+                            )
+                    rt.last_remote_controller_macs = current_controller_macs
         except Exception as e:
             _log.warning("Error handling remote bluetooth config: %s", e)
 

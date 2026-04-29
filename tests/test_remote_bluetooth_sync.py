@@ -1,4 +1,10 @@
+import sys
 import threading
+import types
+
+sys.modules["bluetooth"] = types.SimpleNamespace(
+    discover_devices=lambda *_a, **_k: [],
+)
 
 from python_websocket import bluetooth_operations
 from python_websocket.remote_bluetooth_sync_controller import RemoteBluetoothScanController
@@ -92,8 +98,8 @@ def test_remote_scan_controller_ignores_reentrant_request_until_done():
     assert controller.start_scan_if_requested() is False
 
     gate.set()
-    for _ in range(40):
-        if published:
+    for _ in range(200):
+        if len(published) >= 2:
             break
         threading.Event().wait(0.01)
 
@@ -125,6 +131,35 @@ def test_remote_scan_controller_handles_scan_failure_with_empty_list():
             "last_scan_at": "2026-03-23T12:36:56+00:00",
         }
     }
+
+
+def test_remote_scan_start_preserves_paired_controllers_clears_only_scan_results():
+    published = []
+
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [{"address": "BB", "name": "Found", "status": "idle"}],
+        timestamp_factory=lambda: "2026-03-23T12:38:56+00:00",
+        publish_update=lambda payload: published.append(payload),
+        connect_device=lambda address: (True, ""),
+    )
+
+    assert controller.start_connect_if_requested("AA:BB:CC:DD:EE:01", "controllers") is True
+    for _ in range(40):
+        if published:
+            break
+        threading.Event().wait(0.01)
+    published.clear()
+
+    assert controller.start_scan_if_requested() is True
+    for _ in range(40):
+        if published:
+            break
+        threading.Event().wait(0.01)
+
+    assert published[0]["bluetooth"]["scan_results"] == []
+    assert published[0]["bluetooth"]["controllers"] == [
+        {"name": "", "mac": "AA:BB:CC:DD:EE:01", "status": "connected"}
+    ]
 
 
 def test_remote_scan_controller_clears_then_republishes_scan_results_each_scan():
