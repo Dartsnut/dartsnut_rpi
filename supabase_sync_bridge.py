@@ -550,10 +550,16 @@ class _SyncClient:
 
         threading.Thread(target=_server, daemon=True).start()
 
-    def send_state(self, payload: Dict[str, Any], *, full: bool = False) -> bool:
+    def send_state(
+        self, payload: Dict[str, Any], *, full: bool = False, source: Optional[str] = None
+    ) -> bool:
         payload = _coerce_pages_games_lists(dict(payload))
         kind = "initial_state" if full else "device_state"
-        line = (json.dumps({"kind": kind, "payload": payload}) + "\n").encode("utf-8")
+        message: Dict[str, Any] = {"kind": kind, "payload": payload}
+        source_value = str(source or "").strip()
+        if source_value:
+            message["source"] = source_value
+        line = (json.dumps(message) + "\n").encode("utf-8")
         with self._conn_lock:
             conn = self._conn
         if conn is None:
@@ -601,7 +607,9 @@ def start_supabase_sync_if_available(
     ensure_supabase_sync_running(device_info, reload_config, on_config_updated)
 
 
-def publish_device_state_update(partial_state: Dict[str, Any]) -> None:
+def publish_device_state_update(
+    partial_state: Dict[str, Any], *, source: Optional[str] = None
+) -> None:
     if not isinstance(partial_state, dict) or not partial_state:
         return
     global _client
@@ -609,7 +617,7 @@ def publish_device_state_update(partial_state: Dict[str, Any]) -> None:
         client = _client
     if client is None:
         return
-    client.send_state(partial_state, full=False)
+    client.send_state(partial_state, full=False, source=source)
 
 
 def is_supabase_bridge_active() -> bool:
@@ -698,7 +706,8 @@ def request_device_reset_state() -> None:
             "device_info": local_info,
             "device_updated_at": timestamp,
             "pages_updated_at": timestamp,
-        }
+        },
+        source="supabase_bridge_init",
     )
 
 

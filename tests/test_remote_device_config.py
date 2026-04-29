@@ -10,6 +10,7 @@ from runtime.remote_device_config import (
     RemoteDeviceConfigApplier,
     RemoteDeviceConfigDependencies,
     is_remote_reset_confirmed,
+    is_remote_reset_confirmation_source,
     parse_iso_ts,
 )
 
@@ -40,6 +41,55 @@ def test_is_remote_reset_confirmed_requires_empty_network_and_dim_disabled():
             "dim_window": {"dim_window_enabled": False},
         }
     )
+
+
+def test_is_remote_reset_confirmation_source_accepts_bridge_and_init_sources():
+    assert is_remote_reset_confirmation_source("supabase_bridge")
+    assert is_remote_reset_confirmation_source("supabase_bridge_init")
+    assert not is_remote_reset_confirmation_source("mobile_app")
+
+
+def test_apply_confirms_reset_only_for_expected_source():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    confirmations = {"count": 0}
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: True,
+        on_reset_confirmed=lambda: confirmations.__setitem__(
+            "count", confirmations["count"] + 1
+        ),
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+    reset_payload = {
+        "ip_address": "",
+        "ssid": "",
+        "pages": [],
+        "games": [],
+        "dim_window": {"dim_window_enabled": False},
+    }
+    applier.apply({**reset_payload, "last_update_source": "mobile_app"})
+    applier.apply({**reset_payload, "last_update_source": "supabase_bridge_init"})
+    assert confirmations["count"] == 1
 
 
 # Non-game remote config application

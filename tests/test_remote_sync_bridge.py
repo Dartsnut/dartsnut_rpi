@@ -64,12 +64,17 @@ def test_request_device_reset_state_sends_expected_payload(monkeypatch, tmp_path
             },
             f,
         )
-    monkeypatch.setattr(rsb._ssb, "publish_device_state_update", lambda payload: captured.append(payload))
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload, source=None: captured.append((payload, source)),
+    )
 
     rsb.request_device_reset_state()
 
     assert len(captured) == 1
-    payload = captured[0]
+    payload, source = captured[0]
+    assert source == "supabase_bridge_init"
     assert payload["ip_address"] == ""
     assert payload["ssid"] == ""
     assert payload["pages"] == []

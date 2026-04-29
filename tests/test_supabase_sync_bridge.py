@@ -150,15 +150,46 @@ def test_request_device_reset_state_includes_device_info_from_file(monkeypatch, 
             f,
         )
     captured = []
-    monkeypatch.setattr(ssb, "publish_device_state_update", lambda p: captured.append(p))
+    captured_source = []
+    monkeypatch.setattr(
+        ssb,
+        "publish_device_state_update",
+        lambda p, source=None: (captured.append(p), captured_source.append(source)),
+    )
     ssb.request_device_reset_state()
     assert len(captured) == 1
+    assert captured_source == ["supabase_bridge_init"]
     assert captured[0]["device_info"] == {
         "id": "AA:BB:CC:DD:EE:FF",
         "sn": "S1",
         "model": "PixelDart",
         "name": "Den",
     }
+
+
+def test_sync_client_send_state_includes_source_when_present():
+    client = ssb._SyncClient(
+        socket_path="/tmp/unused.sock",
+        reload_config=lambda: None,
+        on_config_updated=lambda _cfg: None,
+        initial_state={},
+    )
+
+    class _Conn:
+        def __init__(self):
+            self.writes = []
+
+        def sendall(self, data):
+            self.writes.append(data)
+
+    conn = _Conn()
+    client._conn = conn
+    ok = client.send_state({"brightness": 70}, source="supabase_bridge_init")
+    assert ok is True
+    sent = json.loads(conn.writes[0].decode("utf-8").strip())
+    assert sent["kind"] == "device_state"
+    assert sent["payload"]["brightness"] == 70
+    assert sent["source"] == "supabase_bridge_init"
 
 
 def test_build_initial_state_adds_hardware_version_when_missing(monkeypatch):

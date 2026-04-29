@@ -22,6 +22,8 @@ const EMBEDDED_SUPABASE_KEY: Option<&str> = option_env!("DARTSNUT_EMBEDDED_SUPAB
 struct BridgeMessage {
     kind: String,
     payload: Value,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -146,7 +148,16 @@ fn send_msg(writer: &Arc<Mutex<UnixStream>>, kind: &str, payload: Value) -> Resu
     Ok(())
 }
 
-fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bool) -> Result<()> {
+const SOURCE_SUPABASE_BRIDGE: &str = "supabase_bridge";
+const SOURCE_SUPABASE_BRIDGE_INIT: &str = "supabase_bridge_init";
+
+fn rpc_apply_patch(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    patch: Value,
+    full: bool,
+    source_override: Option<&str>,
+) -> Result<()> {
     let mut patch_obj = match patch {
         Value::Object(obj) => obj,
         other => {
@@ -159,6 +170,10 @@ fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bo
         merge_games_patch_with_remote_state(client, cfg, &mut patch_obj);
     }
     let url = format!("{}/rest/v1/rpc/apply_remote_device_patch", cfg.url.trim_end_matches('/'));
+    let source = source_override
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(SOURCE_SUPABASE_BRIDGE);
     client
         .post(url)
         .header("apikey", &cfg.key)
@@ -169,7 +184,7 @@ fn rpc_apply_patch(client: &Client, cfg: &SupabaseConfig, patch: Value, full: bo
             "p_device_id": cfg.device_id,
             "p_patch": Value::Object(patch_obj),
             "p_full": full,
-            "p_source": "supabase_bridge"
+            "p_source": source
         }))
         .send()?
         .error_for_status()?;
@@ -271,7 +286,7 @@ fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: 
 
     for attempt in 1..=max_attempts {
         match remote_device_exists(client, cfg) {
-            Ok(false) => match rpc_apply_patch(client, cfg, patch.clone(), true) {
+            Ok(false) => match rpc_apply_patch(client, cfg, patch.clone(), true, None) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     eprintln!(
@@ -282,7 +297,7 @@ fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: 
             },
             Ok(true) => {
                 let delta_patch = strip_games_for_existing_device_initial_state(patch.clone());
-                match rpc_apply_patch(client, cfg, delta_patch, false) {
+                match rpc_apply_patch(client, cfg, delta_patch, false, None) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         eprintln!(
@@ -294,7 +309,7 @@ fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: 
             }
             Err(e) => {
                 eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
-                match rpc_apply_patch(client, cfg, patch.clone(), true) {
+                match rpc_apply_patch(client, cfg, patch.clone(), true, None) {
                     Ok(()) => return Ok(()),
                     Err(write_err) => {
                         eprintln!(
@@ -425,6 +440,15 @@ fn is_game_state_payload(state: &Value) -> bool {
         .is_some()
 }
 
+fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
+    if source == SOURCE_SUPABASE_BRIDGE_INIT {
+        return false;
+    }
+    source == SOURCE_SUPABASE_BRIDGE
+        && !is_reset_confirmation_state(state)
+        && !is_game_state_payload(state)
+}
+
 fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
     let ws_url = match build_realtime_ws_url(&cfg) {
         Ok(u) => u,
@@ -512,10 +536,7 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                             .get("last_update_source")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        if source == "supabase_bridge"
-                            && !is_reset_confirmation_state(&state)
-                            && !is_game_state_payload(&state)
-                        {
+                        if should_filter_bridge_echo(source, &state) {
                             continue;
                         }
                         let kind = if sent_initial { "config" } else { "config_initial" };
@@ -613,7 +634,13 @@ fn main() -> Result<()> {
                 }
             }
             "device_state" => {
-                let _ = rpc_apply_patch(&client, &cfg, msg.payload, false);
+                let _ = rpc_apply_patch(
+                    &client,
+                    &cfg,
+                    msg.payload,
+                    false,
+                    msg.source.as_deref(),
+                );
             }
             _ => {}
         }
@@ -658,6 +685,18 @@ mod tests {
         assert!(is_game_state_payload(&json!({"games": [{"id":"g1","status":"ready"}]})));
         assert!(!is_game_state_payload(&json!({"games": null})));
         assert!(!is_game_state_payload(&json!({"brightness": 70})));
+    }
+
+    #[test]
+    fn bridge_echo_filter_allows_init_source_reset_roundtrip() {
+        let state = json!({
+            "ip_address": "",
+            "ssid": "",
+            "pages": [],
+            "games": [],
+            "dim_window": {"dim_window_enabled": false}
+        });
+        assert!(!should_filter_bridge_echo(SOURCE_SUPABASE_BRIDGE_INIT, &state));
     }
 
     #[test]

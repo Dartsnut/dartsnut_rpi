@@ -56,6 +56,12 @@ def is_remote_reset_confirmed(config: dict) -> bool:
     return bool(dim_window.get("dim_window_enabled")) is False
 
 
+def is_remote_reset_confirmation_source(value: Any) -> bool:
+    source = str(value or "").strip().lower()
+    # Accept both while rolling out source-tagged reset confirmations.
+    return source in {"supabase_bridge_init", "supabase_bridge"}
+
+
 def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
     """True when all games are in stable startup statuses: ready/downloading."""
     if not isinstance(games_cfg, list):
@@ -256,7 +262,11 @@ class RemoteDeviceConfigApplier:
         # local device state time and may remain stale across remote row updates.
         cfg_ts = parse_iso_ts(config.get("updated_at") or config.get("device_updated_at"))
 
-        if deps.is_reset_in_progress() and is_remote_reset_confirmed(config):
+        if (
+            deps.is_reset_in_progress()
+            and is_remote_reset_confirmed(config)
+            and is_remote_reset_confirmation_source(config.get("last_update_source"))
+        ):
             deps.on_reset_confirmed()
 
         games_cfg = config.get("games")
