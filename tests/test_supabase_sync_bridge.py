@@ -208,3 +208,19 @@ def test_build_initial_state_adds_hardware_version_when_missing(monkeypatch):
     )
 
     assert state["device_info"]["hardware_version"] == "444e"
+
+
+def test_restart_supabase_sync_skips_restart_when_already_connected(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    monkeypatch.setattr(ssb, "is_supabase_connected", lambda: True)
+    monkeypatch.setattr(ssb, "stop_supabase_sync", lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        ssb,
+        "ensure_supabase_sync_running",
+        lambda *_args, **_kwargs: calls.append("ensure"),
+    )
+
+    ssb.restart_supabase_sync({}, lambda: None, lambda _cfg: None)
+
+    assert calls == []

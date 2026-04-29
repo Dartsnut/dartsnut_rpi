@@ -128,6 +128,7 @@ class RemoteConfigRuntimeState:
     last_applied_pages_updated_at: Optional[datetime] = None
     last_applied_pages_fingerprint: Optional[str] = None
     has_seen_remote_pages_snapshot: bool = False
+    last_applied_non_bridge_pages_fingerprint: Optional[str] = None
     last_remote_controller_macs: set[str] = field(default_factory=set)
 
 
@@ -363,6 +364,11 @@ class RemoteDeviceConfigApplier:
                         )
                     rt.has_seen_remote_pages_snapshot = True
                     rt.last_applied_pages_fingerprint = pages_fingerprint
+                else:
+                    should_reload_pages = (
+                        pages_fingerprint != rt.last_applied_non_bridge_pages_fingerprint
+                    )
+                    rt.last_applied_non_bridge_pages_fingerprint = pages_fingerprint
 
                 if should_reload_pages:
                     did_soft = (

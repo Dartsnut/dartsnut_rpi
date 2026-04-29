@@ -765,6 +765,10 @@ def restart_supabase_sync(
     reload_config: Callable[[], None],
     on_config_updated: Callable[[Dict[str, Any]], None],
 ) -> None:
+    # Avoid churn when callers request a restart while the bridge is already
+    # active and healthy (common during startup connectivity polling).
+    if is_supabase_bridge_active() and is_supabase_connected():
+        return
     stop_supabase_sync()
     time.sleep(0.05)
     ensure_supabase_sync_running(device_info, reload_config, on_config_updated)
