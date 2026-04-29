@@ -278,7 +278,7 @@ class SettingsState(BaseState):
                     font=font_6x8,
                 )
             elif item["name"] == "Brightness":
-                brightness_level = _brightness_raw_to_level(brightness)
+                brightness_level = _brightness_raw_to_level_for_device(brightness, device_info)
                 dot_size = 5
                 dot_count = 9
                 dot_gap = 1
