@@ -61,9 +61,14 @@ class RemoteBluetoothScanController:
             if self._connect_in_progress:
                 return False
             self._connect_in_progress = True
-            self._set_status_in_list(src, mac, "connecting")
             connect_name = self._entry_name(src, mac)
-            self._upsert_controller(mac, connect_name, "connecting")
+            if src == "scan_results":
+                # Pairing from discovery: promote to controllers only; drop from scan list.
+                self._remove_mac_from_list("scan_results", mac)
+                self._upsert_controller(mac, connect_name, "connecting")
+            else:
+                self._set_status_in_list(src, mac, "connecting")
+                self._upsert_controller(mac, connect_name, "connecting")
             payload = {"bluetooth": dict(self._state)}
         self._publish_update(payload)
 
@@ -99,9 +104,14 @@ class RemoteBluetoothScanController:
             with self._lock:
                 next_status = "connected" if success else "error"
                 err = "" if success else (error_message or "Connection failed")
-                self._set_status_in_list(source_list, address, next_status, err)
-                name = self._entry_name(source_list, address)
-                self._upsert_controller(address, name, next_status, err)
+                if source_list == "scan_results":
+                    # Entry was removed from scan_results at pairing start.
+                    name = self._entry_name("controllers", address)
+                    self._upsert_controller(address, name, next_status, err)
+                else:
+                    self._set_status_in_list(source_list, address, next_status, err)
+                    name = self._entry_name(source_list, address)
+                    self._upsert_controller(address, name, next_status, err)
                 payload = {"bluetooth": dict(self._state)}
             self._publish_update(payload)
         except Exception:
@@ -147,6 +157,13 @@ class RemoteBluetoothScanController:
             if item.get("mac") == mac:
                 return str(item.get("name") or "").strip()
         return ""
+
+    def _remove_mac_from_list(self, list_key, mac):
+        mac_u = str(mac or "").strip().upper()
+        if not mac_u:
+            return
+        items = self._state.get(list_key) or []
+        self._state[list_key] = [x for x in items if x.get("mac") != mac_u]
 
     def _set_status_in_list(self, source_list, mac, status, last_error=""):
         items = self._state.get(source_list) or []

@@ -245,9 +245,7 @@ def test_remote_connect_controller_success_sets_connected_and_clears_connect():
             break
         threading.Event().wait(0.01)
 
-    assert published[-1]["bluetooth"]["scan_results"] == [
-        {"name": "", "mac": "AA:BB:CC:DD:EE:FF", "status": "connected"}
-    ]
+    assert published[-1]["bluetooth"]["scan_results"] == []
     assert published[-1]["bluetooth"]["controllers"] == [
         {"name": "", "mac": "AA:BB:CC:DD:EE:FF", "status": "connected"}
     ]
@@ -281,7 +279,7 @@ def test_remote_connect_preserves_scan_result_name_when_upserting_controller():
             "status": "connecting",
         }
     ]
-    assert published[0]["bluetooth"]["scan_results"][0]["name"] == "Xbox Wireless Controller"
+    assert published[0]["bluetooth"]["scan_results"] == []
 
 
 def test_remote_connect_controller_failure_sets_error_and_clears_connect():
