@@ -296,7 +296,7 @@ fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: 
                 }
             },
             Ok(true) => {
-                let delta_patch = strip_games_for_existing_device_initial_state(patch.clone());
+                let delta_patch = strip_runtime_overwrites_for_existing_device_initial_state(patch.clone());
                 match rpc_apply_patch(client, cfg, delta_patch, false, None) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
@@ -335,9 +335,15 @@ fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: 
     }
 }
 
-fn strip_games_for_existing_device_initial_state(mut patch: Value) -> Value {
+/// Initial handshake sends device-derived defaults from `_build_initial_state`. For an
+/// existing remote row, shallow JSON merge (`state || patch`) replaces whole top-level
+/// keys; sending empty `games` or default empty `bluetooth` would wipe hosted runtime
+/// state (installed games, paired controllers, scan metadata). Strip those keys so the
+/// merge preserves what is already in Supabase.
+fn strip_runtime_overwrites_for_existing_device_initial_state(mut patch: Value) -> Value {
     if let Some(obj) = patch.as_object_mut() {
         obj.remove("games");
+        obj.remove("bluetooth");
     }
     patch
 }
@@ -722,13 +728,16 @@ mod tests {
     }
 
     #[test]
-    fn strip_games_for_existing_device_initial_state_removes_games_field() {
+    fn strip_runtime_overwrites_for_existing_device_initial_state_removes_games_and_bluetooth()
+    {
         let patch = json!({
             "games": [{"id": "chess", "status": "ready"}],
+            "bluetooth": {"is_scan": false, "controllers": [], "scan_results": []},
             "volume": 50
         });
-        let out = strip_games_for_existing_device_initial_state(patch);
+        let out = strip_runtime_overwrites_for_existing_device_initial_state(patch);
         assert!(out.get("games").is_none());
+        assert!(out.get("bluetooth").is_none());
         assert_eq!(out.get("volume").and_then(|v| v.as_i64()), Some(50));
     }
 

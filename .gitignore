@@ -21,3 +21,4 @@ device.json
 .cursor/
 
 *.swp
+target/

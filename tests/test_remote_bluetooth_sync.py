@@ -1,3 +1,4 @@
+import copy
 import sys
 import threading
 import types
@@ -221,6 +222,37 @@ def test_remote_connect_controller_success_sets_connected_and_clears_connect():
     assert published[-1]["bluetooth"]["controllers"] == [
         {"name": "", "mac": "AA:BB:CC:DD:EE:FF", "status": "connected"}
     ]
+
+
+def test_remote_connect_preserves_scan_result_name_when_upserting_controller():
+    published = []
+
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "2026-03-23T12:42:56+00:00",
+        publish_update=lambda payload: published.append(copy.deepcopy(payload)),
+        connect_device=lambda address: (True, ""),
+    )
+
+    controller._state["scan_results"] = [
+        {
+            "name": "Xbox Wireless Controller",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "status": "idle",
+        }
+    ]
+
+    assert controller.start_connect_if_requested("AA:BB:CC:DD:EE:FF", "scan_results") is True
+
+    assert len(published) >= 1
+    assert published[0]["bluetooth"]["controllers"] == [
+        {
+            "name": "Xbox Wireless Controller",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "status": "connecting",
+        }
+    ]
+    assert published[0]["bluetooth"]["scan_results"][0]["name"] == "Xbox Wireless Controller"
 
 
 def test_remote_connect_controller_failure_sets_error_and_clears_connect():

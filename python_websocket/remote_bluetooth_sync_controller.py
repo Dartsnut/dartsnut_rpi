@@ -43,7 +43,8 @@ class RemoteBluetoothScanController:
                 return False
             self._connect_in_progress = True
             self._set_status_in_list(src, mac, "connecting")
-            self._upsert_controller(mac, "", "connecting")
+            connect_name = self._entry_name(src, mac)
+            self._upsert_controller(mac, connect_name, "connecting")
             payload = {"bluetooth": dict(self._state)}
         self._publish_update(payload)
 
