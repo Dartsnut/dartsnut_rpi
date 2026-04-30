@@ -2,7 +2,7 @@
 
 import json
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 from domain.app_context import AppContext
 from runtime.remote_device_config import (
@@ -667,6 +667,41 @@ def test_apply_is_scan_without_controllers_key_does_not_unpair():
     applier.apply({"bluetooth": {"is_scan": True}})
     ble.start_scan_if_requested.assert_called_once()
     disconnect.assert_not_called()
+
+
+def test_apply_calls_apply_explicit_remote_lists_before_starting_scan():
+    """Empty controllers from remote must clear local scan state before scan publishes."""
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+    cfg = {"bluetooth": {"controllers": [], "is_scan": True}}
+    applier.apply(cfg)
+    assert ble.mock_calls[0] == call.apply_explicit_remote_lists(cfg["bluetooth"])
+    assert ble.mock_calls[1] == call.start_scan_if_requested()
 
 
 def test_apply_updates_brightness_via_service():

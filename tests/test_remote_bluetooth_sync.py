@@ -42,6 +42,35 @@ def test_build_remote_bluetooth_list_maps_status(monkeypatch):
     ]
 
 
+def test_apply_explicit_remote_lists_updates_controllers_and_scan_results():
+    published = []
+
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "2026-03-23T12:34:56+00:00",
+        publish_update=lambda payload: published.append(payload),
+        connect_device=lambda address: (True, ""),
+    )
+    controller._state["controllers"] = [
+        {"name": "Keep", "mac": "AA:BB:CC:DD:EE:FF", "status": "connected"}
+    ]
+    controller._state["scan_results"] = [
+        {"name": "Stale", "mac": "11:22:33:44:55:66", "status": "idle"}
+    ]
+
+    controller.apply_explicit_remote_lists(
+        {
+            "controllers": [],
+            "scan_results": [{"mac": "11:22:33:44:55:66", "name": "Found", "status": "idle"}],
+        }
+    )
+    assert controller._state["controllers"] == []
+    assert controller._state["scan_results"] == [
+        {"name": "Found", "mac": "11:22:33:44:55:66", "status": "idle"}
+    ]
+    assert published == []
+
+
 def test_remote_scan_controller_publishes_scan_result_and_resets_flag():
     published = []
 

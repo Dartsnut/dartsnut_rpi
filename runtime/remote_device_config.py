@@ -394,6 +394,7 @@ class RemoteDeviceConfigApplier:
         try:
             bluetooth_cfg = config.get("bluetooth")
             if isinstance(bluetooth_cfg, dict):
+                deps.bluetooth_scan_controller.apply_explicit_remote_lists(bluetooth_cfg)
                 if bool(bluetooth_cfg.get("is_scan")):
                     deps.bluetooth_scan_controller.start_scan_if_requested()
                 # Only treat controllers as authoritative when the key is present; an

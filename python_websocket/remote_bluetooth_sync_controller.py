@@ -17,6 +17,25 @@ class RemoteBluetoothScanController:
             "last_scan_at": "",
         }
 
+    def apply_explicit_remote_lists(self, bluetooth_cfg):
+        """Mirror remote rows into local state when the patch includes explicit keys.
+
+        Remote config may clear ``controllers`` after unpair while this process still
+        holds stale entries; without syncing, the next ``start_scan`` publish would
+        resurrect removed devices as still paired.
+        """
+        if not isinstance(bluetooth_cfg, dict):
+            return
+        with self._lock:
+            if "controllers" in bluetooth_cfg:
+                raw = bluetooth_cfg.get("controllers")
+                lst = raw if isinstance(raw, list) else []
+                self._state["controllers"] = self._normalize_scan_entries(lst)
+            if "scan_results" in bluetooth_cfg:
+                raw = bluetooth_cfg.get("scan_results")
+                lst = raw if isinstance(raw, list) else []
+                self._state["scan_results"] = self._normalize_scan_entries(lst)
+
     def start_scan_if_requested(self):
         with self._lock:
             if self._in_progress:
