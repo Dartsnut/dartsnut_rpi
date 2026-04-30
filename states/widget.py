@@ -80,7 +80,7 @@ class WidgetState(BaseState):
                 ctx.page_index = next_index
                 ctx.page_tick = time.time()
                 ctx.next_page_prepared_index = -1
-                _log.info("widget: rotated to page_index=%s", ctx.page_index)
+                _log.debug("widget: rotated to page_index=%s", ctx.page_index)
 
         if ctx.page_index != ctx.last_page_index:
             for i in range(len(pages)):
