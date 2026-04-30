@@ -1481,7 +1481,7 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
     assert rt.awaiting_games_ready_confirmation is True
     assert download_calls == []
 
-    # Gate confirms on newer stable snapshot; recovery should run in this same call.
+    # Gate confirms on newer stable snapshot; recovery runs on the following snapshot.
     applier.apply(
         {
             "last_update_source": "supabase_bridge",
@@ -1490,6 +1490,15 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
         }
     )
     assert rt.awaiting_games_ready_confirmation is False
+    assert download_calls == []
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-04-01T13:00:02",
+            "games": [{"id": "g1", "status": "ready", "version": "1"}],
+        }
+    )
     assert download_calls == [("g1", "1")]
 
 
@@ -1534,7 +1543,7 @@ def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
     assert rt.awaiting_games_ready_confirmation is True
     assert download_calls == []
 
-    # A stable snapshot without timestamps should still confirm gate and recover.
+    # A stable snapshot without timestamps should still confirm gate; recovery follows.
     applier.apply(
         {
             "last_update_source": "supabase_bridge",
@@ -1542,5 +1551,13 @@ def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
         }
     )
     assert rt.awaiting_games_ready_confirmation is False
+    assert download_calls == []
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "games": [{"id": "g1", "status": "ready", "version": "1"}],
+        }
+    )
     assert download_calls == [("g1", "1")]
 

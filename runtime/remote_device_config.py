@@ -62,6 +62,18 @@ def is_remote_reset_confirmation_source(value: Any) -> bool:
     return source in {"supabase_bridge_init", "supabase_bridge"}
 
 
+def _startup_gate_missing_timestamp_fallback_allowed(config: dict) -> bool:
+    """
+    When both the startup baseline and the snapshot lack parseable timestamps,
+    only Supabase-bridge snapshots may confirm the gate via that fallback.
+
+    Device-originated snapshots must not unlock the gate without a strict newer-timestamp
+    check (see tests: startup gate should stay pending until bridge ordering is known).
+    """
+    source = str(config.get("last_update_source", "") or "").strip().lower()
+    return source in {"supabase_bridge_init", "supabase_bridge"}
+
+
 def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
     """True when all games are in stable startup statuses: ready/downloading."""
     if not isinstance(games_cfg, list):
@@ -182,7 +194,6 @@ class RemoteDeviceConfigApplier:
         """
         rt = self._runtime
         if rt.startup_missing_ready_games_recovery_done:
-            _log.info("remote config: startup missing-game recovery already complete; skipping")
             return
 
         deps = self._deps
@@ -493,7 +504,15 @@ class RemoteDeviceConfigApplier:
                     has_newer_ts = (
                         baseline_ts is not None and cfg_ts is not None and cfg_ts > baseline_ts
                     )
-                    missing_ts_fallback = baseline_ts is None or cfg_ts is None
+                    # Confirm only when *both* sides lack timestamps (cannot compare) and the
+                    # snapshot is bridge-originated. Do not treat "baseline unset but snapshot
+                    # has a timestamp" as fallback — that spuriously opens the gate before the
+                    # startup baseline is comparable (tests gate completion + recovery ordering).
+                    missing_ts_fallback = (
+                        baseline_ts is None
+                        and cfg_ts is None
+                        and _startup_gate_missing_timestamp_fallback_allowed(config)
+                    )
                     stable_games = are_remote_gate_stable_games(games_cfg)
                     if debug_reset_gate:
                         game_states = []
@@ -529,10 +548,8 @@ class RemoteDeviceConfigApplier:
                         _log.info(
                             "remote config: startup game reset confirmed; enabling remote game commands"
                         )
-                        # Run startup missing-game recovery immediately after gate confirmation
-                        # so a follow-up snapshot is not required to trigger local downloads.
-                        self._recover_missing_ready_games_on_startup(games_cfg)
-                        # Defer normal game command handling to the next inbound snapshot.
+                        # Defer startup missing-game recovery and normal game commands to the next
+                        # inbound snapshot so the gate transition does not interleave downloads.
                         return
                     else:
                         now = time.time()
@@ -543,7 +560,8 @@ class RemoteDeviceConfigApplier:
                             except Exception:
                                 pass
                         return
-                self._recover_missing_ready_games_on_startup(games_cfg)
+                if not rt.startup_missing_ready_games_recovery_done:
+                    self._recover_missing_ready_games_on_startup(games_cfg)
 
                 for g in games_cfg:
                     if not isinstance(g, dict):

@@ -270,6 +270,7 @@ def test_startup_pending_blocks_playing_until_all_ready_with_newer_timestamp(rem
 
 def test_startup_pending_keeps_downloading_untouched_and_defers_download_until_gate_pass(
     remote_config_harness,
+    workspace: Path,
 ):
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
@@ -277,6 +278,9 @@ def test_startup_pending_keeps_downloading_untouched_and_defers_download_until_g
 
     runtime.awaiting_games_ready_confirmation = True
     runtime.startup_filter_playing_until_newer_update = False
+
+    # Startup recovery skips games already present locally; keep pong off the ensure list.
+    (workspace / "apps" / "pong").mkdir(parents=True)
 
     apply(
         {
