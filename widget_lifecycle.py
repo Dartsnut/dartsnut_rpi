@@ -24,7 +24,8 @@ _log = logging.getLogger(__name__)
 widget_update_checks = {}
 widgets_updated = set()
 _missing_widget_download_attempts = {}
-_missing_widget_download_inflight = set()
+# One background download per widget id (missing-app bootstrap + update check can both fire).
+_widget_background_download_inflight = set()
 
 
 def _get_flattened_data_compat(img):
@@ -220,6 +221,14 @@ def download_widget_async(
     widget_id: str, url: str, md5: str, get_context=None, on_complete=None
 ) -> None:
     """Download widget in background; on success call kill_widget_if_page_inactive."""
+    if widget_id in _widget_background_download_inflight:
+        _log.debug(
+            "widget: background download already in progress id=%s (skipped duplicate)",
+            widget_id,
+        )
+        return
+    _widget_background_download_inflight.add(widget_id)
+
     def worker():
         try:
             _log.info("widget: background download started id=%s", widget_id)
@@ -232,6 +241,7 @@ def download_widget_async(
         except Exception as e:
             _log.error("widget: background download error id=%s: %s", widget_id, e)
         finally:
+            _widget_background_download_inflight.discard(widget_id)
             if on_complete is not None:
                 try:
                     on_complete()
@@ -247,36 +257,27 @@ def _request_missing_widget_download(widget_id: str, *, force: bool = False) -> 
         return
     if os.path.isdir(os.path.join(os.getcwd(), "apps", widget_id)):
         return
-    if widget_id in _missing_widget_download_inflight:
-        return
     now = time.time()
     last_attempt = _missing_widget_download_attempts.get(widget_id, 0.0)
     if not force and (now - last_attempt) < 30:
         return
     _missing_widget_download_attempts[widget_id] = now
-    _missing_widget_download_inflight.add(widget_id)
-
-    def _clear_inflight():
-        _missing_widget_download_inflight.discard(widget_id)
 
     try:
         needs_update, download_info = check_and_update_widget_version(widget_id)
     except Exception as e:
         _log.warning("widget: missing-widget download check failed id=%s: %s", widget_id, e)
-        _clear_inflight()
         return
 
     if not needs_update or not isinstance(download_info, dict):
-        _clear_inflight()
         return
 
     url = download_info.get("widget_download_url")
     md5 = download_info.get("widget_download_md5")
     if not url or not md5:
-        _clear_inflight()
         return
 
-    download_widget_async(widget_id, url, md5, get_context=None, on_complete=_clear_inflight)
+    download_widget_async(widget_id, url, md5, get_context=None)
 
 
 def restart_widget_process(
@@ -583,7 +584,10 @@ def start_page_process(page: dict) -> dict:
     img = Image.new("RGB", (128, 160), (0, 0, 0))
     for w in widgets:
         try:
-            os.kill(w["process"].pid, signal.SIGSTOP)
+            proc = w.get("process")
+            if proc is None:
+                continue
+            os.kill(proc.pid, signal.SIGSTOP)
             w["launched"] = False
         except Exception as e:
             _log.warning("Error pausing widget process: %s", e)

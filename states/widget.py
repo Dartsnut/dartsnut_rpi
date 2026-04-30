@@ -92,7 +92,7 @@ class WidgetState(BaseState):
                                 widget = widget_entry.get("widget")
                                 if widget and widget.get("id") != "0":
                                     wid = widget.get("id")
-                                    _log.info("widget: restarting %s (process was killed)", wid)
+                                    _log.debug("widget: restarting %s (process was killed)", wid)
                                     restart_widget_process(widget_entry, pages[i], widget_idx)
                                 continue
                             if process.poll() is None:
@@ -102,7 +102,7 @@ class WidgetState(BaseState):
                                 widget = widget_entry.get("widget")
                                 if widget and widget.get("id") != "0":
                                     wid = widget.get("id")
-                                    _log.info("widget: restarting %s (process was killed)", wid)
+                                    _log.debug("widget: restarting %s (process was killed)", wid)
                                     restart_widget_process(widget_entry, pages[i], widget_idx)
                         except Exception as e:
                             _log.warning("Error resuming widget process: %s", e)
@@ -133,7 +133,7 @@ class WidgetState(BaseState):
                         widget = widget_entry.get("widget")
                         if widget and widget.get("id") != "0":
                             wid = widget.get("id")
-                            _log.info("widget: restarting %s (process was killed)", wid)
+                            _log.debug("widget: restarting %s (process was killed)", wid)
                             restart_widget_process(
                                 widget_entry, pages[ctx.page_index], widget_idx
                             )
@@ -141,7 +141,7 @@ class WidgetState(BaseState):
                         widget = widget_entry.get("widget")
                         if widget and widget.get("id") != "0":
                             wid = widget.get("id")
-                            _log.info("widget: restarting %s (process died)", wid)
+                            _log.debug("widget: restarting %s (process died)", wid)
                             restart_widget_process(
                                 widget_entry, pages[ctx.page_index], widget_idx
                             )
