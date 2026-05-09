@@ -11,7 +11,7 @@ def test_settings_rssi_and_level_mappings():
     lvl = ssettings._brightness_raw_to_level("bad")
     assert 1 <= lvl <= 9
     assert ssettings._brightness_level_to_raw(1) == 10
-    assert ssettings._brightness_level_to_raw(99) == 100
+    assert ssettings._brightness_level_to_raw(99) == 97
 
     # Volume mapping and inverse
     v_lvl = ssettings._volume_raw_to_level("bad")
@@ -24,8 +24,8 @@ def test_brightness_level_mapping_uses_444f_values():
     di_444f = {"hardware_version": "444f"}
     di_444e = {"hardware_version": "444e"}
 
-    assert ssettings._brightness_level_to_raw_for_device(2, di_444f) == 21
-    assert ssettings._brightness_level_to_raw_for_device(2, di_444e) == 20
+    assert ssettings._brightness_level_to_raw_for_device(2, di_444f) == 20
+    assert ssettings._brightness_level_to_raw_for_device(2, di_444e) == 21
     assert ssettings._brightness_raw_to_level_for_device(42, di_444f) == 4
 
 

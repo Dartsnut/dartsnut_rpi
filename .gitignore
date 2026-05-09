@@ -22,3 +22,5 @@ device.json
 
 *.swp
 target/
+
+openspec

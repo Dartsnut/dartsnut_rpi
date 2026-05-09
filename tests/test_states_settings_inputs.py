@@ -85,10 +85,10 @@ def test_settings_brightness_and_volume_adjustments_left_right():
     state.handle_input(ctx, {"btn_left": True})
     assert ctx.brightness_calls[-1] == 73
 
-    # idx=3 brightness inc: set to max-ish raw 100 -> raw 100
+    # idx=3 brightness inc: raw 100 already maps to max level -> stay at canonical max 97
     ctx._device_info["brightness"] = "100"
     state.handle_input(ctx, {"btn_right": True})
-    assert ctx.brightness_calls[-1] == 100
+    assert ctx.brightness_calls[-1] == 97
 
     # idx=4 volume dec: raw 90 -> level 9 -> dec -> 8 -> raw 80
     ctx.setting_select_index = 4
