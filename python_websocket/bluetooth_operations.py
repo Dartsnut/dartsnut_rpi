@@ -1,12 +1,78 @@
 import bluetooth
-import os
 import subprocess
+import threading
 import time
+from datetime import datetime, timezone
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
     handle_bluetooth_error
 )
+
+
+def _discover_filtered_devices():
+    """
+    Discover nearby Bluetooth devices and keep likely controller/audio devices.
+    Returns a list of {"address": ..., "name": ...} objects.
+    """
+    audio_keywords = ["headphone", "speaker", "audio", "controller"]
+    nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
+
+    filtered_devices = []
+    seen = set()
+    for addr, name in nearby_devices:
+        if not addr or addr in seen:
+            continue
+        lower_name = name.lower() if isinstance(name, str) else ""
+        if any(keyword in lower_name for keyword in audio_keywords):
+            filtered_devices.append({"address": addr, "name": name or ""})
+            seen.add(addr)
+    return filtered_devices
+
+
+def get_connection_status(address):
+    """
+    Return Bluetooth connection status for a device address:
+    - "connected"
+    - "disconnected"
+    """
+    if not address:
+        return "disconnected"
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "info", str(address)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and "connected: yes" in result.stdout.lower():
+            return "connected"
+    except Exception:
+        pass
+    return "disconnected"
+
+
+def build_remote_bluetooth_list():
+    """
+    Build remote bluetooth.list payload entries:
+    {address, name, status}
+    """
+    devices = _discover_filtered_devices()
+    payload = []
+    for device in devices:
+        address = device.get("address", "")
+        payload.append(
+            {
+                "address": address,
+                "name": device.get("name", "") or "",
+                "status": get_connection_status(address),
+            }
+        )
+    return payload
+
+
+def current_utc_iso_timestamp():
+    return datetime.now(timezone.utc).isoformat()
 
 def scan_bluetooth_devices():
     """
@@ -14,19 +80,7 @@ def scan_bluetooth_devices():
     that are likely controllers, headphones, or Bluetooth speakers.
     """
     try:
-        # Common keywords for audio devices and controllers
-        audio_keywords = ['headphone', 'speaker', 'audio', 'controller']
-
-        nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
-        
-        filtered_devices = []
-
-        for addr, name in nearby_devices:
-            lower_name = name.lower() if name else ""
-            if any(keyword in lower_name for keyword in audio_keywords):
-                filtered_devices.append({'address': addr, 'name': name})
-
-        return {"action": "bluetooth_scan", "devices": filtered_devices}
+        return {"action": "bluetooth_scan", "devices": _discover_filtered_devices()}
     except Exception as e:
         return handle_exception("bluetooth_scan", e, "Bluetooth scan failed")
 
@@ -88,125 +142,266 @@ def disconnect_and_unpair_device(address):
         process.communicate()
         return {"action": "bluetooth_remove", "address": address, "message": "Success"}
     except Exception as e:
-        return handle_exception("bluetooth_remove", e, "Failed to remove Bluetooth device", address=address)
+        return handle_exception(
+            "bluetooth_remove", e, "Failed to remove Bluetooth device", address=address
+        )
 
-def pair_and_connect_device(address):
-    """
-    Scans, waits for the device to appear, then pairs, trusts, and connects to a Bluetooth device using bluetoothctl.
-    Returns a status code indicating the result.
-    """
+def _normalize_bt_address(address):
+    """Canonical MAC for bluetoothctl (uppercase segments)."""
+    if not address:
+        return ""
+    return str(address).strip().upper()
+
+
+def _bluetoothctl_open():
+    """Single bluetoothctl session: merge stderr into stdout for reliable parsing."""
+    return subprocess.Popen(
+        ["bluetoothctl"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def _start_btctl_stdout_drain(process):
+    """Avoid filling the pipe (bluetoothctl blocks when stdout buffer is full)."""
+
+    def _run():
+        try:
+            for line in iter(process.stdout.readline, ""):
+                if not line:
+                    break
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
+
+
+def _bt_info_text(address):
+    """Snapshot from bluetoothctl info (authoritative for Paired/Trusted/Connected)."""
+    if not address:
+        return ""
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "info", str(address)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=8,
+        )
+        if result.returncode == 0:
+            return result.stdout or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _info_flag_yes(address, flag_prefix):
+    """flag_prefix e.g. 'paired', 'trusted', 'connected' -> matches 'Paired: yes' etc."""
+    out = _bt_info_text(address).lower()
+    return f"{flag_prefix.lower()}: yes" in out
+
+
+def _remove_device_best_effort(address):
+    """Clear stale bond before re-pairing (ignore errors if device is unknown)."""
+    if not address:
+        return
     try:
         process = subprocess.Popen(
-            ['bluetoothctl'],
+            ["bluetoothctl"],
             stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
-        # Start scanning
-        process.stdin.write('power on\n')
-        process.stdin.write('agent on\n')
-        process.stdin.write('default-agent\n')
-        process.stdin.write('scan on\n')
+        process.stdin.write(f"disconnect {address}\nremove {address}\nexit\n")
+        process.stdin.close()
+        process.wait(timeout=20)
+    except Exception:
+        pass
+
+
+def _poll_until(predicate, timeout_sec, interval=0.4):
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            if predicate():
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
+def _scan_until_device_seen(address, scan_timeout=20):
+    """
+    Run scan in a dedicated bluetoothctl process and exit.
+    Must not share a session with pair/trust/connect: leftover scan output in the
+    pipe would otherwise be consumed by the pair loop and hide real pair results
+    (especially on second pairing after unpair).
+    """
+    addr_u = _normalize_bt_address(address)
+    process = _bluetoothctl_open()
+    try:
+        process.stdin.write("power on\n")
+        process.stdin.write("scan on\n")
         process.stdin.flush()
 
-        found = False
-        scan_timeout = 20  # seconds
         start_time = time.time()
         while time.time() - start_time < scan_timeout:
             line = process.stdout.readline()
-            if address in line:
-                found = True
-                process.stdin.write('scan off\n')
+            if not line:
+                break
+            if addr_u and addr_u.lower() in line.lower():
+                process.stdin.write("scan off\n")
                 process.stdin.flush()
-                break
-        if not found:
-            process.stdin.write('scan off\n')
-            process.stdin.write('exit\n')
-            process.stdin.flush()
-            process.terminate()
-            return handle_bluetooth_error(
-                "bluetooth_connect",
-                ErrorCode.BLUETOOTH_DEVICE_NOT_FOUND,
-                "Bluetooth device not found during scan",
-                address=address
-            )
-            
-        # Execute pair, trust, connect one by one
-        process.stdin.write(f'pair {address}\n')
-        process.stdin.flush()
-        # Wait for pairing result
-        pair_timeout = 5
-        pair_start = time.time()
-        paired = False
-        while time.time() - pair_start < pair_timeout:
-            line = process.stdout.readline()
-            if "Pairing successful" in line or "Paired: yes" in line:
-                paired = True
-                break
-            if "Failed to pair" in line or "AuthenticationFailed" in line:
-                break
-        if not paired:
-            process.stdin.write('exit\n')
-            process.stdin.flush()
-            process.terminate()
-            return handle_bluetooth_error(
-                "bluetooth_connect",
-                ErrorCode.BLUETOOTH_PAIRING_FAILED,
-                "Unable to pair with Bluetooth device",
-                address=address
-            )
+                return True
 
-        process.stdin.write(f'trust {address}\n')
+        process.stdin.write("scan off\n")
         process.stdin.flush()
-        # Wait for trust result
-        trust_timeout = 5
-        trust_start = time.time()
-        trusted = False
-        while time.time() - trust_start < trust_timeout:
-            line = process.stdout.readline()
-            if "trust succeeded" in line or "Trusted: yes" in line:
-                trusted = True
-                break
-        if not trusted:
-            process.stdin.write('exit\n')
+        return False
+    finally:
+        try:
+            process.stdin.write("exit\n")
             process.stdin.flush()
+        except Exception:
+            pass
+        try:
             process.terminate()
+            process.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def pair_and_connect_device(address):
+    """
+    Scans (if not already bonded), pairs, trusts, and connects using bluetoothctl.
+    Verifies each step with ``bluetoothctl info`` because pair/trust success lines
+    on stdout are inconsistent and a full stdout buffer can block bluetoothctl.
+    If the device is already paired, scanning is skipped so reconnect works when
+    the device is not discoverable.
+    """
+    address = _normalize_bt_address(address)
+    if not address:
+        return handle_bluetooth_error(
+            "bluetooth_connect",
+            ErrorCode.BLUETOOTH_CONNECT_FAILED,
+            "Missing Bluetooth address",
+            address=address,
+        )
+
+    process = None
+    try:
+        already_paired = _info_flag_yes(address, "paired")
+        if not already_paired:
+            if not _scan_until_device_seen(address):
+                return handle_bluetooth_error(
+                    "bluetooth_connect",
+                    ErrorCode.BLUETOOTH_DEVICE_NOT_FOUND,
+                    "Bluetooth device not found during scan",
+                    address=address,
+                )
+
+        process = _bluetoothctl_open()
+        _start_btctl_stdout_drain(process)
+        process.stdin.write("power on\n")
+        process.stdin.write("agent on\n")
+        process.stdin.write("default-agent\n")
+        process.stdin.flush()
+
+        if not already_paired:
+            process.stdin.write(f"pair {address}\n")
+            process.stdin.flush()
+            paired_ok = _poll_until(
+                lambda: _info_flag_yes(address, "paired"),
+                timeout_sec=30,
+            )
+            if not paired_ok:
+                _remove_device_best_effort(address)
+                time.sleep(0.6)
+                process.stdin.write(f"pair {address}\n")
+                process.stdin.flush()
+                paired_ok = _poll_until(
+                    lambda: _info_flag_yes(address, "paired"),
+                    timeout_sec=30,
+                )
+            if not paired_ok:
+                return handle_bluetooth_error(
+                    "bluetooth_connect",
+                    ErrorCode.BLUETOOTH_PAIRING_FAILED,
+                    "Unable to pair with Bluetooth device",
+                    address=address,
+                )
+
+        process.stdin.write(f"trust {address}\n")
+        process.stdin.flush()
+        if not _poll_until(
+            lambda: _info_flag_yes(address, "trusted"),
+            timeout_sec=20,
+        ):
             return handle_bluetooth_error(
                 "bluetooth_connect",
                 ErrorCode.BLUETOOTH_TRUST_FAILED,
                 "Unable to trust Bluetooth device",
-                address=address
+                address=address,
             )
 
-        process.stdin.write(f'connect {address}\n')
+        process.stdin.write(f"connect {address}\n")
         process.stdin.flush()
-        # Wait for connection confirmation before exiting
-        connect_timeout = 5  # seconds
-        connect_start = time.time()
-        while time.time() - connect_start < connect_timeout:
-            line = process.stdout.readline()
-            if "Connection successful" in line or f"Device {address} connected" in line:
-                break
-            if "Failed to connect" in line or "AuthenticationFailed" in line:
-                return handle_bluetooth_error(
-                    "bluetooth_connect",
-                    ErrorCode.BLUETOOTH_CONNECTION_FAILED,
-                    "Unable to connect to Bluetooth device",
-                    address=address
-                )
+        if not _poll_until(
+            lambda: _info_flag_yes(address, "connected"),
+            timeout_sec=30,
+        ):
+            return handle_bluetooth_error(
+                "bluetooth_connect",
+                ErrorCode.BLUETOOTH_CONNECTION_FAILED,
+                "Unable to connect to Bluetooth device",
+                address=address,
+            )
 
-        process.stdin.write('exit\n')
-        process.stdin.flush()
+        try:
+            process.stdin.write("exit\n")
+            process.stdin.flush()
+            process.wait(timeout=5)
+        except Exception:
+            pass
         return {"action": "bluetooth_connect", "address": address, "message": "Success"}
 
     except Exception as e:
-        return handle_exception("bluetooth_connect", e, "Failed to connect Bluetooth device", address=address)
+        return handle_exception(
+            "bluetooth_connect",
+            e,
+            "Failed to connect Bluetooth device",
+            address=address,
+        )
+    finally:
+        if process and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except Exception:
+                pass
 
-# Example usage:
-if __name__ == "__main__":
-    # print(json.dumps(scan_bluetooth_devices()))
-    # pair_and_connect_device("58:10:31:2D:12:52")
-    # print(list_paired_devices())
-    # disconnect_and_unpair_device("58:10:31:2D:12:52")
-    pass
+
+def connect_device_for_remote(address):
+    """
+    Remote-oriented connection helper.
+    Returns (success: bool, error_message: str).
+    """
+    if not address:
+        return False, "Missing address"
+    try:
+        result = pair_and_connect_device(address)
+        if isinstance(result, dict) and not result.get("error"):
+            return True, ""
+        if isinstance(result, dict):
+            err = str(result.get("error") or "").strip()
+            if err:
+                short = err.split("(")[0].strip()
+                return False, short[:120]
+        return False, "Connection failed"
+    except Exception:
+        return False, "Connection failed"

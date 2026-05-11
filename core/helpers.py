@@ -1,7 +1,10 @@
 """Shared helpers for widget/game lifecycle (user data path, process death signal)."""
+import logging
 import os
 import signal
 from python_websocket.user_data_operations import _load_user_data
+
+_log = logging.getLogger(__name__)
 
 
 def set_pdeathsig():
@@ -21,7 +24,7 @@ def get_user_data_store_path(app_id: str) -> str:
         os.makedirs(path, mode=0o755, exist_ok=True)
         return path
     except Exception as e:
-        print(f"Warning: Failed to load user data, defaulting to guest: {e}")
+        _log.warning("Failed to load user data, defaulting to guest: %s", e)
         path = f"/var/lib/dartsnut/user/guest/{app_id}/"
         os.makedirs(path, mode=0o755, exist_ok=True)
         return path

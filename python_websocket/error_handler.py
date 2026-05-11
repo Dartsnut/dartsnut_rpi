@@ -358,7 +358,7 @@ def handle_invalid_input(action, message, **kwargs):
 def handle_bluetooth_error(action, error_code, message, address=None, **kwargs):
     """Handle bluetooth-specific errors."""
     if address:
-        kwargs['address'] = address
+        kwargs["address"] = address
     return create_error_response(action, error_code, message, **kwargs)
 
 

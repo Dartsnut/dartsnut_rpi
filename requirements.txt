@@ -25,8 +25,8 @@ PyBluez @ git+https://github.com/pybluez/pybluez.git@82cbba8a1ebd4c1e3442dfafd85
 pycairo==1.29.0
 pydantic==2.12.5
 pydantic_core==2.41.5
-pydartsnut==1.2.0
-pygame==2.6.1
+pydartsnut==1.2.1
+pygame-ce==2.5.7
 PyGObject==3.50.2
 requests==2.32.5
 RPi.GPIO==0.7.1

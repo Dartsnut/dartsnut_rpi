@@ -6,8 +6,8 @@ import subprocess
 import time
 from PIL import Image, ImageDraw
 
-from app_context import AppContext
-from network_utils import get_wifi_ipv4
+from domain.app_context import AppContext
+from network_utils import get_primary_ipv4
 from states.base import BaseState
 
 # Rate limit WiFi RSSI: refresh every ~5 seconds
@@ -64,8 +64,8 @@ def _tint_icon_rgba(icon_rgba, color):
     return Image.merge("RGBA", (R, G, B, a))
 
 
-BRIGHTNESS_LEVEL_VALUES = [10, 21, 30, 42, 51, 60, 70, 80, 95]
-BRIGHTNESS_LEVEL_VALUES_444F = [10, 21, 31, 42, 48, 61, 78, 85, 93]
+BRIGHTNESS_LEVEL_VALUES = [10, 21, 30, 42, 53, 60, 73, 80, 97]
+BRIGHTNESS_LEVEL_VALUES_444F = [10, 20, 30, 40, 50, 59, 73, 79, 100]
 VOLUME_LEVEL_VALUES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 
@@ -203,19 +203,31 @@ class SettingsState(BaseState):
         except Exception:
             brightness = 50
             volume = 50
-        ip_address = get_wifi_ipv4()
+        ip_address = get_primary_ipv4()
         try:
-            version = (
+            branch = (
                 subprocess.run(
-                    ["git", "describe", "--tags", "--abbrev=0"],
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     capture_output=True,
                     text=True,
                     check=True,
                 )
                 .stdout.strip()
             )
+            if branch == "release":
+                version = (
+                    subprocess.run(
+                        ["git", "describe", "--tags", "--abbrev=0"],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    .stdout.strip()
+                )
+            else:
+                version = "v100.0.0"
         except Exception:
-            version = "v1.0.0"
+            version = "v100.0.0"
         try:
             device_path = os.path.join(os.getcwd(), "device.json")
             with open(device_path, "r", encoding="utf-8") as f:
@@ -278,7 +290,7 @@ class SettingsState(BaseState):
                     font=font_6x8,
                 )
             elif item["name"] == "Brightness":
-                brightness_level = _brightness_raw_to_level_for_device(brightness, device_info)
+                brightness_level = _brightness_raw_to_level(brightness)
                 dot_size = 5
                 dot_count = 9
                 dot_gap = 1

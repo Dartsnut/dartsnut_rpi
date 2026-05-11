@@ -4,6 +4,8 @@ REPO_DIR="/home/rpi/dartsnut_rpi"
 SERVICES_DIR="${REPO_DIR}/services"
 VENV_DIR="${REPO_DIR}/venv0"
 VENV_PIP="${VENV_DIR}/bin/pip"
+SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
+INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 
 SYSTEMD_UNITS_UPDATED=0
 
@@ -26,6 +28,20 @@ install_or_update_service_unit() {
     fi
 }
 
+# Install a file only when missing or different from src (dst is often root-owned; use sudo cmp).
+install_if_changed() {
+    local src="$1"
+    local dst="$2"
+    local mode="$3"
+    local name="$4"
+
+    if [ ! -f "${dst}" ] || ! sudo cmp -s "${src}" "${dst}"; then
+        echo "Installing/updating ${name} at ${dst}"
+        sudo install -m "${mode}" "${src}" "${dst}"
+    else
+        echo "${name} already up to date, skipping."
+    fi
+}
 cleanup_legacy_splash_service() {
     echo "Cleaning up legacy splash service/binary"
     sudo systemctl disable dartsnut_splash.service >/dev/null 2>&1 || true
@@ -70,8 +86,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     fi
 
     if [ -f "${SERVICES_DIR}/logo.ppm" ]; then
-        echo "Updating logo.ppm at ${SPLASH_DEST_PPM}"
-        sudo install -m 0644 "${SERVICES_DIR}/logo.ppm" "${SPLASH_DEST_PPM}"
+        install_if_changed "${SERVICES_DIR}/logo.ppm" "${SPLASH_DEST_PPM}" 0644 logo.ppm
     else
         echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
     fi
@@ -110,9 +125,10 @@ else
 fi
 
 echo "== Python deps refresh =="
+"${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 
 sudo "${VENV_PIP}" install --upgrade pip
-sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirement.txt"
+sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
 
 echo "== Cron auto-update =="
 

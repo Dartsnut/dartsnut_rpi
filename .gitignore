@@ -3,13 +3,8 @@ venv0/
 
 # Ignore Python cache files and folders
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pyc
-*.pyo
-*.pyd
-*.pycache/
+*.py[cod]
+*$py.class
 
 # Ignore Python local editable package
 *.egg-info/
@@ -23,3 +18,9 @@ device.json
 .hardware_version.json
 
 .DS_Store
+.cursor/
+
+*.swp
+target/
+
+openspec

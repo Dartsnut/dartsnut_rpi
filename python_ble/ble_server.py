@@ -1,18 +1,23 @@
 # Bluezero modules
+import asyncio
+import json
+import logging
+import subprocess
+import threading
+import time
+
 from bluezero import adapter
-from bluezero import peripheral
 from bluezero import device
+from bluezero import peripheral
+
 from python_websocket.error_handler import (
     ErrorCode,
     create_error_response,
-    handle_exception
+    handle_exception,
 )
-import json
-import subprocess
-import time
-import asyncio
-import threading
-from network_utils import get_wifi_ipv4
+from network_utils import get_primary_ipv4
+
+_log = logging.getLogger(__name__)
 
 # constants
 UART_SERVICE = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
@@ -42,11 +47,11 @@ class UARTDevice:
 
     @classmethod
     def on_connect(cls, ble_device: device.Device):
-        print("Connected to " + str(ble_device.address))
+        _log.info("ble: central connected address=%s", ble_device.address)
 
     @classmethod
     def on_disconnect(cls, adapter_address, device_address):
-        print("Disconnected from " + device_address)
+        _log.info("ble: central disconnected address=%s", device_address)
 
     @classmethod
     def uart_notify(cls, notifying, characteristic):
@@ -57,7 +62,7 @@ class UARTDevice:
 
     @classmethod
     def send_data(cls, value):
-        print(value)
+        _log.debug("ble: tx %s", value)
         if cls.tx_obj:
             cls.tx_obj.set_value(json.dumps(value).encode('utf-8'))
 
@@ -90,7 +95,7 @@ class UARTDevice:
             else:
                 cls.send_data({"command": "scan_wifi", "networks": [], "end": True})
         except subprocess.CalledProcessError as e:
-            print("Failed to scan WiFi networks:", e)
+            _log.warning("Failed to scan WiFi networks: %s", e)
             error_response = handle_exception("scan_wifi", e, "Failed to scan WiFi networks")
             error_response["command"] = "scan_wifi"
             cls.send_data(error_response)
@@ -103,7 +108,7 @@ class UARTDevice:
             try:
                 result = subprocess.run(['nmcli', 'dev', 'wifi', 'connect', ssid, 'password', password], capture_output=True, text=True, check=True)
                 # Get IP address
-                ip_address = get_wifi_ipv4()
+                ip_address = get_primary_ipv4()
                 cls.send_data({"command": "connect_wifi", "status": "success", "ip_address": ip_address})
             except subprocess.CalledProcessError as inner_e:
                 # Check for specific error codes that shouldn't trigger fallback
@@ -131,10 +136,10 @@ class UARTDevice:
                 # Bring up the connection
                 result = subprocess.run(['nmcli', 'con', 'up', ssid], capture_output=True, text=True, check=True)
                 # Get IP address
-                ip_address = get_wifi_ipv4()
+                ip_address = get_primary_ipv4()
                 cls.send_data({"command": "connect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
-            print("Failed to connect to WiFi:", e)
+            _log.warning("Failed to connect to WiFi: %s", e)
             # Check nmcli return code for specific error conditions
             if e.returncode == 255:
                 error_response = create_error_response("connect_wifi", ErrorCode.WIFI_ALREADY_CONNECTED, "Already connected to the given network")
@@ -155,10 +160,10 @@ class UARTDevice:
             subprocess.run(['nmcli', 'dev', 'connect', 'wlan0'], capture_output=True, text=True, check=True)
             time.sleep(2)
             # Get IP address
-            ip_address = get_wifi_ipv4()
+            ip_address = get_primary_ipv4()
             cls.send_data({"command": "reconnect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
-            print("Failed to reconnect WiFi:", e)
+            _log.warning("Failed to reconnect WiFi: %s", e)
             error_response = handle_exception("reconnect_wifi", e, "Failed to reconnect WiFi")
             error_response["command"] = "reconnect_wifi"
             cls.send_data(error_response)
@@ -166,11 +171,11 @@ class UARTDevice:
     @classmethod
     def uart_write(cls, value, options):
         try:
-            data = json.loads(value.decode('utf-8'))
-            print("Received JSON:", data)
+            data = json.loads(value.decode("utf-8"))
             command = data.get("command")
+            _log.debug("ble: rx command=%s", command)
             if command is None:
-                print("No command found in data")
+                _log.warning("ble: uart JSON missing command")
                 return
             elif (command == "scan_wifi"):
                 threading.Thread(target=cls._scan_wifi_task, daemon=True).start()
@@ -180,7 +185,7 @@ class UARTDevice:
                     result = subprocess.run(['nmcli', 'radio', 'wifi', 'on'], capture_output=True, text=True, check=True)
                     cls.send_data({"command": "enable_wifi", "status": "success"})
                 except subprocess.CalledProcessError as e:
-                    print("Failed to enable WiFi:", e)
+                    _log.warning("Failed to enable WiFi: %s", e)
                     error_response = handle_exception("enable_wifi", e, "Failed to enable WiFi")
                     error_response["command"] = "enable_wifi"
                     cls.send_data(error_response)
@@ -197,14 +202,14 @@ class UARTDevice:
                         if connected_info:
                             _, ssid = connected_info[0].split(':')
                             # Get the IP address of the connected WiFi
-                            ip_address = get_wifi_ipv4()
+                            ip_address = get_primary_ipv4()
                             cls.send_data({"command": "wifi_status", "wifi_enabled": True, "connected": True, "ssid": ssid, "ip_address": ip_address})
                         else:
                             cls.send_data({"command": "wifi_status", "wifi_enabled": True, "connected": False})
                     else:
                         cls.send_data({"command": "wifi_status", "wifi_enabled": False})
                 except subprocess.CalledProcessError as e:
-                    print("Failed to get WiFi status:", e)
+                    _log.warning("Failed to get WiFi status: %s", e)
                     error_response = handle_exception("wifi_status", e, "Failed to get WiFi status")
                     error_response["command"] = "wifi_status"
                     cls.send_data(error_response)
@@ -228,7 +233,7 @@ class UARTDevice:
                     UARTDevice.device_info["mac_address"] = mac_address
                     cls.send_data({"command": "device_info", "info": UARTDevice.device_info})
                 except Exception as e:
-                    print("Failed to get device info:", e)
+                    _log.warning("Failed to get device info: %s", e)
                     error_response = handle_exception("device_info", e, "Failed to get device info")
                     error_response["command"] = "device_info"
                     cls.send_data(error_response)
@@ -257,11 +262,12 @@ def start_ble_server(locate_device=None):
     adapter_address = list(adapter.Adapter.available())[0].address
     suffix = _ble_mac_last_two_octets(adapter_address)
     local_name = f"{base_name}-{suffix}"
+    UARTDevice.device_info["ble_mac"] = adapter_address
     # Ensure Bluetooth is unblocked and powered on
     try:
         subprocess.run(['rfkill', 'unblock', 'bluetooth'], check=False, capture_output=True)
     except Exception as e:
-        print(f"rfkill unblock failed: {e}")
+        _log.warning("rfkill unblock failed: %s", e)
         
     # Power up bt adapter
     try:
@@ -274,14 +280,14 @@ def start_ble_server(locate_device=None):
                 break
             time.sleep(0.2)
     except Exception as e:
-        print(f"Failed to power Bluetooth adapter: {e}")
-    
+        _log.warning("Failed to power Bluetooth adapter: %s", e)
+
     # Set the adapter alias to match the local name
     try:
         bt_adapter.alias = local_name
     except Exception as e:
-        print(f"Failed to set adapter alias: {e}")
-    
+        _log.warning("Failed to set adapter alias: %s", e)
+
     ble_uart = peripheral.Peripheral(adapter_address, local_name=local_name)
     ble_uart.add_service(srv_id=1, uuid=UART_SERVICE, primary=True)
     ble_uart.add_characteristic(srv_id=1, chr_id=1, uuid=RX_CHARACTERISTIC,
@@ -300,6 +306,10 @@ def start_ble_server(locate_device=None):
     ble_uart.on_connect = UARTDevice.on_connect
     ble_uart.on_disconnect = UARTDevice.on_disconnect
 
+    from runtime.logging_config import tune_third_party_logging
+
+    tune_third_party_logging()
+    _log.info("ble: publishing GATT peripheral name=%s", local_name)
     ble_uart.publish()
 
 if __name__ == '__main__':
@@ -310,4 +320,4 @@ if __name__ == '__main__':
         while True:
             time.sleep(10)
     except KeyboardInterrupt:
-        print("ble_server exiting...")
+        _log.info("ble_server exiting...")
