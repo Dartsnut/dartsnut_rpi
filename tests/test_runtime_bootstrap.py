@@ -1,6 +1,7 @@
 import json
 
 from runtime import bootstrap
+from runtime import device_json_identity
 
 
 def test_ensure_device_info_id_noop_when_id_exists(tmp_path, monkeypatch):
@@ -39,6 +40,12 @@ def test_ensure_device_info_id_persists_when_incoming_identity_complete(
     device_path = tmp_path / "device.json"
     device_path.write_text(json.dumps({}), encoding="utf-8")
 
+    monkeypatch.setattr(
+        device_json_identity,
+        "load_boot_device_identity",
+        lambda: {},
+    )
+
     device_info = {
         "ble_mac": "aa:bb:cc:dd:ee:ff",
         "serial": "SN-001",
@@ -61,8 +68,8 @@ def test_ensure_device_info_id_reads_missing_identity_from_boot(
     device_path.write_text(json.dumps({}), encoding="utf-8")
 
     monkeypatch.setattr(
-        bootstrap,
-        "_load_boot_device_identity",
+        device_json_identity,
+        "load_boot_device_identity",
         lambda: {"serial": "BOOT-SN", "model": "PixelBoard"},
     )
 
@@ -89,8 +96,8 @@ def test_ensure_device_info_id_backfills_identity_when_id_already_exists(
     )
 
     monkeypatch.setattr(
-        bootstrap,
-        "_load_boot_device_identity",
+        device_json_identity,
+        "load_boot_device_identity",
         lambda: {"serial": "BOOT-SN2", "model": "PixelDart"},
     )
 
