@@ -9,9 +9,9 @@ def test_settings_rssi_and_level_mappings():
 
     # Brightness level mapping and inverse
     lvl = ssettings._brightness_raw_to_level("bad")
-    assert 1 <= lvl <= 9
+    assert 1 <= lvl <= 10
     assert ssettings._brightness_level_to_raw(1) == 10
-    assert ssettings._brightness_level_to_raw(99) == 97
+    assert ssettings._brightness_level_to_raw(99) == 100
 
     # Volume mapping and inverse
     v_lvl = ssettings._volume_raw_to_level("bad")
@@ -24,9 +24,22 @@ def test_brightness_level_mapping_uses_444f_values():
     di_444f = {"hardware_version": "444f"}
     di_444e = {"hardware_version": "444e"}
 
-    assert ssettings._brightness_level_to_raw_for_device(2, di_444f) == 20
-    assert ssettings._brightness_level_to_raw_for_device(2, di_444e) == 21
+    assert ssettings._brightness_level_to_raw_for_device(2, di_444f) == 21
+    assert ssettings._brightness_level_to_raw_for_device(2, di_444e) == 20
     assert ssettings._brightness_raw_to_level_for_device(42, di_444f) == 4
+
+
+def test_brightness_display_boxes_keep_nine_slots_with_lowest_level_empty():
+    di_default = {"hardware_version": "444e"}
+    di_444f = {"hardware_version": "444f"}
+
+    assert ssettings._brightness_raw_to_display_boxes_for_device(10, di_default) == 0
+    assert ssettings._brightness_raw_to_display_boxes_for_device(20, di_default) == 1
+    assert ssettings._brightness_raw_to_display_boxes_for_device(100, di_default) == 9
+
+    assert ssettings._brightness_raw_to_display_boxes_for_device(10, di_444f) == 0
+    assert ssettings._brightness_raw_to_display_boxes_for_device(21, di_444f) == 1
+    assert ssettings._brightness_raw_to_display_boxes_for_device(95, di_444f) == 9
 
 
 def test_menu_firmware_flag_helpers(monkeypatch):
