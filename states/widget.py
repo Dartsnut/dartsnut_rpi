@@ -9,6 +9,7 @@ from domain.app_context import AppContext
 from states.base import BaseState
 from widget_lifecycle import (
     check_page_widget_updates,
+    flush_deferred_widget_processes_on_leave_widget_mode,
     restart_widget_process,
     _kill_widget_process,
     widgets_updated,
@@ -211,4 +212,6 @@ class WidgetState(BaseState):
                 ctx.page_tick = time.time()
             else:
                 from states.menu import MenuState
+
+                flush_deferred_widget_processes_on_leave_widget_mode(ctx)
                 ctx.transition_to(MenuState())
