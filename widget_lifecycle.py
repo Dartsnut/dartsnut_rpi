@@ -217,6 +217,35 @@ def kill_widget_if_page_inactive(widget_id: str, get_context) -> None:
                 return
 
 
+def flush_deferred_widget_processes_on_leave_widget_mode(ctx: AppContext) -> None:
+    """
+    Kill processes for widgets whose app was replaced on disk while their page stayed
+    visible (entries in ``widgets_updated``).
+
+    Page rotation already kills deferred widgets on inactive pages; leaving widget mode
+    (e.g. home to menu) must do the same for the active page, otherwise returning to the
+    widget with the same ``page_index`` never restarts and the old binary keeps running.
+    """
+    pages = getattr(ctx, "pages", None) or []
+    pending = set(widgets_updated)
+    if not pending:
+        return
+    for page in pages:
+        for widget_entry in page.get("widgets") or []:
+            widget = widget_entry.get("widget")
+            if not isinstance(widget, dict):
+                continue
+            widget_id = widget.get("id")
+            if not widget_id or widget_id not in pending:
+                continue
+            _kill_widget_process(
+                widget_entry,
+                widget_id,
+                "leaving widget mode, deferred update",
+            )
+    widgets_updated.difference_update(pending)
+
+
 def download_widget_async(
     widget_id: str, url: str, md5: str, get_context=None, on_complete=None
 ) -> None:

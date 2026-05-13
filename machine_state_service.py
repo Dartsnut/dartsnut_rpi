@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
+from runtime import device_json_identity
 
 _log = logging.getLogger(__name__)
 
@@ -66,8 +67,11 @@ class MachineStateService:
 
         try:
             device_info = dict(device_info or {})
+            boot_identity = device_json_identity.load_boot_device_identity()
             for key in ("serial", "model"):
                 persisted_value = str((persisted or {}).get(key, "")).strip()
+                if not persisted_value:
+                    persisted_value = str((boot_identity or {}).get(key, "")).strip()
                 if persisted_value:
                     device_info[key] = persisted_value
                 else:
@@ -80,6 +84,7 @@ class MachineStateService:
         try:
             with open(path, "w") as f:
                 json.dump(device_info, f)
+            device_json_identity.verify_and_repair_device_json(path)
         except Exception as e:
             _log.error("Error writing device.json: %s", e)
 

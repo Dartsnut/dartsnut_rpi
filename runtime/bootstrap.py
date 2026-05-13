@@ -11,6 +11,7 @@ import threading
 from typing import Any, Callable, Dict
 
 import assets
+from runtime import device_json_identity
 from runtime.remote_sync_port import get_remote_sync
 
 _log = logging.getLogger(__name__)
@@ -33,27 +34,6 @@ def _has_identity_fields(device_info: Dict[str, Any]) -> bool:
     serial = str(device_info.get("serial", "")).strip()
     model = str(device_info.get("model", "")).strip()
     return bool(serial and model)
-
-
-def _load_boot_device_identity() -> Dict[str, Any]:
-    try:
-        boot_path = "/boot/device.json"
-        if not os.path.isfile(boot_path):
-            return {}
-        with open(boot_path, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-        if not isinstance(payload, dict):
-            return {}
-        serial = str(payload.get("serial", "")).strip()
-        model = str(payload.get("model", "")).strip()
-        out: Dict[str, Any] = {}
-        if serial:
-            out["serial"] = serial
-        if model:
-            out["model"] = model
-        return out
-    except Exception:
-        return {}
 
 
 def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -84,7 +64,7 @@ def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
                 persisted = json.load(f) or {}
 
         if not _has_identity_fields(persisted):
-            boot_identity = _load_boot_device_identity()
+            boot_identity = device_json_identity.load_boot_device_identity()
             if boot_identity:
                 persisted = dict(persisted)
                 for key in ("serial", "model"):
@@ -107,6 +87,7 @@ def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
                     persisted[key] = incoming
         with open(path, "w", encoding="utf-8") as f:
             json.dump(persisted, f)
+        device_json_identity.verify_and_repair_device_json(path)
     except Exception:
         pass
 
