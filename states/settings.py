@@ -64,8 +64,8 @@ def _tint_icon_rgba(icon_rgba, color):
     return Image.merge("RGBA", (R, G, B, a))
 
 
-BRIGHTNESS_LEVEL_VALUES = [10, 20, 30, 40, 53, 59, 73, 79, 87, 100]
-BRIGHTNESS_LEVEL_VALUES_444F = [10, 21, 30, 42, 47, 59, 69, 80, 91, 95]
+BRIGHTNESS_LEVEL_VALUES = [10, 13, 16, 22, 32, 45, 61, 69, 80, 95]
+BRIGHTNESS_LEVEL_VALUES_444F = [10, 13, 18, 22, 31, 42, 45, 58, 63, 80]
 VOLUME_LEVEL_VALUES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 
@@ -85,7 +85,7 @@ def _brightness_values_for_device(device_info):
 
 
 def _brightness_raw_to_level(brightness_raw):
-    """Map raw brightness (any int) to nearest level 1–9."""
+    """Map raw brightness (any int) to nearest level 1-10."""
     try:
         value = int(brightness_raw)
     except (TypeError, ValueError):
@@ -102,7 +102,7 @@ def _brightness_raw_to_level(brightness_raw):
 
 
 def _brightness_level_to_raw(level):
-    """Map brightness level (1–9) to canonical raw brightness."""
+    """Map brightness level (1-10) to canonical raw brightness."""
     try:
         level_int = int(level)
     except (TypeError, ValueError):
@@ -136,6 +136,16 @@ def _brightness_level_to_raw_for_device(level, device_info):
         level_int = 5
     level_int = _clamp(level_int, 1, len(values))
     return values[level_int - 1]
+
+
+def _brightness_raw_to_display_boxes_for_device(brightness_raw, device_info):
+    """Map 10 device brightness levels onto 9 UI boxes.
+
+    The lowest device brightness level renders as 0 filled boxes, and each
+    higher step fills one additional box.
+    """
+    level = _brightness_raw_to_level_for_device(brightness_raw, device_info)
+    return _clamp(level - 1, 0, 9)
 
 
 def _volume_raw_to_level(volume_raw):
@@ -196,6 +206,7 @@ class SettingsState(BaseState):
     def update(self, ctx: AppContext) -> None:
         settings_image = Image.new("RGB", (128, 160), (0, 0, 0))
         draw = ImageDraw.Draw(settings_image)
+        device_info = {}
         try:
             device_info = ctx.get_device_info()
             brightness = int(device_info.get("brightness", 50))
@@ -290,7 +301,9 @@ class SettingsState(BaseState):
                     font=font_6x8,
                 )
             elif item["name"] == "Brightness":
-                brightness_level = _brightness_raw_to_level(brightness)
+                brightness_level = _brightness_raw_to_display_boxes_for_device(
+                    brightness, device_info
+                )
                 dot_size = 5
                 dot_count = 9
                 dot_gap = 1
