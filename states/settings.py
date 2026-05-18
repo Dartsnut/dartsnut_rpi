@@ -64,8 +64,8 @@ def _tint_icon_rgba(icon_rgba, color):
     return Image.merge("RGBA", (R, G, B, a))
 
 
-BRIGHTNESS_LEVEL_VALUES = [10, 20, 30, 40, 53, 59, 73, 79, 87, 100]
-BRIGHTNESS_LEVEL_VALUES_444F = [10, 21, 30, 42, 47, 59, 69, 80, 91, 95]
+BRIGHTNESS_LEVEL_VALUES = [10, 13, 16, 22, 32, 45, 61, 69, 80, 95]
+BRIGHTNESS_LEVEL_VALUES_444F = [10, 13, 18, 22, 31, 42, 45, 58, 63, 80]
 VOLUME_LEVEL_VALUES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 
