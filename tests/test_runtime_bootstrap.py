@@ -25,12 +25,48 @@ def test_ensure_device_info_id_backfills_from_ble_mac_and_persists(tmp_path, mon
     device_path = tmp_path / "device.json"
     device_path.write_text(json.dumps({"ble_mac": "aa:bb:cc:dd:ee:ff"}), encoding="utf-8")
 
+    monkeypatch.setattr(
+        device_json_identity,
+        "load_boot_device_identity",
+        lambda: {},
+    )
+
     device_info = {"ble_mac": "aa:bb:cc:dd:ee:ff"}
     out = bootstrap._ensure_device_info_id(device_info)
 
     assert out["id"] == "AA:BB:CC:DD:EE:FF"
+    assert out["serial"] == device_json_identity.FACTORY_PLACEHOLDER_SERIAL
     persisted = json.loads(device_path.read_text(encoding="utf-8"))
-    assert "id" not in persisted
+    assert persisted["id"] == "AA:BB:CC:DD:EE:FF"
+    assert persisted["serial"] == device_json_identity.FACTORY_PLACEHOLDER_SERIAL
+
+
+def test_ensure_device_info_id_assigns_factory_serial_when_model_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    device_path = tmp_path / "device.json"
+    device_path.write_text(
+        json.dumps({"model": "PixelBoard", "brightness": "100"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        device_json_identity,
+        "load_boot_device_identity",
+        lambda: {},
+    )
+
+    device_info = {"id": "AA:BB:CC:DD:EE:FF", "model": "PixelBoard"}
+    out = bootstrap._ensure_device_info_id(device_info)
+
+    assert out["id"] == "AA:BB:CC:DD:EE:FF"
+    assert out["serial"] == device_json_identity.FACTORY_PLACEHOLDER_SERIAL
+    assert out["model"] == "PixelBoard"
+    persisted = json.loads(device_path.read_text(encoding="utf-8"))
+    assert persisted["serial"] == device_json_identity.FACTORY_PLACEHOLDER_SERIAL
+    assert persisted["model"] == "PixelBoard"
+    assert persisted["brightness"] == "100"
 
 
 def test_ensure_device_info_id_persists_when_incoming_identity_complete(

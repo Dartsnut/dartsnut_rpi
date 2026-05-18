@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 _log = logging.getLogger(__name__)
 
 BOOT_DEVICE_JSON = "/boot/device.json"
+FACTORY_PLACEHOLDER_SERIAL = "UNASSIGNED"
 
 
 def load_boot_device_identity() -> Dict[str, Any]:
@@ -38,6 +39,25 @@ def load_boot_device_identity() -> Dict[str, Any]:
     except Exception as e:
         _log.debug("Could not read boot device identity: %s", e)
         return {}
+
+
+def apply_factory_serial_if_needed(
+    data: Dict[str, Any], *, device_id: str = ""
+) -> Dict[str, Any]:
+    """
+    Assign a factory placeholder serial when boot and disk have none.
+
+    Production machines with serial in /boot/device.json are unchanged.
+    """
+    _ = device_id
+    out = dict(data or {})
+    boot = load_boot_device_identity()
+    if str(boot.get("serial", "")).strip():
+        return out
+    if str(out.get("serial", "")).strip():
+        return out
+    out["serial"] = FACTORY_PLACEHOLDER_SERIAL
+    return out
 
 
 def verify_and_repair_device_json(path: Optional[str] = None) -> bool:
@@ -69,6 +89,12 @@ def verify_and_repair_device_json(path: Optional[str] = None) -> bool:
             changed = True
         elif not disk_val and boot_val:
             data[key] = boot_val
+            changed = True
+
+    if not str(data.get("serial", "")).strip() and not str(boot.get("serial", "")).strip():
+        repaired = apply_factory_serial_if_needed(data)
+        if str(repaired.get("serial", "")).strip() != str(data.get("serial", "")).strip():
+            data = repaired
             changed = True
 
     if changed:

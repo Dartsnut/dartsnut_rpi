@@ -77,14 +77,24 @@ def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
                     ).strip():
                         info[key] = persisted[key]
 
-        if not _has_identity_fields(persisted) and not _has_identity_fields(info):
-            return info
+        persisted = dict(persisted or {})
+        info = dict(info)
         persisted["id"] = resolved
         for key in ("serial", "model"):
             if not str(persisted.get(key, "")).strip():
                 incoming = str(info.get(key, "")).strip()
                 if incoming:
                     persisted[key] = incoming
+
+        persisted = device_json_identity.apply_factory_serial_if_needed(
+            persisted, device_id=resolved
+        )
+        info = device_json_identity.apply_factory_serial_if_needed(
+            info, device_id=resolved
+        )
+        for key in ("serial", "model"):
+            if not str(info.get(key, "")).strip() and str(persisted.get(key, "")).strip():
+                info[key] = persisted[key]
         with open(path, "w", encoding="utf-8") as f:
             json.dump(persisted, f)
         device_json_identity.verify_and_repair_device_json(path)
