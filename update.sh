@@ -128,6 +128,8 @@ echo "== Python deps refresh =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 
 sudo "${VENV_PIP}" install --upgrade pip
+echo "Removing legacy pygame / pybluez packages..."
+sudo "${VENV_PIP}" uninstall -y pygame pybluez || true
 sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
 
 echo "== Cron auto-update =="
