@@ -128,9 +128,17 @@ echo "== Python deps refresh =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 
 sudo "${VENV_PIP}" install --upgrade pip
-echo "Removing legacy pygame / pybluez packages..."
-sudo "${VENV_PIP}" uninstall -y pygame pybluez || true
+echo "Removing legacy pygame / PyBluez packages..."
+# PyBluez and pybluez-dartsnut both install the 'bluetooth' module; uninstall
+# all variants before reinstalling so pip does not leave dist-info without files.
+sudo "${VENV_PIP}" uninstall -y pygame PyBluez pybluez pybluez-dartsnut || true
 sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
+echo "Verifying bluetooth module (pybluez-dartsnut)..."
+if ! "${VENV_DIR}/bin/python" -c "import bluetooth; import bluetooth._bluetooth" 2>/dev/null; then
+  echo "bluetooth import failed; force-reinstalling pybluez-dartsnut..."
+  sudo "${VENV_PIP}" install --force-reinstall --no-deps pybluez-dartsnut==0.30
+  "${VENV_DIR}/bin/python" -c "import bluetooth; import bluetooth._bluetooth"
+fi
 
 echo "== Cron auto-update =="
 
