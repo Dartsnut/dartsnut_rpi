@@ -13,7 +13,8 @@
 # single commit.
 #
 # Environment:
-#   SKIP_BRIDGE_BUILD=1   — do not run scripts/compile_supabase_bridge.sh after squash.
+#   BUILD_BRIDGE=1        — run scripts/compile_supabase_bridge.sh after squash
+#                           (default: skip bridge build and reuse existing ./bridge).
 #   SKIP_GIT_FETCH=1      — do not run git fetch origin before branch checks.
 #   RELEASE_PUSH=1        — git push origin release after commit.
 #
@@ -129,14 +130,14 @@ maybe_fetch_origin() {
 }
 
 build_bridge_if_enabled() {
-  if [[ "${SKIP_BRIDGE_BUILD:-}" == "1" ]]; then
-    log "SKIP_BRIDGE_BUILD=1: skipping bridge compile"
+  if [[ "${BUILD_BRIDGE:-}" != "1" ]]; then
+    log "BUILD_BRIDGE not set: skipping bridge compile (default)"
     return 0
   fi
   if [[ ! -d "${REPO_ROOT}/supabase_bridge" ]]; then
     fail "supabase_bridge/ missing in working tree; cannot compile bridge"
   fi
-  log "building bridge (scripts/compile_supabase_bridge.sh)"
+  log "BUILD_BRIDGE=1: building bridge (scripts/compile_supabase_bridge.sh)"
   "${REPO_ROOT}/scripts/compile_supabase_bridge.sh"
 }
 
