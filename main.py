@@ -557,6 +557,16 @@ def reload_pages_from_conf(context: AppContext) -> None:
     context.page_tick = time.time()
 
 
+# Linux joystick button index -> app button name (Bluetooth gamepads).
+_JS_BUTTON_TO_APP = {
+    0: "btn_a",
+    1: "btn_b",
+    8: "btn_home",
+    9: "btn_home",
+    10: "btn_home",
+}
+
+
 # -----------------------------------------------------------------------------
 # Buttons: GPIO + joystick (skip joystick when in_game so game receives input)
 # -----------------------------------------------------------------------------
@@ -595,9 +605,9 @@ def get_buttons_pressed(context: AppContext):
                 f = open(js_path, "rb")
                 os.set_blocking(f.fileno(), False)
                 get_buttons_pressed.js_files[js_path] = f
-            except Exception:
+            except OSError:
                 pass
-    if get_buttons_pressed.js_files and consume_joystick:
+    if get_buttons_pressed.js_files:
         for js_path in list(get_buttons_pressed.js_files.keys()):
             js_file = get_buttons_pressed.js_files[js_path]
             while True:
@@ -608,15 +618,14 @@ def get_buttons_pressed(context: AppContext):
                     if not event_data:
                         raise OSError("Device disconnected")
                     _time_ms, value, type_, number = struct.unpack("Ihbb", event_data)
-                    if type_ & 0x01:
-                        if value == 1:
-                            if number == 0:
-                                button_pressed["btn_a"] = True
-                            elif number == 1:
-                                button_pressed["btn_b"] = True
-                            elif number in (8, 9):
-                                button_pressed["btn_home"] = True
-                    elif type_ & 0x02:
+                    event_kind = type_ & 0x7F  # JS_EVENT_* (ignore JS_EVENT_INIT)
+                    if event_kind == 0x01:
+                        app_btn = _JS_BUTTON_TO_APP.get(number)
+                        if value != 0 and app_btn and (
+                            consume_joystick or app_btn == "btn_home"
+                        ):
+                            button_pressed[app_btn] = True
+                    elif consume_joystick and event_kind == 0x02:
                         if number == 6:
                             if value < -16000:
                                 button_pressed["btn_left"] = True
