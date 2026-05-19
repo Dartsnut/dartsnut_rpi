@@ -128,15 +128,50 @@ echo "== Python deps refresh =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 
 sudo "${VENV_PIP}" install --upgrade pip
-echo "Removing legacy pygame / PyBluez packages..."
-# PyBluez and pybluez-dartsnut both install the 'bluetooth' module; uninstall
-# all variants before reinstalling so pip does not leave dist-info without files.
-sudo "${VENV_PIP}" uninstall -y pygame PyBluez pybluez pybluez-dartsnut || true
+echo "Removing packages whose on-disk namespaces overlap..."
+# Several package pairs install into the same top-level directory:
+#   - `pygame` (legacy) and `pygame-ce` both ship the `pygame/` package
+#   - `PyBluez` / `pybluez` and `pybluez-dartsnut` both ship the `bluetooth` module
+# `pip uninstall pygame` (or `pip uninstall PyBluez`) consults the *legacy*
+# RECORD, which lists files now owned by the CE/dartsnut variant, and deletes
+# them while leaving the surviving package's dist-info intact. A subsequent
+# `pip install -r requirements.txt` then sees the surviving package as already
+# satisfied and skips it, producing a half-installed namespace package (this is
+# exactly how `import pygame` ended up as an empty namespace with no `Surface`).
+# Uninstall every variant up front so the install below rewrites the files
+# from scratch.
+sudo "${VENV_PIP}" uninstall -y pygame pygame-ce PyBluez pybluez pybluez-dartsnut || true
 sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
+
+# Helper: extract the pinned requirement spec (e.g. "pygame-ce==2.5.7") so
+# force-reinstall reuses whatever requirements.txt is pinning today.
+requirement_spec() {
+  local package="$1"
+  grep -E "^${package}[[:space:]]*[=<>!~]" "${REPO_DIR}/requirements.txt" | head -n 1
+}
+
+echo "Verifying pygame module (pygame-ce)..."
+# `pygame.Surface` resolves only when pygame-ce's compiled extensions are
+# present; an empty namespace package (the failure mode this script must
+# prevent) raises AttributeError here.
+if ! "${VENV_DIR}/bin/python" -c "import pygame; pygame.Surface" 2>/dev/null; then
+  echo "pygame import incomplete; force-reinstalling pygame-ce..."
+  PYGAME_REQ="$(requirement_spec pygame-ce)"
+  if [ -z "${PYGAME_REQ}" ]; then
+    PYGAME_REQ="pygame-ce"
+  fi
+  sudo "${VENV_PIP}" install --force-reinstall --no-deps "${PYGAME_REQ}"
+  "${VENV_DIR}/bin/python" -c "import pygame; pygame.Surface"
+fi
+
 echo "Verifying bluetooth module (pybluez-dartsnut)..."
 if ! "${VENV_DIR}/bin/python" -c "import bluetooth; import bluetooth._bluetooth" 2>/dev/null; then
   echo "bluetooth import failed; force-reinstalling pybluez-dartsnut..."
-  sudo "${VENV_PIP}" install --force-reinstall --no-deps pybluez-dartsnut==0.30
+  BLUETOOTH_REQ="$(requirement_spec pybluez-dartsnut)"
+  if [ -z "${BLUETOOTH_REQ}" ]; then
+    BLUETOOTH_REQ="pybluez-dartsnut==0.30"
+  fi
+  sudo "${VENV_PIP}" install --force-reinstall --no-deps "${BLUETOOTH_REQ}"
   "${VENV_DIR}/bin/python" -c "import bluetooth; import bluetooth._bluetooth"
 fi
 
