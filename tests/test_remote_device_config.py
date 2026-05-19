@@ -628,7 +628,7 @@ def test_apply_triggers_bluetooth_scan_when_requested():
     )
     applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
     applier.apply({"bluetooth": {"is_scan": True}})
-    ble.start_scan_if_requested.assert_called_once()
+    ble.start_scan_if_requested.assert_called_once_with(sync_connected_controllers=True)
 
 
 def test_apply_is_scan_without_controllers_key_does_not_unpair():
@@ -665,7 +665,7 @@ def test_apply_is_scan_without_controllers_key_does_not_unpair():
     rt.last_remote_controller_macs = {"AA:BB:CC:DD:EE:01"}
     applier = RemoteDeviceConfigApplier(deps, rt)
     applier.apply({"bluetooth": {"is_scan": True}})
-    ble.start_scan_if_requested.assert_called_once()
+    ble.start_scan_if_requested.assert_called_once_with(sync_connected_controllers=True)
     disconnect.assert_not_called()
 
 
@@ -701,7 +701,86 @@ def test_apply_calls_apply_explicit_remote_lists_before_starting_scan():
     cfg = {"bluetooth": {"controllers": [], "is_scan": True}}
     applier.apply(cfg)
     assert ble.mock_calls[0] == call.apply_explicit_remote_lists(cfg["bluetooth"])
-    assert ble.mock_calls[1] == call.start_scan_if_requested()
+    assert ble.mock_calls[1] == call.start_scan_if_requested(
+        sync_connected_controllers=True
+    )
+
+
+def test_apply_skips_unpair_while_scan_in_progress():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    disconnect = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        disconnect_and_unpair_device=disconnect,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.last_remote_controller_macs = {"98:B6:EE:8D:16:20"}
+    applier = RemoteDeviceConfigApplier(deps, rt)
+    applier.apply({"bluetooth": {"controllers": [], "is_scan": True}})
+    disconnect.assert_not_called()
+
+
+def test_apply_syncs_connected_controllers_when_remote_list_is_nonempty():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        request_set_all_games_ready=lambda: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
+    cfg = {
+        "bluetooth": {
+            "controllers": [{"mac": "AA:BB:CC:DD:EE:01", "status": "idle"}],
+            "is_scan": True,
+        }
+    }
+    applier.apply(cfg)
+    assert ble.mock_calls[0] == call.apply_explicit_remote_lists(cfg["bluetooth"])
+    assert ble.mock_calls[1] == call.start_scan_if_requested(
+        sync_connected_controllers=True
+    )
 
 
 def test_apply_updates_brightness_via_service():

@@ -114,6 +114,7 @@ _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     timestamp_factory=machine_api.current_utc_iso_timestamp,
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
     connect_device=machine_api.connect_device_for_remote,
+    connected_controllers_provider=machine_api.list_connected_paired_devices,
 )
 _websocket_service_registry = build_default_websocket_registry()
 

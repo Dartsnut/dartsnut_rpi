@@ -117,6 +117,39 @@ def list_paired_devices():
 
     return {"action": "bluetooth_list", "devices": paired_devices}
 
+
+def list_connected_paired_devices():
+    """
+    Paired (bonded) devices that are currently connected.
+    Returns a list of {"address": "<UPPER MAC>", "name": "<str>"}, unique by address.
+    """
+    paired_result = list_paired_devices()
+    if not isinstance(paired_result, dict) or paired_result.get("error"):
+        return []
+    devices = paired_result.get("devices")
+    if not isinstance(devices, list):
+        return []
+
+    out = []
+    seen = set()
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        address = _normalize_bt_address(device.get("address"))
+        if not address or address in seen:
+            continue
+        if get_connection_status(address) != "connected":
+            continue
+        seen.add(address)
+        out.append(
+            {
+                "address": address,
+                "name": str(device.get("name") or "").strip(),
+            }
+        )
+    return out
+
+
 def disconnect_and_unpair_device(address):
     """
     Disconnects, removes (unpairs), and forgets a Bluetooth device using bluetoothctl.
