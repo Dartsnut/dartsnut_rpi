@@ -2,11 +2,21 @@ import threading
 
 
 class RemoteBluetoothScanController:
-    def __init__(self, scan_builder, timestamp_factory, publish_update, connect_device):
+    def __init__(
+        self,
+        scan_builder,
+        timestamp_factory,
+        publish_update,
+        connect_device,
+        connected_controllers_provider=None,
+    ):
         self._scan_builder = scan_builder
         self._timestamp_factory = timestamp_factory
         self._publish_update = publish_update
         self._connect_device = connect_device
+        self._connected_controllers_provider = (
+            connected_controllers_provider or (lambda: [])
+        )
         self._lock = threading.Lock()
         self._in_progress = False
         self._connect_in_progress = False
@@ -36,11 +46,13 @@ class RemoteBluetoothScanController:
                 lst = raw if isinstance(raw, list) else []
                 self._state["scan_results"] = self._normalize_scan_entries(lst)
 
-    def start_scan_if_requested(self):
+    def start_scan_if_requested(self, sync_connected_controllers=False):
         with self._lock:
             if self._in_progress:
                 return False
             self._in_progress = True
+            if sync_connected_controllers:
+                self._merge_connected_controllers()
             # Clear stale scan results immediately when a new scan starts.
             self._state["is_scan"] = True
             self._state["scan_results"] = []
@@ -184,6 +196,29 @@ class RemoteBluetoothScanController:
             new_entry["last_error"] = last_error
         items.append(new_entry)
         self._state[source_list] = items
+
+    def _merge_connected_controllers(self):
+        try:
+            os_devices = self._connected_controllers_provider() or []
+        except Exception:
+            os_devices = []
+        if not isinstance(os_devices, list):
+            return
+
+        existing_macs = {
+            str(item.get("mac") or "").strip().upper()
+            for item in (self._state.get("controllers") or [])
+            if isinstance(item, dict) and item.get("mac")
+        }
+        for device in os_devices:
+            if not isinstance(device, dict):
+                continue
+            mac = str(device.get("mac") or device.get("address") or "").strip().upper()
+            if not mac or mac in existing_macs:
+                continue
+            name = str(device.get("name") or "").strip()
+            self._upsert_controller(mac, name, "connected")
+            existing_macs.add(mac)
 
     def _upsert_controller(self, mac, name, status, last_error=""):
         items = self._state.get("controllers") or []

@@ -21,7 +21,8 @@ numpy==2.4.2
 opencv-python==4.13.0.92
 pillow==12.1.1
 propcache==0.4.1
-PyBluez @ git+https://github.com/pybluez/pybluez.git@82cbba8a1ebd4c1e3442dfafd8581d58c50fa39e
+# Replaces PyBluez; installs the 'bluetooth' module (import bluetooth).
+pybluez-dartsnut==0.30
 pycairo==1.29.0
 pydantic==2.12.5
 pydantic_core==2.41.5

@@ -396,7 +396,12 @@ class RemoteDeviceConfigApplier:
             if isinstance(bluetooth_cfg, dict):
                 deps.bluetooth_scan_controller.apply_explicit_remote_lists(bluetooth_cfg)
                 if bool(bluetooth_cfg.get("is_scan")):
-                    deps.bluetooth_scan_controller.start_scan_if_requested()
+                    # Always reconcile against OS at scan start. Full config snapshots from
+                    # Supabase often include `controllers: []` even when a pad is connected;
+                    # treating that as "do not merge" leaves connected devices missing.
+                    deps.bluetooth_scan_controller.start_scan_if_requested(
+                        sync_connected_controllers=True,
+                    )
                 # Only treat controllers as authoritative when the key is present; an
                 # omitted key must not behave like [] (would spuriously unpair devices).
                 if "controllers" in bluetooth_cfg:
@@ -428,7 +433,8 @@ class RemoteDeviceConfigApplier:
                             )
 
                 # Detect controller removals and unpair removed devices.
-                if controllers is not None:
+                # Skip while scanning: snapshots may carry stale empty controllers.
+                if controllers is not None and not bool(bluetooth_cfg.get("is_scan")):
                     current_controller_macs: set[str] = set()
                     for row in controllers:
                         if not isinstance(row, dict):
