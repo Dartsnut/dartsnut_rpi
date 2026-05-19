@@ -5,6 +5,9 @@ venv0/
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.coverage
+.coverage.*
 
 # Ignore Python local editable package
 *.egg-info/
@@ -19,6 +22,7 @@ device.json
 
 .DS_Store
 .cursor/
+.agents/
 
 *.swp
 target/
