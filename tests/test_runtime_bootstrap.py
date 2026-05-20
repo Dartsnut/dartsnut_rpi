@@ -150,6 +150,7 @@ def test_ensure_device_info_id_backfills_identity_when_id_already_exists(
 
 def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeypatch):
     started_targets = []
+    all_ready_calls: list[bool] = []
 
     class _FakeThread:
         def __init__(self, target=None, args=(), daemon=None):
@@ -168,17 +169,23 @@ def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeyp
             return None
 
         def request_set_all_games_ready(self):
-            return None
+            all_ready_calls.append(True)
 
     class _FakeDartsnut:
         def update_frame_buffer(self, _img):
             return None
 
-    class _FakeRemoteConfigRuntime:
-        awaiting_games_ready_confirmation = False
-        startup_games_ready_confirmed_at = None
-        startup_filter_playing_until_newer_update = False
-        startup_firmware_version = None
+    runtime = type(
+        "FakeRemoteConfigRuntime",
+        (),
+        {
+            "awaiting_games_ready_confirmation": False,
+            "startup_games_ready_confirmed_at": None,
+            "startup_filter_playing_until_newer_update": False,
+            "startup_settlement_completed": False,
+            "startup_firmware_version": None,
+        },
+    )()
 
     monkeypatch.setattr(bootstrap.threading, "Thread", _FakeThread)
     monkeypatch.setattr(bootstrap, "get_remote_sync", lambda: _FakeRemoteSync())
@@ -203,9 +210,14 @@ def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeyp
         apply_remote_config=lambda _cfg: None,
         on_remote_connectivity_changed=lambda _c: None,
         request_network_state_refresh=lambda: None,
-        remote_config_runtime=_FakeRemoteConfigRuntime(),
+        remote_config_runtime=runtime,
     )
 
     target_names = {getattr(target, "__name__", "") for target in started_targets}
     assert "udp_broadcast" not in target_names
     assert len(started_targets) == 4
+    assert runtime.awaiting_games_ready_confirmation is True
+    assert runtime.startup_settlement_completed is False
+    assert runtime.startup_games_ready_confirmed_at is None
+    assert runtime.startup_filter_playing_until_newer_update is False
+    assert all_ready_calls == []

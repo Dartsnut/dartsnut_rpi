@@ -66,7 +66,6 @@ def test_apply_confirms_reset_only_for_expected_source():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -118,7 +117,6 @@ def test_apply_sets_reload_flag_when_app_source_pages_change(
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         disconnect_and_unpair_device=lambda _mac: {},
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
@@ -161,7 +159,6 @@ def test_apply_app_source_pages_skips_reload_when_fingerprint_unchanged():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -208,7 +205,6 @@ def test_apply_sets_reload_flag_only_for_newer_remote_pages_update():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -264,7 +260,6 @@ def test_apply_sets_reload_flag_on_first_supabase_snapshot_without_pages_updated
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -308,7 +303,6 @@ def test_apply_sets_reload_when_pages_updated_at_unchanged_but_pages_fingerprint
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -390,7 +384,6 @@ def test_supabase_pages_skips_full_reload_in_widget_mode_when_soft_apply_succeed
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -474,7 +467,6 @@ def test_supabase_pages_soft_apply_updates_active_widget_fields_and_restarts(
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -560,7 +552,6 @@ def test_app_pages_soft_apply_updates_active_widget_fields_without_full_reload(
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -615,7 +606,6 @@ def test_apply_triggers_bluetooth_scan_when_requested():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -649,7 +639,6 @@ def test_apply_is_scan_without_controllers_key_does_not_unpair():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -686,7 +675,6 @@ def test_apply_calls_apply_explicit_remote_lists_before_starting_scan():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -723,7 +711,6 @@ def test_apply_skips_unpair_while_scan_in_progress():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -758,7 +745,6 @@ def test_apply_syncs_connected_controllers_when_remote_list_is_nonempty():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -799,7 +785,6 @@ def test_apply_updates_brightness_via_service():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -831,7 +816,6 @@ def test_apply_bluetooth_connecting_rows_trigger_connect_for_both_lists():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -872,7 +856,6 @@ def test_apply_bluetooth_removed_controller_calls_unpair():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         disconnect_and_unpair_device=lambda mac: removed.append(mac) or {},
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
@@ -919,7 +902,6 @@ def test_apply_game_playing_requests_launch():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda gid, st: status_calls.append((gid, st)),
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -931,7 +913,7 @@ def test_apply_game_playing_requests_launch():
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
 
@@ -960,7 +942,6 @@ def test_apply_game_playing_switches_running_game_then_launches_new():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda gid, st: status_calls.append((gid, st)),
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda g: term_calls.append(g),
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -972,7 +953,7 @@ def test_apply_game_playing_switches_running_game_then_launches_new():
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
 
@@ -1001,7 +982,6 @@ def test_apply_with_games_list_sets_reload_game_menu():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -1013,7 +993,7 @@ def test_apply_with_games_list_sets_reload_game_menu():
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
     applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
@@ -1030,7 +1010,6 @@ def test_apply_with_empty_games_list_sets_reload_game_menu():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -1042,7 +1021,7 @@ def test_apply_with_empty_games_list_sets_reload_game_menu():
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
     applier.apply({"games": []})
@@ -1060,7 +1039,6 @@ def test_apply_without_games_key_leaves_reload_game_menu_unchanged():
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda _gid, _ver: True,
@@ -1076,27 +1054,17 @@ def test_apply_without_games_key_leaves_reload_game_menu_unchanged():
     assert game_ctx.reload_game_menu is False
 
 
-# Startup gate behavior
-def test_startup_ready_confirmation_waits_on_supabase_bridge_updates_without_games():
-    """
-    If inbound snapshots are sourced from `supabase_bridge` but omit `games`,
-    startup ready-confirmation should not complete yet.
-    """
-    game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-    all_ready = {"count": 0}
-
-    deps = RemoteDeviceConfigDependencies(
+# Startup settlement gate behavior
+def _gate_deps(game_ctx, svc, ble, publish=None, ensure=None):
+    return RemoteDeviceConfigDependencies(
         app_ctx=game_ctx,
         get_machine_state_service=lambda: svc,
         bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
+        publish_partial_state=publish or (lambda _p: None),
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
+        ensure_game_downloaded=ensure or (lambda _gid, _ver: True),
         cancel_game_download=lambda _gid: None,
         local_game_version_matches=lambda *_a: False,
         perform_update=lambda: {},
@@ -1104,292 +1072,100 @@ def test_startup_ready_confirmation_waits_on_supabase_bridge_updates_without_gam
         is_reset_in_progress=lambda: False,
         on_reset_confirmed=lambda: None,
     )
+
+
+def test_gate_passes_missing_games_as_empty_no_publish():
+    game_ctx = _game_ctx()
+    published = []
+
     rt = RemoteConfigRuntimeState()
     rt.awaiting_games_ready_confirmation = True
-    applier = RemoteDeviceConfigApplier(deps, rt)
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(game_ctx, MagicMock(), MagicMock(), publish=published.append),
+        rt,
+    )
 
     applier.apply({"last_update_source": "supabase_bridge"})
-    applier.apply({"last_update_source": "supabase_bridge"})
 
-    assert rt.awaiting_games_ready_confirmation is True
-    assert rt.startup_games_ready_confirmed_at is None
-    assert all_ready["count"] == 1
+    assert rt.awaiting_games_ready_confirmation is False
+    assert rt.startup_settlement_completed is True
+    assert published == []
+    assert game_ctx.remote_menu_ready_game_ids == frozenset()
 
 
-def test_startup_always_requests_all_ready_even_if_last_source_is_device():
+def test_gate_passes_empty_games_no_publish():
     game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-    all_ready = {"count": 0}
+    published = []
 
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-    )
     rt = RemoteConfigRuntimeState()
-    applier = RemoteDeviceConfigApplier(deps, rt)
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(game_ctx, MagicMock(), MagicMock(), publish=published.append),
+        rt,
+    )
 
-    applier.apply({"last_update_source": "device", "games": [{"id": "g1", "status": "ready"}]})
+    applier.apply({"games": []})
 
-    assert rt.awaiting_games_ready_confirmation is True
-    assert all_ready["count"] == 1
+    assert rt.awaiting_games_ready_confirmation is False
+    assert published == []
+    assert game_ctx.remote_menu_ready_game_ids == frozenset()
 
 
-def test_startup_requests_config_refresh_once_on_gate_initialization():
+def test_gate_playing_publishes_once_then_closes():
     game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-    refresh_calls = {"count": 0}
+    published = []
 
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-        request_config_refresh=lambda: refresh_calls.__setitem__(
-            "count", refresh_calls["count"] + 1
-        ),
-    )
     rt = RemoteConfigRuntimeState()
-    applier = RemoteDeviceConfigApplier(deps, rt)
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(game_ctx, MagicMock(), MagicMock(), publish=published.append),
+        rt,
+    )
+
+    applier.apply(
+        {
+            "updated_at": "2026-04-01T10:00:00",
+            "games": [{"id": "g1", "status": "playing", "version": "1.0"}],
+        }
+    )
+
+    assert rt.awaiting_games_ready_confirmation is False
+    assert len(published) == 1
+    assert published[0] == {"games": [{"id": "g1", "status": "ready", "version": "1.0"}]}
+    assert game_ctx.start_game is False
+
+
+def test_gate_does_not_rearm_on_second_apply():
+    game_ctx = _game_ctx()
+    published = []
+
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(game_ctx, MagicMock(), MagicMock(), publish=published.append),
+        rt,
+    )
+
+    applier.apply({"games": [{"id": "g1", "status": "ready"}]})
+    applier.apply({"games": [{"id": "g1", "status": "playing"}]})
+
+    assert rt.awaiting_games_ready_confirmation is False
+    assert len(published) == 0
+
+
+def test_playing_ignored_while_gate_open():
+    game_ctx = _game_ctx()
+
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(game_ctx, MagicMock(), MagicMock()),
+        rt,
+    )
 
     applier.apply({"games": [{"id": "g1", "status": "playing"}]})
-    applier.apply({"games": [{"id": "g1", "status": "ready"}]})
 
-    assert refresh_calls["count"] == 1
-
-
-def test_startup_ready_confirmation_requires_newer_timestamp_and_all_ready():
-    game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-    all_ready = {"count": 0}
-
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-    )
-    rt = RemoteConfigRuntimeState()
-    applier = RemoteDeviceConfigApplier(deps, rt)
-
-    # Startup pass should trigger reset request and mark pending.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-03-31T10:00:00",
-            "games": [{"id": "g1", "status": "playing"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-    assert all_ready["count"] == 1
-
-    # Same timestamp + all ready should still not confirm.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-03-31T10:00:00",
-            "games": [{"id": "g1", "status": "ready"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-
-    # Newer timestamp + still not all-ready should not confirm.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-03-31T10:00:01",
-            "games": [{"id": "g1", "status": "playing"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-
-    # Newer timestamp + all-ready confirms.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-03-31T10:00:02",
-            "games": [{"id": "g1", "status": "ready"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is False
-
-
-def test_startup_gate_passes_on_newer_timestamp_when_all_games_are_ready_or_downloading():
-    game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-    all_ready = {"count": 0}
-
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-    )
-    rt = RemoteConfigRuntimeState()
-    applier = RemoteDeviceConfigApplier(deps, rt)
-
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T10:00:00",
-            "games": [{"id": "g1", "status": "playing"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T10:00:01",
-            "games": [
-                {"id": "g1", "status": "downloading", "version": "2.0.0"},
-                {"id": "g2", "status": "ready"},
-            ],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is False
-
-
-def test_startup_gate_keeps_pending_when_downloading_present_but_timestamp_not_newer():
-    game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-    all_ready = {"count": 0}
-
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: all_ready.__setitem__("count", all_ready["count"] + 1),
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-    )
-    rt = RemoteConfigRuntimeState()
-    applier = RemoteDeviceConfigApplier(deps, rt)
-
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T11:00:00",
-            "games": [{"id": "g1", "status": "playing"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T11:00:00",
-            "games": [{"id": "g1", "status": "downloading", "version": "3.0.0"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-
-
-def test_startup_gate_prefers_updated_at_over_device_updated_at_for_newer_check():
-    game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
-
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda _gid, _ver: True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-    )
-    rt = RemoteConfigRuntimeState()
-    applier = RemoteDeviceConfigApplier(deps, rt)
-
-    # First snapshot initializes gate baseline at updated_at=10:00:00.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T10:00:00",
-            "device_updated_at": "2026-04-01T09:00:00",
-            "games": [{"id": "g1", "status": "playing"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is True
-
-    # device_updated_at remains stale, but updated_at is newer and all games are stable.
-    # Gate must use updated_at so it can pass.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T10:00:01",
-            "device_updated_at": "2026-04-01T09:00:00",
-            "games": [{"id": "g1", "status": "ready"}],
-        }
-    )
+    assert game_ctx.start_game is False
     assert rt.awaiting_games_ready_confirmation is False
 
 
@@ -1401,14 +1177,14 @@ def test_startup_recovers_missing_ready_games_by_scheduling_download(tmp_path, m
     svc = MagicMock()
     ble = MagicMock()
     download_calls = []
+    published = []
 
     deps = RemoteDeviceConfigDependencies(
         app_ctx=game_ctx,
         get_machine_state_service=lambda: svc,
         bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
+        publish_partial_state=lambda p: published.append(dict(p)),
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
@@ -1420,13 +1196,18 @@ def test_startup_recovers_missing_ready_games_by_scheduling_download(tmp_path, m
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
 
     applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
 
     assert download_calls == [("g1", "1")]
+    assert published == [
+        {"games": [{"id": "g1", "version": "1", "status": "downloading"}]},
+        {"games": [{"id": "g1", "version": "1", "status": "ready"}]},
+    ]
+    assert rt.remote_downloading_game_ids == set()
 
 
 def test_startup_missing_ready_recovery_runs_only_once(tmp_path, monkeypatch):
@@ -1444,7 +1225,6 @@ def test_startup_missing_ready_recovery_runs_only_once(tmp_path, monkeypatch):
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
@@ -1456,7 +1236,7 @@ def test_startup_missing_ready_recovery_runs_only_once(tmp_path, monkeypatch):
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
 
@@ -1476,6 +1256,7 @@ def test_startup_missing_ready_recovery_retries_after_failed_download(
     svc = MagicMock()
     ble = MagicMock()
     attempts = {"n": 0}
+    published = []
 
     def _ensure(gid, ver):
         attempts["n"] += 1
@@ -1485,9 +1266,8 @@ def test_startup_missing_ready_recovery_retries_after_failed_download(
         app_ctx=game_ctx,
         get_machine_state_service=lambda: svc,
         bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
+        publish_partial_state=lambda p: published.append(dict(p)),
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=_ensure,
@@ -1499,49 +1279,85 @@ def test_startup_missing_ready_recovery_retries_after_failed_download(
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
+    rt.startup_settlement_completed = True
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
 
     applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
     assert attempts["n"] == 1
     assert rt.startup_missing_ready_games_recovery_done is False
+    assert published == [
+        {"games": [{"id": "g1", "version": "1", "status": "downloading"}]},
+    ]
 
     applier.apply({"games": [{"id": "g1", "status": "ready", "version": "1"}]})
     assert attempts["n"] == 2
     assert rt.startup_missing_ready_games_recovery_done is True
+    assert published == [
+        {"games": [{"id": "g1", "version": "1", "status": "downloading"}]},
+        {"games": [{"id": "g1", "version": "1", "status": "downloading"}]},
+        {"games": [{"id": "g1", "version": "1", "status": "ready"}]},
+    ]
 
 
-def test_startup_missing_ready_recovery_waits_until_gate_completes(tmp_path, monkeypatch):
+def test_startup_recovery_downloads_playing_game_missing_after_settlement(
+    tmp_path, monkeypatch
+):
+    """Playing games settled to ready on the same snapshot must still be recovered."""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps/chess", exist_ok=True)
+
+    game_ctx = _game_ctx()
+    download_calls = []
+    published = []
+
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(
+            game_ctx,
+            MagicMock(),
+            MagicMock(),
+            ensure=lambda gid, ver: download_calls.append((gid, ver)) or True,
+            publish=lambda p: published.append(dict(p)),
+        ),
+        rt,
+    )
+
+    applier.apply(
+        {
+            "updated_at": "2026-04-01T12:00:00",
+            "games": [
+                {"id": "cricket", "status": "playing", "version": "2.0.0"},
+                {"id": "chess", "status": "ready", "version": "1.0.0"},
+            ],
+        }
+    )
+
+    assert download_calls == [("cricket", "2.0.0")]
+    assert {"games": [{"id": "cricket", "version": "2.0.0", "status": "downloading"}]} in published
+    assert {"games": [{"id": "cricket", "version": "2.0.0", "status": "ready"}]} in published
+    assert {"games": [{"id": "cricket", "status": "ready", "version": "2.0.0"}]} in published
+
+
+def test_startup_missing_ready_recovery_runs_on_settlement_snapshot(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     os.makedirs("apps", exist_ok=True)
 
     game_ctx = _game_ctx()
-    svc = MagicMock()
-    ble = MagicMock()
     download_calls = []
 
-    deps = RemoteDeviceConfigDependencies(
-        app_ctx=game_ctx,
-        get_machine_state_service=lambda: svc,
-        bluetooth_scan_controller=ble,
-        publish_partial_state=lambda _p: None,
-        request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
-        set_time_zone=lambda _tz: None,
-        term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
-        cancel_game_download=lambda _gid: None,
-        local_game_version_matches=lambda *_a: False,
-        perform_update=lambda: {},
-        get_version=lambda: {},
-        is_reset_in_progress=lambda: False,
-        on_reset_confirmed=lambda: None,
-    )
     rt = RemoteConfigRuntimeState()
-    rt.startup_games_reset_initialized = True
     rt.awaiting_games_ready_confirmation = True
-    applier = RemoteDeviceConfigApplier(deps, rt)
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(
+            game_ctx,
+            MagicMock(),
+            MagicMock(),
+            ensure=lambda gid, ver: download_calls.append((gid, ver)) or True,
+        ),
+        rt,
+    )
 
     applier.apply(
         {
@@ -1550,7 +1366,8 @@ def test_startup_missing_ready_recovery_waits_until_gate_completes(tmp_path, mon
         }
     )
 
-    assert download_calls == []
+    assert rt.awaiting_games_ready_confirmation is False
+    assert download_calls == [("g1", "1")]
 
 
 def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
@@ -1570,7 +1387,6 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
@@ -1582,9 +1398,9 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
     applier = RemoteDeviceConfigApplier(deps, rt)
 
-    # Initialize startup gate baseline.
     applier.apply(
         {
             "last_update_source": "supabase_bridge",
@@ -1592,24 +1408,13 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
             "games": [{"id": "g1", "status": "playing", "version": "1"}],
         }
     )
-    assert rt.awaiting_games_ready_confirmation is True
-    assert download_calls == []
+    assert rt.awaiting_games_ready_confirmation is False
+    assert download_calls == [("g1", "1")]
 
-    # Gate confirms on newer stable snapshot; recovery runs on the following snapshot.
     applier.apply(
         {
             "last_update_source": "supabase_bridge",
             "updated_at": "2026-04-01T13:00:01",
-            "games": [{"id": "g1", "status": "ready", "version": "1"}],
-        }
-    )
-    assert rt.awaiting_games_ready_confirmation is False
-    assert download_calls == []
-
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T13:00:02",
             "games": [{"id": "g1", "status": "ready", "version": "1"}],
         }
     )
@@ -1633,7 +1438,6 @@ def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda _p: None,
         request_set_game_status=lambda *_a: None,
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
         ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
@@ -1645,27 +1449,17 @@ def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
         on_reset_confirmed=lambda: None,
     )
     rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
     applier = RemoteDeviceConfigApplier(deps, rt)
 
-    # No parseable timestamps in startup snapshot.
     applier.apply(
         {
             "last_update_source": "supabase_bridge",
             "games": [{"id": "g1", "status": "playing", "version": "1"}],
         }
     )
-    assert rt.awaiting_games_ready_confirmation is True
-    assert download_calls == []
-
-    # A stable snapshot without timestamps should still confirm gate; recovery follows.
-    applier.apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "games": [{"id": "g1", "status": "ready", "version": "1"}],
-        }
-    )
     assert rt.awaiting_games_ready_confirmation is False
-    assert download_calls == []
+    assert download_calls == [("g1", "1")]
 
     applier.apply(
         {

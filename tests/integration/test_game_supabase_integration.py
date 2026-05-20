@@ -58,7 +58,7 @@ def test_inbound_playing_status_requests_local_launch(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     app_ctx = remote_config_harness["app_ctx"]
 
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     runtime.startup_filter_playing_until_newer_update = False
 
@@ -75,7 +75,7 @@ def test_inbound_ready_status_terminates_running_game_and_publishes(remote_confi
     events = remote_config_harness["events"]
     app_ctx = remote_config_harness["app_ctx"]
     runtime = remote_config_harness["runtime"]
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     app_ctx.game = {"game_id": "chess", "process": object(), "shm": None}
 
@@ -107,7 +107,7 @@ def test_game_select_game_list_refreshes_after_remote_apply_and_refresh(
     app_ctx = remote_config_harness["app_ctx"]
     runtime = remote_config_harness["runtime"]
     apply = remote_config_harness["apply"]
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
 
     app_ctx.load_game_list = lambda: load_menu_game_list(app_ctx)
@@ -128,7 +128,7 @@ def test_inbound_downloading_with_matching_local_version_publishes_ready(remote_
     events = remote_config_harness["events"]
     deps = remote_config_harness["deps"]
     runtime = remote_config_harness["runtime"]
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
 
     deps.local_game_version_matches = lambda gid, ver: gid == "chess" and ver == "2.0.0"
@@ -145,7 +145,7 @@ def test_inbound_downloading_is_processed_even_with_existing_playing_entry(
     events = remote_config_harness["events"]
     runtime = remote_config_harness["runtime"]
     app_ctx = remote_config_harness["app_ctx"]
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     app_ctx.game = {"game_id": "chess", "process": object(), "shm": None}
 
@@ -163,7 +163,9 @@ def test_inbound_downloading_is_processed_even_with_existing_playing_entry(
 
 
 # Startup gate behavior
-def test_startup_games_ready_retry_then_newer_playing_is_applied(remote_config_harness):
+def test_startup_settlement_publishes_playing_to_ready_then_filters_stale_playing(
+    remote_config_harness,
+):
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
     runtime = remote_config_harness["runtime"]
@@ -176,26 +178,12 @@ def test_startup_games_ready_retry_then_newer_playing_is_applied(remote_config_h
             "games": [{"id": "chess", "status": "playing", "version": "1.0.0"}],
         }
     )
-    assert events["all_ready_requests"] == 1
-    assert app_ctx.start_game is False
-
-    apply(
-        {
-            "updated_at": "2026-03-30T10:00:00",
-            "games": [{"id": "chess", "status": "ready", "version": "1.0.0"}],
-        }
-    )
-    assert runtime.awaiting_games_ready_confirmation is True
-    assert runtime.startup_filter_playing_until_newer_update is False
-
-    apply(
-        {
-            "updated_at": "2026-03-30T10:00:01",
-            "games": [{"id": "chess", "status": "ready", "version": "1.0.0"}],
-        }
-    )
+    assert {"games": [{"id": "chess", "status": "ready", "version": "1.0.0"}]} in events[
+        "published"
+    ]
     assert runtime.awaiting_games_ready_confirmation is False
     assert runtime.startup_filter_playing_until_newer_update is True
+    assert app_ctx.start_game is False
 
     apply(
         {
@@ -215,16 +203,13 @@ def test_startup_games_ready_retry_then_newer_playing_is_applied(remote_config_h
     assert app_ctx.game_id == "chess"
 
 
-def test_startup_pending_blocks_playing_until_all_ready_with_newer_timestamp(remote_config_harness):
+def test_startup_settlement_closes_gate_on_first_snapshot(remote_config_harness):
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
     runtime = remote_config_harness["runtime"]
     app_ctx = remote_config_harness["app_ctx"]
 
     runtime.awaiting_games_ready_confirmation = True
-    runtime.startup_filter_playing_until_newer_update = False
-
-    # Initial snapshot: stale playing should trigger retry and stay blocked.
     apply(
         {
             "last_update_source": "supabase_bridge",
@@ -232,31 +217,12 @@ def test_startup_pending_blocks_playing_until_all_ready_with_newer_timestamp(rem
             "games": [{"id": "chess", "status": "playing", "version": "1.0.0"}],
         }
     )
-    assert events["all_ready_requests"] == 1
-    assert app_ctx.start_game is False
-
-    # Same timestamp + all ready should still keep pending.
-    apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-03-31T10:00:00",
-            "games": [{"id": "chess", "status": "ready", "version": "1.0.0"}],
-        }
-    )
-    assert runtime.awaiting_games_ready_confirmation is True
-    assert app_ctx.start_game is False
-
-    # Newer timestamp + all ready should confirm pending reset.
-    apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-03-31T10:00:01",
-            "games": [{"id": "chess", "status": "ready", "version": "1.0.0"}],
-        }
-    )
+    assert {"games": [{"id": "chess", "status": "ready", "version": "1.0.0"}]} in events[
+        "published"
+    ]
     assert runtime.awaiting_games_ready_confirmation is False
+    assert app_ctx.start_game is False
 
-    # Once confirmed, newer playing command is accepted.
     apply(
         {
             "last_update_source": "supabase_bridge",
@@ -268,7 +234,7 @@ def test_startup_pending_blocks_playing_until_all_ready_with_newer_timestamp(rem
     assert app_ctx.game_id == "chess"
 
 
-def test_startup_pending_keeps_downloading_untouched_and_defers_download_until_gate_pass(
+def test_startup_settlement_defers_download_on_first_snapshot(
     remote_config_harness,
     workspace: Path,
 ):
@@ -277,7 +243,6 @@ def test_startup_pending_keeps_downloading_untouched_and_defers_download_until_g
     runtime = remote_config_harness["runtime"]
 
     runtime.awaiting_games_ready_confirmation = True
-    runtime.startup_filter_playing_until_newer_update = False
 
     # Startup recovery skips games already present locally; keep pong off the ensure list.
     (workspace / "apps" / "pong").mkdir(parents=True)
@@ -291,29 +256,14 @@ def test_startup_pending_keeps_downloading_untouched_and_defers_download_until_g
             ],
         }
     )
-    assert events["all_ready_requests"] == 1
+    assert runtime.awaiting_games_ready_confirmation is False
+    assert events["ensure_download_calls"] == []
+    assert events["status_updates"] == []
 
-    # Newer timestamp and only ready/downloading statuses should pass the gate.
     apply(
         {
             "last_update_source": "supabase_bridge",
             "updated_at": "2026-04-01T12:00:01",
-            "games": [
-                {"id": "chess", "status": "downloading", "version": "2.0.0"},
-                {"id": "pong", "status": "ready", "version": "1.1.0"},
-            ],
-        }
-    )
-    assert runtime.awaiting_games_ready_confirmation is False
-    # Download handling is deferred for the transition frame.
-    assert events["ensure_download_calls"] == []
-    assert events["status_updates"] == []
-
-    # After gate passes, normal downloading flow applies on subsequent updates.
-    apply(
-        {
-            "last_update_source": "supabase_bridge",
-            "updated_at": "2026-04-01T12:00:02",
             "games": [
                 {"id": "chess", "status": "downloading", "version": "2.0.0"},
                 {"id": "pong", "status": "ready", "version": "1.1.0"},

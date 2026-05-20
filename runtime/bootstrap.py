@@ -182,10 +182,7 @@ def start_background_subsystems(
     except Exception as e:
         _log.error("Failed to start Supabase sync: %s", e)
     else:
-        try:
-            get_remote_sync().request_set_all_games_ready()
-            remote_config_runtime.awaiting_games_ready_confirmation = True
-            remote_config_runtime.startup_games_ready_confirmed_at = None
-            remote_config_runtime.startup_filter_playing_until_newer_update = False
-        except Exception as e:
-            _log.error("Error resetting remote game statuses to ready on startup: %s", e)
+        remote_config_runtime.awaiting_games_ready_confirmation = True
+        remote_config_runtime.startup_settlement_completed = False
+        remote_config_runtime.startup_games_ready_confirmed_at = None
+        remote_config_runtime.startup_filter_playing_until_newer_update = False

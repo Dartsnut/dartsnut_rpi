@@ -302,9 +302,6 @@ def remote_config_harness(
         )(),
         publish_partial_state=lambda payload: events["published"].append(dict(payload)),
         request_set_game_status=lambda gid, st: events["status_updates"].append((gid, st)),
-        request_set_all_games_ready=lambda: events.__setitem__(
-            "all_ready_requests", events["all_ready_requests"] + 1
-        ),
         set_time_zone=lambda tz: events.__setitem__("tz", tz),
         term_game_process=lambda _g: events.__setitem__("term_calls", events["term_calls"] + 1),
         ensure_game_downloaded=lambda gid, ver: events["ensure_download_calls"].append((gid, ver))

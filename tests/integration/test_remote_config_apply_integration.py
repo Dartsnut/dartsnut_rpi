@@ -85,7 +85,7 @@ def test_remote_config_game_playing_sets_start_game(remote_config_harness, app_c
     app_ctx.game_id = None
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     remote_config_harness["apply"](
         {
@@ -102,7 +102,7 @@ def test_remote_config_game_playing_sets_start_game(remote_config_harness, app_c
 def test_remote_config_game_install_requests_download_then_ready(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
@@ -122,7 +122,7 @@ def test_remote_config_game_install_requests_download_then_ready(remote_config_h
 def test_remote_config_game_ready_terminates_running_game(remote_config_harness, app_ctx):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
@@ -146,7 +146,7 @@ def test_remote_config_game_ready_terminates_running_game(remote_config_harness,
 def test_remote_config_game_removed_during_download_cancels_and_no_readd(remote_config_harness):
     runtime = remote_config_harness["runtime"]
     runtime.startup_firmware_version = None
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]
@@ -227,7 +227,6 @@ def test_remote_apply_then_refresh_syncs_menu_game_list(
         bluetooth_scan_controller=ble,
         publish_partial_state=lambda p: events["published"].append(dict(p)),
         request_set_game_status=lambda gid, st: events["status_updates"].append((gid, st)),
-        request_set_all_games_ready=lambda: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: events.__setitem__("term_calls", events["term_calls"] + 1),
         ensure_game_downloaded=lambda gid, ver: events["ensure_download_calls"].append((gid, ver))
@@ -240,7 +239,7 @@ def test_remote_apply_then_refresh_syncs_menu_game_list(
         on_reset_confirmed=lambda: None,
     )
     runtime = RemoteConfigRuntimeState(startup_firmware_version=None)
-    runtime.startup_games_reset_initialized = True
+    runtime.startup_settlement_completed = True
     runtime.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, runtime)
 

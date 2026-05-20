@@ -84,7 +84,14 @@ class MachineStateService:
         try:
             with open(path, "w") as f:
                 json.dump(device_info, f)
-            device_json_identity.verify_and_repair_device_json(path)
+            # Only reconcile identity when disk or boot already defines it; otherwise
+            # incidental brightness/volume writes must not inject serial/model.
+            if any(
+                str((persisted or {}).get(key, "")).strip()
+                or str((boot_identity or {}).get(key, "")).strip()
+                for key in ("serial", "model")
+            ):
+                device_json_identity.verify_and_repair_device_json(path)
         except Exception as e:
             _log.error("Error writing device.json: %s", e)
 
