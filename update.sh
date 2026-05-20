@@ -177,7 +177,7 @@ fi
 
 echo "== Network tuning (Supabase / Wi-Fi stability) =="
 
-DARTSNUT_SYSCONF_SRC="${REPO_DIR}/scripts/99-dartsnut-tcp.conf"
+DARTSNUT_SYSCONF_SRC="${REPO_DIR}/services/99-dartsnut-tcp.conf"
 DARTSNUT_SYSCONF_DST="/etc/sysctl.d/99-dartsnut-tcp.conf"
 if [ -f "${DARTSNUT_SYSCONF_SRC}" ]; then
     install_if_changed "${DARTSNUT_SYSCONF_SRC}" "${DARTSNUT_SYSCONF_DST}" 0644 "99-dartsnut-tcp.conf"

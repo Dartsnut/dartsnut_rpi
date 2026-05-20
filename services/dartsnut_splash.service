@@ -1,6 +1,0 @@
-[Unit]
-Description=Dartsnut Splash Screen (retired)
-
-[Service]
-Type=oneshot
-ExecStart=/bin/true

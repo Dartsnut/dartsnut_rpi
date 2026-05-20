@@ -52,9 +52,8 @@ ALLOWLIST=(
   DartsnutRGBMatrix
   services/dartsnut_matrix.service
   services/dartsnut_python.service
+  services/99-dartsnut-tcp.conf
   services/logo.ppm
-  services/dartsnut_splash.service
-  services/splash_matrix
   bridge
   requirements.txt
   system-packages.txt
