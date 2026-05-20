@@ -175,6 +175,32 @@ if ! "${VENV_DIR}/bin/python" -c "import bluetooth; import bluetooth._bluetooth"
   "${VENV_DIR}/bin/python" -c "import bluetooth; import bluetooth._bluetooth"
 fi
 
+echo "== Network tuning (Supabase / Wi-Fi stability) =="
+
+DARTSNUT_SYSCONF_SRC="${REPO_DIR}/scripts/99-dartsnut-tcp.conf"
+DARTSNUT_SYSCONF_DST="/etc/sysctl.d/99-dartsnut-tcp.conf"
+if [ -f "${DARTSNUT_SYSCONF_SRC}" ]; then
+    install_if_changed "${DARTSNUT_SYSCONF_SRC}" "${DARTSNUT_SYSCONF_DST}" 0644 "99-dartsnut-tcp.conf"
+    sudo sysctl -p "${DARTSNUT_SYSCONF_DST}" >/dev/null 2>&1 || true
+else
+    echo "Warning: ${DARTSNUT_SYSCONF_SRC} not found; skipping TCP MTU probing sysctl."
+fi
+
+if command -v nmcli >/dev/null 2>&1; then
+    WIFI_CON_NAME="$(nmcli -t -f NAME,TYPE connection show --active | awk -F: '$2 == "802-11-wireless" { print $1; exit }')"
+    if [ -n "${WIFI_CON_NAME}" ]; then
+        echo "Disabling Wi-Fi power save on connection ${WIFI_CON_NAME}"
+        sudo nmcli connection modify "${WIFI_CON_NAME}" 802-11-wireless.powersave 2
+    else
+        echo "No active Wi-Fi connection profile found; skipping nmcli power-save change."
+    fi
+fi
+
+if command -v iwconfig >/dev/null 2>&1 && iwconfig wlan0 >/dev/null 2>&1; then
+    echo "Disabling wlan0 Wi-Fi power management (iwconfig)"
+    sudo iwconfig wlan0 power off || true
+fi
+
 echo "== Cron auto-update =="
 
 CRON_SCHEDULE="0 3 * * *"  # 3am every day
