@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .coverage.*
+coverage.json
 
 # Ignore Python local editable package
 *.egg-info/

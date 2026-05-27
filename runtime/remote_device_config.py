@@ -8,17 +8,13 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
-from domain.game_remote_sync import (
-    are_remote_playing_games_cleared,
-    handle_incoming_game_status,
-)
+from domain.game_remote_sync import handle_incoming_game_status
 
 _log = logging.getLogger(__name__)
 
@@ -62,22 +58,56 @@ def is_remote_reset_confirmation_source(value: Any) -> bool:
     return source in {"supabase_bridge_init", "supabase_bridge"}
 
 
-def _startup_gate_missing_timestamp_fallback_allowed(config: dict) -> bool:
-    """
-    When both the startup baseline and the snapshot lack parseable timestamps,
-    only Supabase-bridge snapshots may confirm the gate via that fallback.
+def normalize_games_list(config: dict) -> list:
+    """Return config games as a list; missing/null/non-list becomes []."""
+    games = config.get("games") if isinstance(config, dict) else None
+    return games if isinstance(games, list) else []
 
-    Device-originated snapshots must not unlock the gate without a strict newer-timestamp
-    check (see tests: startup gate should stay pending until bridge ordering is known).
+
+def games_settlement_patch_entries(games_cfg: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build one-shot ready patches for games not in ready/downloading."""
+    patch: list[dict[str, Any]] = []
+    for g in games_cfg:
+        if not isinstance(g, dict):
+            continue
+        game_id = str(g.get("id") or "").strip()
+        if not game_id:
+            continue
+        status = str(g.get("status", "")).strip().lower()
+        if status in {"ready", "downloading"}:
+            continue
+        entry: dict[str, Any] = {"id": game_id, "status": "ready"}
+        version = str(g.get("version") or "").strip()
+        if version:
+            entry["version"] = version
+        patch.append(entry)
+    return patch
+
+
+def games_cfg_for_startup_recovery(
+    games_cfg: list[dict[str, Any]], *, after_settlement: bool
+) -> list[dict[str, Any]]:
     """
-    source = str(config.get("last_update_source", "") or "").strip().lower()
-    return source in {"supabase_bridge_init", "supabase_bridge"}
+    Games list for missing-local recovery.
+
+    On the settlement snapshot, inbound rows may still show `playing` while
+    settlement already published `ready`. Treat those as ready for recovery.
+    """
+    out: list[dict[str, Any]] = []
+    for g in games_cfg:
+        if not isinstance(g, dict):
+            continue
+        entry = dict(g)
+        if after_settlement:
+            status = str(entry.get("status") or "").strip().lower()
+            if status not in {"ready", "downloading"}:
+                entry["status"] = "ready"
+        out.append(entry)
+    return out
 
 
 def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
     """True when all games are in stable startup statuses: ready/downloading."""
-    if not isinstance(games_cfg, list):
-        return False
     for g in games_cfg:
         if not isinstance(g, dict):
             continue
@@ -85,15 +115,6 @@ def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
         if status not in {"ready", "downloading"}:
             return False
     return True
-
-
-def _debug_reset_gate_enabled() -> bool:
-    return str(os.getenv("DARTSNUT_DEBUG_RESET_GATE", "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _content_page_uuids_from_runtime_pages(pages: Any) -> list[str]:
@@ -126,13 +147,10 @@ def _content_page_uuids_from_remote_pages(pages: Any) -> list[str]:
 
 @dataclass
 class RemoteConfigRuntimeState:
-    startup_games_reset_initialized: bool = False
-    startup_games_reset_requested_at: Optional[datetime] = None
     awaiting_games_ready_confirmation: bool = False
+    startup_settlement_completed: bool = False
     startup_games_ready_confirmed_at: Optional[datetime] = None
     startup_filter_playing_until_newer_update: bool = False
-    startup_ready_retry_last_at: float = 0.0
-    startup_config_refresh_requested: bool = False
     startup_missing_ready_games_recovery_done: bool = False
     startup_firmware_version: Optional[str] = None
     firmware_update_in_progress: bool = False
@@ -151,7 +169,6 @@ class RemoteDeviceConfigDependencies:
     bluetooth_scan_controller: Any
     publish_partial_state: Callable[[dict], None]
     request_set_game_status: Callable[[str, str], None]
-    request_set_all_games_ready: Callable[[], None]
     set_time_zone: Callable[[str], Any]
     term_game_process: Callable[[Any], None]
     ensure_game_downloaded: Callable[[str, str], bool]
@@ -183,6 +200,33 @@ class RemoteDeviceConfigApplier:
     def runtime(self) -> RemoteConfigRuntimeState:
         return self._runtime
 
+    def _publish_startup_recovery_game_status(
+        self,
+        game_id: str,
+        expected_version: str,
+        status: str,
+    ) -> None:
+        """Notify Supabase clients before/during startup recovery downloads."""
+        try:
+            self._deps.publish_partial_state(
+                {
+                    "games": [
+                        {
+                            "id": game_id,
+                            "version": expected_version,
+                            "status": status,
+                        }
+                    ]
+                }
+            )
+        except Exception as e:
+            _log.warning(
+                "remote config: startup recovery publish failed game_id=%s status=%s: %s",
+                game_id,
+                status,
+                e,
+            )
+
     def _recover_missing_ready_games_on_startup(
         self,
         games_cfg: list[dict[str, Any]],
@@ -190,7 +234,7 @@ class RemoteDeviceConfigApplier:
         """
         Startup-only recovery for SSH wipe scenarios:
         remote games can remain `ready` while local ./apps/<id> is missing.
-        Trigger local download recovery without changing remote game statuses.
+        Publish `downloading` to remote sync, then fetch the game locally.
         """
         rt = self._runtime
         if rt.startup_missing_ready_games_recovery_done:
@@ -220,6 +264,10 @@ class RemoteDeviceConfigApplier:
                 game_id,
                 expected_version or "(empty)",
             )
+            self._publish_startup_recovery_game_status(
+                game_id, expected_version, "downloading"
+            )
+            rt.remote_downloading_game_ids.add(game_id)
             try:
                 ok = deps.ensure_game_downloaded(game_id, expected_version)
                 if ok:
@@ -227,6 +275,10 @@ class RemoteDeviceConfigApplier:
                         "remote config: startup recovery success game_id=%s",
                         game_id,
                     )
+                    self._publish_startup_recovery_game_status(
+                        game_id, expected_version, "ready"
+                    )
+                    rt.remote_downloading_game_ids.discard(game_id)
                 else:
                     all_missing_ready_games_recovered = False
                     _log.warning(
@@ -241,16 +293,53 @@ class RemoteDeviceConfigApplier:
                 )
 
         # Keep retrying on subsequent snapshots when startup recovery fails due to
-        # transient network/IO issues.
-        rt.startup_missing_ready_games_recovery_done = (
-            not had_missing_ready_games or all_missing_ready_games_recovered
+        # transient network/IO issues. Do not mark complete until we have seen at
+        # least one ready entry (nothing to recover before that).
+        has_ready_entries = any(
+            str(g.get("status") or "").strip().lower() == "ready"
+            for g in games_cfg
+            if isinstance(g, dict)
         )
-        if not had_missing_ready_games:
+        if had_missing_ready_games:
+            rt.startup_missing_ready_games_recovery_done = all_missing_ready_games_recovered
+            if rt.startup_missing_ready_games_recovery_done:
+                _log.info("remote config: startup recovery complete")
+        elif has_ready_entries:
+            rt.startup_missing_ready_games_recovery_done = True
             _log.info(
                 "remote config: startup recovery no missing ready games detected; marking complete"
             )
-        elif rt.startup_missing_ready_games_recovery_done:
-            _log.info("remote config: startup recovery complete")
+
+    @staticmethod
+    def _apply_menu_ready_from_games(ctx: AppContext, games_cfg: list[dict[str, Any]]) -> None:
+        ctx.remote_menu_ready_game_ids = frozenset(
+            str(g["id"])
+            for g in games_cfg
+            if isinstance(g, dict)
+            and g.get("id")
+            and str(g.get("status", "")).strip().lower() == "ready"
+        )
+        ctx.reload_game_menu = True
+
+    def _run_startup_game_settlement(
+        self,
+        games_cfg: list[dict[str, Any]],
+        cfg_ts: Optional[datetime],
+    ) -> None:
+        rt = self._runtime
+        patch = games_settlement_patch_entries(games_cfg)
+        if patch:
+            try:
+                self._deps.publish_partial_state({"games": patch})
+            except Exception as e:
+                _log.warning("remote config: startup settlement publish failed: %s", e)
+        rt.awaiting_games_ready_confirmation = False
+        rt.startup_settlement_completed = True
+        rt.startup_games_ready_confirmed_at = cfg_ts
+        rt.startup_filter_playing_until_newer_update = True
+        _log.info(
+            "remote config: startup game settlement complete; enabling remote game commands"
+        )
 
     def apply(self, config: dict) -> None:
         if not isinstance(config, dict):
@@ -269,7 +358,6 @@ class RemoteDeviceConfigApplier:
         deps = self._deps
         rt = self._runtime
         ctx = deps.app_ctx
-        debug_reset_gate = _debug_reset_gate_enabled()
         # Prefer row-level updated_at from remote sync payloads. device_updated_at is
         # local device state time and may remain stale across remote row updates.
         cfg_ts = parse_iso_ts(config.get("updated_at") or config.get("device_updated_at"))
@@ -281,57 +369,16 @@ class RemoteDeviceConfigApplier:
         ):
             deps.on_reset_confirmed()
 
-        games_cfg = config.get("games")
-        if not rt.startup_games_reset_initialized:
-            rt.startup_games_reset_initialized = True
-            rt.awaiting_games_ready_confirmation = True
-            rt.startup_games_ready_confirmed_at = None
-            rt.startup_filter_playing_until_newer_update = False
-            rt.startup_games_reset_requested_at = cfg_ts
-            rt.startup_ready_retry_last_at = time.time()
-            try:
-                deps.request_set_all_games_ready()
-            except Exception:
-                pass
-            if not rt.startup_config_refresh_requested:
-                rt.startup_config_refresh_requested = True
-                try:
-                    deps.request_config_refresh()
-                except Exception:
-                    pass
-
-        if isinstance(games_cfg, list):
-            ctx.remote_menu_ready_game_ids = frozenset(
-                str(g["id"])
-                for g in games_cfg
-                if isinstance(g, dict)
-                and g.get("id")
-                and str(g.get("status", "")).strip().lower() == "ready"
+        skip_game_commands = False
+        if rt.awaiting_games_ready_confirmation:
+            games_cfg = normalize_games_list(config)
+            self._apply_menu_ready_from_games(ctx, games_cfg)
+            self._run_startup_game_settlement(games_cfg, cfg_ts)
+            recovery_games = games_cfg_for_startup_recovery(
+                games_cfg, after_settlement=True
             )
-            ctx.reload_game_menu = True
-        elif (
-            self._runtime.awaiting_games_ready_confirmation
-            and str(config.get("last_update_source", "")).strip().lower() == "supabase_bridge"
-        ):
-            if debug_reset_gate:
-                _log.debug(
-                    "[reset-gate] pending snapshot without games; source=%r cfg_ts=%r "
-                    "baseline_ts=%r awaiting=%s",
-                    str(config.get("last_update_source", "")),
-                    config.get("device_updated_at") or config.get("updated_at"),
-                    rt.startup_games_reset_requested_at,
-                    rt.awaiting_games_ready_confirmation,
-                )
-            # Bridge-originated snapshots may omit `games`; do not auto-confirm reset.
-            # Keep waiting for explicit games-state confirmation and periodically
-            # re-request all games to be set ready.
-            now = time.time()
-            if (now - float(self._runtime.startup_ready_retry_last_at)) >= 2.0:
-                self._runtime.startup_ready_retry_last_at = now
-                try:
-                    deps.request_set_all_games_ready()
-                except Exception:
-                    pass
+            self._recover_missing_ready_games_on_startup(recovery_games)
+            skip_game_commands = True
 
         service = deps.get_machine_state_service()
         if service is None:
@@ -492,81 +539,28 @@ class RemoteDeviceConfigApplier:
             if isinstance(device_info, dict) and "name" in device_info:
                 service.set_device_name(device_info.get("name", ""))
 
-            games_cfg = config.get("games")
-            if isinstance(games_cfg, list):
-                incoming_ids = {
-                    str(g.get("id"))
-                    for g in games_cfg
-                    if isinstance(g, dict) and g.get("id") is not None
-                }
-                for removed_game_id in tuple(rt.remote_downloading_game_ids - incoming_ids):
-                    try:
-                        deps.cancel_game_download(removed_game_id)
-                    except Exception:
-                        pass
-                    rt.remote_downloading_game_ids.discard(removed_game_id)
-                confirmed_in_this_call = False
-                if rt.awaiting_games_ready_confirmation:
-                    baseline_ts = rt.startup_games_reset_requested_at
-                    has_newer_ts = (
-                        baseline_ts is not None and cfg_ts is not None and cfg_ts > baseline_ts
-                    )
-                    # Confirm only when *both* sides lack timestamps (cannot compare) and the
-                    # snapshot is bridge-originated. Do not treat "baseline unset but snapshot
-                    # has a timestamp" as fallback — that spuriously opens the gate before the
-                    # startup baseline is comparable (tests gate completion + recovery ordering).
-                    missing_ts_fallback = (
-                        baseline_ts is None
-                        and cfg_ts is None
-                        and _startup_gate_missing_timestamp_fallback_allowed(config)
-                    )
-                    stable_games = are_remote_gate_stable_games(games_cfg)
-                    if debug_reset_gate:
-                        game_states = []
-                        for g in games_cfg:
-                            if isinstance(g, dict):
-                                game_states.append(
-                                    (
-                                        str(g.get("id") or ""),
-                                        str(g.get("status") or "").strip().lower(),
-                                        str(g.get("version") or ""),
-                                    )
-                                )
-                        _log.debug(
-                            "[reset-gate] evaluate source=%r cfg_ts=%r parsed_cfg_ts=%r "
-                            "baseline_ts=%r stable_games=%s has_newer_ts=%s missing_ts_fallback=%s awaiting=%s "
-                            "startup_filter_playing_until_newer_update=%s games=%s",
-                            str(config.get("last_update_source", "")),
-                            config.get("device_updated_at") or config.get("updated_at"),
-                            cfg_ts,
-                            baseline_ts,
-                            stable_games,
-                            has_newer_ts,
-                            missing_ts_fallback,
-                            rt.awaiting_games_ready_confirmation,
-                            rt.startup_filter_playing_until_newer_update,
-                            game_states,
-                        )
-                    if stable_games and (has_newer_ts or missing_ts_fallback):
-                        rt.awaiting_games_ready_confirmation = False
-                        rt.startup_games_ready_confirmed_at = cfg_ts
-                        rt.startup_filter_playing_until_newer_update = True
-                        confirmed_in_this_call = True
-                        _log.info(
-                            "remote config: startup game reset confirmed; enabling remote game commands"
-                        )
-                        # Defer startup missing-game recovery and normal game commands to the next
-                        # inbound snapshot so the gate transition does not interleave downloads.
-                        return
-                    else:
-                        now = time.time()
-                        if (now - float(rt.startup_ready_retry_last_at)) >= 2.0:
-                            rt.startup_ready_retry_last_at = now
-                            try:
-                                deps.request_set_all_games_ready()
-                            except Exception:
-                                pass
-                        return
+            if "games" not in config:
+                games_cfg = []
+            else:
+                games_cfg = normalize_games_list(config)
+                if not skip_game_commands:
+                    self._apply_menu_ready_from_games(ctx, games_cfg)
+
+            incoming_ids = {
+                str(g.get("id"))
+                for g in games_cfg
+                if isinstance(g, dict) and g.get("id") is not None
+            }
+            for removed_game_id in tuple(rt.remote_downloading_game_ids - incoming_ids):
+                try:
+                    deps.cancel_game_download(removed_game_id)
+                except Exception:
+                    pass
+                rt.remote_downloading_game_ids.discard(removed_game_id)
+
+            if skip_game_commands:
+                pass
+            else:
                 if not rt.startup_missing_ready_games_recovery_done:
                     self._recover_missing_ready_games_on_startup(games_cfg)
 
@@ -585,7 +579,6 @@ class RemoteDeviceConfigApplier:
                         rt.remote_downloading_game_ids.discard(game_id)
                     if (
                         rt.startup_filter_playing_until_newer_update
-                        and not confirmed_in_this_call
                         and status != "playing"
                     ):
                         rt.startup_filter_playing_until_newer_update = False
