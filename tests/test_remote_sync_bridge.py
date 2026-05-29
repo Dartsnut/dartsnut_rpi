@@ -51,7 +51,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
 def test_request_device_reset_state_sends_expected_payload(monkeypatch, tmp_path):
     captured = []
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(rsb._ssb, "_resolve_hardware_version", lambda: "")
+    monkeypatch.setattr(rsb._ssb, "resolve_pixeldarts_hardware_version", lambda: "")
     with open(tmp_path / "device.json", "w", encoding="utf-8") as f:
         json.dump(
             {

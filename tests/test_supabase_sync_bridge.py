@@ -138,7 +138,7 @@ def test_load_device_json_reads_device_json(tmp_path, monkeypatch):
 
 def test_request_device_reset_state_includes_device_info_from_file(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(ssb, "_resolve_hardware_version", lambda: "")
+    monkeypatch.setattr(ssb, "resolve_pixeldarts_hardware_version", lambda: "")
     with open(tmp_path / "device.json", "w", encoding="utf-8") as f:
         json.dump(
             {
@@ -192,9 +192,15 @@ def test_sync_client_send_state_includes_source_when_present():
     assert sent["source"] == "supabase_bridge_init"
 
 
+def test_build_initial_state_prefers_lsusb_over_stale_device_json(monkeypatch):
+    monkeypatch.setattr(ssb, "resolve_pixeldarts_hardware_version", lambda: "444f")
+    state = ssb._build_initial_state({"hardware_version": "444e", "id": "AA:BB:CC:DD:EE:FF"})
+    assert state["device_info"]["hardware_version"] == "444f"
+
+
 def test_build_initial_state_adds_hardware_version_when_missing(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
-    monkeypatch.setattr(ssb, "_resolve_hardware_version", lambda: "444e")
+    monkeypatch.setattr(ssb, "resolve_pixeldarts_hardware_version", lambda: "444e")
 
     state = ssb._build_initial_state(
         {

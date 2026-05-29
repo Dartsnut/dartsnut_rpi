@@ -8,6 +8,7 @@ import pytest
 import machine_state_service as mss_mod
 from domain.app_context import AppContext
 from python_websocket import json_operations
+from runtime import pixeldarts_hardware as hw
 
 
 def test_write_json_conf_json_invokes_set_pages_on_service(tmp_path, monkeypatch):
@@ -73,6 +74,7 @@ def test_get_device_info_includes_cached_pixeldarts_hardware_version(tmp_path, m
         return _R()
 
     monkeypatch.setattr(json_operations, "get_remote_sync", lambda: _RemoteSync())
+    monkeypatch.setattr(hw, "subprocess", json_operations.subprocess)
     monkeypatch.setattr(json_operations.subprocess, "check_output", fake_check_output)
     monkeypatch.setattr(json_operations.subprocess, "run", fake_run)
 
@@ -81,7 +83,44 @@ def test_get_device_info_includes_cached_pixeldarts_hardware_version(tmp_path, m
 
     assert first["device_info"]["hardware_version"] == "444e"
     assert second["device_info"]["hardware_version"] == "444e"
-    assert calls["lsusb"] == 1
+    assert calls["lsusb"] == 2
+
+
+def test_get_device_info_prefers_lsusb_over_stale_cache(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "device.json").write_text(json.dumps({"model": "PixelDart"}), encoding="utf-8")
+    (tmp_path / ".hardware_version.json").write_text(
+        json.dumps({"hardware_version": "444e"}),
+        encoding="utf-8",
+    )
+
+    class _RemoteSync:
+        @staticmethod
+        def is_connected():
+            return True
+
+    lsusb_output = "Bus 001 Device 004: ID 2d80:444f PIXELDARTS\n"
+
+    def fake_check_output(cmd):
+        if cmd == ["lsusb"]:
+            return lsusb_output.encode("utf-8")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    def fake_run(*_args, **_kwargs):
+        class _R:
+            stdout = ""
+        return _R()
+
+    monkeypatch.setattr(json_operations, "get_remote_sync", lambda: _RemoteSync())
+    monkeypatch.setattr(hw, "subprocess", json_operations.subprocess)
+    monkeypatch.setattr(json_operations.subprocess, "check_output", fake_check_output)
+    monkeypatch.setattr(json_operations.subprocess, "run", fake_run)
+
+    result = json_operations.get_device_info()
+    assert result["device_info"]["hardware_version"] == "444f"
+    assert json.loads((tmp_path / ".hardware_version.json").read_text()) == {
+        "hardware_version": "444f"
+    }
 
 
 def test_get_device_info_uses_existing_cached_hardware_version_when_lsusb_fails(tmp_path, monkeypatch):
@@ -106,6 +145,7 @@ def test_get_device_info_uses_existing_cached_hardware_version_when_lsusb_fails(
         return _R()
 
     monkeypatch.setattr(json_operations, "get_remote_sync", lambda: _RemoteSync())
+    monkeypatch.setattr(hw, "subprocess", json_operations.subprocess)
     monkeypatch.setattr(json_operations.subprocess, "check_output", fake_check_output)
     monkeypatch.setattr(json_operations.subprocess, "run", fake_run)
 
