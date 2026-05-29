@@ -10,13 +10,13 @@
 #
 # Flow: checkout release -> ff-only origin/release -> merge --squash master ->
 # optional cargo bridge build -> clear index -> stage allowlist only -> verify ->
-# single commit.
+# single commit -> tag vX.Y.Z.
 #
 # Environment:
 #   BUILD_BRIDGE=1        — run scripts/compile_supabase_bridge.sh after squash
 #                           (default: skip bridge build and reuse existing ./bridge).
 #   SKIP_GIT_FETCH=1      — do not run git fetch origin before branch checks.
-#   RELEASE_PUSH=1        — git push origin release after commit.
+#   RELEASE_PUSH=1        — git push origin release and the version tag after commit.
 #
 # Usage:
 #   scripts/release_squash_merge.sh [vX.Y.Z|X.Y.Z]
@@ -188,12 +188,27 @@ assert_scripts_allowlist_only() {
   fi
 }
 
+tag_release_commit() {
+  local version="$1"
+  local tag_name="v${version}"
+  if git rev-parse -q --verify "refs/tags/${tag_name}" >/dev/null; then
+    fail "tag ${tag_name} already exists"
+  fi
+  log "tagging commit as ${tag_name}"
+  git tag "${tag_name}"
+}
+
 maybe_push_release() {
+  local version="${1:-}"
   if [[ "${RELEASE_PUSH:-}" != "1" ]]; then
     return 0
   fi
   log "RELEASE_PUSH=1: pushing origin release"
   git push origin release
+  if [[ -n "${version}" ]]; then
+    log "RELEASE_PUSH=1: pushing tag v${version}"
+    git push origin "v${version}"
+  fi
 }
 
 main() {
@@ -241,9 +256,10 @@ main() {
 
   log "creating squash commit"
   git commit -m "${commit_message}"
-  log "done: $(git rev-parse --short HEAD)"
+  tag_release_commit "${resolved_version}"
+  log "done: $(git rev-parse --short HEAD) (v${resolved_version})"
 
-  maybe_push_release
+  maybe_push_release "${resolved_version}"
 }
 
 main "$@"
