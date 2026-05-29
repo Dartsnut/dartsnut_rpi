@@ -286,7 +286,118 @@ def _normalize_device_id(value: Any) -> str:
     return raw
 
 
+_EMBEDDED_IMAGE_INLINE_MAX_LEN = 500
+
+
+def _widget_fields_have_oversized_embedded_images(
+    fields: Any,
+    *,
+    limit: int = _EMBEDDED_IMAGE_INLINE_MAX_LEN,
+) -> bool:
+    """True when fields contain inline image strings longer than limit (widget_lifecycle parity)."""
+    if isinstance(fields, dict):
+        for key, val in fields.items():
+            if key == "image":
+                if isinstance(val, str) and len(val) > limit:
+                    return True
+                if isinstance(val, dict):
+                    nested = val.get("image")
+                    if isinstance(nested, str) and len(nested) > limit:
+                        return True
+                    if _widget_fields_have_oversized_embedded_images(val, limit=limit):
+                        return True
+            elif _widget_fields_have_oversized_embedded_images(val, limit=limit):
+                return True
+    elif isinstance(fields, list):
+        for item in fields:
+            if _widget_fields_have_oversized_embedded_images(item, limit=limit):
+                return True
+    return False
+
+
+def _page_has_oversized_embedded_images(
+    page: Any,
+    *,
+    limit: int = _EMBEDDED_IMAGE_INLINE_MAX_LEN,
+) -> bool:
+    if not isinstance(page, dict):
+        return False
+    widgets = page.get("widgets")
+    if not isinstance(widgets, list):
+        return False
+    for widget in widgets:
+        if not isinstance(widget, dict):
+            continue
+        if _widget_fields_have_oversized_embedded_images(widget.get("fields"), limit=limit):
+            return True
+    return False
+
+
+def _sanitize_apps_conf_pages_for_supabase_sync() -> tuple[list[Any], int]:
+    """
+    Drop pages with oversized embedded widget images from apps/conf.json.
+
+    Returns (pages_after_filter, removed_count). Writes conf.json only when pages
+    were removed.
+    """
+    path = os.path.join(os.getcwd(), "apps", "conf.json")
+    if not os.path.isfile(path):
+        return [], 0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            conf = json.load(f)
+    except Exception:
+        return [], 0
+    if not isinstance(conf, dict):
+        return [], 0
+
+    pages = conf.get("pages")
+    if pages is None or not isinstance(pages, list):
+        return [], 0
+
+    kept: list[Any] = []
+    dropped: list[dict[str, Any]] = []
+    for page in pages:
+        if _page_has_oversized_embedded_images(page):
+            if isinstance(page, dict):
+                dropped.append(page)
+        else:
+            kept.append(page)
+
+    removed_count = len(dropped)
+    if removed_count == 0:
+        return kept, 0
+
+    conf["pages"] = kept
+    conf["pages_updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(conf, f)
+    except Exception as e:
+        _log.warning("supabase sync: failed to write sanitized apps/conf.json: %s", e)
+        return kept, removed_count
+
+    labels: list[str] = []
+    for page in dropped[:10]:
+        page_uuid = str(page.get("uuid") or "").strip()
+        title = str(page.get("title") or "").strip()
+        if title and page_uuid:
+            labels.append(f"{title}({page_uuid})")
+        else:
+            labels.append(title or page_uuid or "?")
+    more = f" (+{removed_count - 10} more)" if removed_count > 10 else ""
+    _log.info(
+        "supabase sync: removed %s page(s) with oversized embedded images from apps/conf.json: %s%s",
+        removed_count,
+        ", ".join(labels),
+        more,
+    )
+    return kept, removed_count
+
+
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
+    _sanitize_apps_conf_pages_for_supabase_sync()
     brightness_raw = device_info.get("brightness")
     volume_raw = device_info.get("volume")
     try:

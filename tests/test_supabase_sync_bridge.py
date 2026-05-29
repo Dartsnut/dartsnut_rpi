@@ -260,3 +260,108 @@ def test_bridge_health_probe_failure_clears_latency():
 
     assert ssb.get_supabase_rest_probe_ok() is False
     assert ssb.get_supabase_rest_latency_ms() is None
+
+
+def _picture_page(uuid: str, image_b64: str) -> dict:
+    return {
+        "uuid": uuid,
+        "title": f"Page {uuid[:4]}",
+        "enabled": True,
+        "widgets": [
+            {
+                "id": "simple_picture_128_128",
+                "fields": {"image": {"image": image_b64}},
+                "position": [0, 0, 127, 127],
+            }
+        ],
+        "duration": "15",
+        "combination": "0",
+    }
+
+
+def test_sanitize_keeps_page_with_short_embedded_image(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    apps = tmp_path / "apps"
+    apps.mkdir()
+    short_image = "a" * 100
+    conf = {
+        "ssid": "TestNet",
+        "pages": [_picture_page("good-page", short_image)],
+        "pages_updated_at": "2026-01-01T00:00:00",
+    }
+    conf_path = apps / "conf.json"
+    conf_path.write_text(json.dumps(conf), encoding="utf-8")
+
+    pages, removed = ssb._sanitize_apps_conf_pages_for_supabase_sync()
+
+    assert removed == 0
+    assert len(pages) == 1
+    assert pages[0]["uuid"] == "good-page"
+    on_disk = json.loads(conf_path.read_text(encoding="utf-8"))
+    assert len(on_disk["pages"]) == 1
+    assert on_disk["pages_updated_at"] == "2026-01-01T00:00:00"
+
+
+def test_sanitize_removes_page_with_oversized_embedded_image(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    apps = tmp_path / "apps"
+    apps.mkdir()
+    long_image = "i" * 501
+    conf = {
+        "ssid": "TestNet",
+        "games": [{"id": "cricket", "status": "ready"}],
+        "pages": [_picture_page("bad-page", long_image)],
+        "pages_updated_at": "2026-01-01T00:00:00",
+    }
+    conf_path = apps / "conf.json"
+    conf_path.write_text(json.dumps(conf), encoding="utf-8")
+
+    pages, removed = ssb._sanitize_apps_conf_pages_for_supabase_sync()
+
+    assert removed == 1
+    assert pages == []
+    on_disk = json.loads(conf_path.read_text(encoding="utf-8"))
+    assert on_disk["pages"] == []
+    assert on_disk["ssid"] == "TestNet"
+    assert on_disk["games"] == [{"id": "cricket", "status": "ready"}]
+    assert on_disk["pages_updated_at"] != "2026-01-01T00:00:00"
+
+
+def test_build_initial_state_strips_oversized_pages_from_conf(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ssb.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(ssb, "resolve_pixeldarts_hardware_version", lambda: "")
+
+    apps = tmp_path / "apps"
+    apps.mkdir()
+    good = _picture_page("good-page", "x" * 50)
+    bad = _picture_page("bad-page", "y" * 600)
+    clock_page = {
+        "uuid": "clock-page",
+        "title": "Clock",
+        "enabled": True,
+        "widgets": [
+            {
+                "id": "digitalclock",
+                "fields": {"hourColor": ""},
+                "position": [0, 0, 127, 127],
+            }
+        ],
+        "duration": "15",
+        "combination": "0",
+    }
+    conf_path = apps / "conf.json"
+    conf_path.write_text(
+        json.dumps({"pages": [good, bad, clock_page], "pages_updated_at": ""}),
+        encoding="utf-8",
+    )
+
+    state = ssb._build_initial_state({"id": "AA:BB:CC:DD:EE:FF", "brightness": "70"})
+
+    assert len(state["pages"]) == 2
+    uuids = {p["uuid"] for p in state["pages"]}
+    assert uuids == {"good-page", "clock-page"}
+    on_disk = json.loads(conf_path.read_text(encoding="utf-8"))
+    assert {p["uuid"] for p in on_disk["pages"]} == uuids
+    assert state["pages_updated_at"] == on_disk["pages_updated_at"]
+    assert state["pages_updated_at"] != ""
