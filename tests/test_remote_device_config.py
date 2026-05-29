@@ -22,6 +22,25 @@ def test_parse_iso_ts_accepts_z_suffix():
     dt = parse_iso_ts("2026-03-25T12:00:00Z")
     assert dt is not None
     assert dt.year == 2026 and dt.month == 3 and dt.day == 25
+    assert dt.tzinfo is None
+
+
+def test_parse_iso_ts_normalizes_utc_offset_to_naive():
+    dt = parse_iso_ts("2026-05-29T09:16:00+00:00")
+    assert dt is not None
+    assert dt.tzinfo is None
+    assert dt.hour == 9 and dt.minute == 16
+
+
+def test_should_accept_remote_playing_compares_offset_and_naive_timestamps():
+    rt = RemoteConfigRuntimeState()
+    note_local_game_transition(rt, "g1", "ready", at=parse_iso_ts("2026-05-29T10:00:00Z"))
+    assert not should_accept_remote_playing_command(
+        rt, "g1", parse_iso_ts("2026-05-29T09:59:59+00:00"), source="supabase_bridge"
+    )
+    assert should_accept_remote_playing_command(
+        rt, "g1", parse_iso_ts("2026-05-29T10:00:01+00:00"), source="supabase_bridge"
+    )
 
 
 def test_is_remote_reset_confirmed_requires_empty_network_and_dim_disabled():

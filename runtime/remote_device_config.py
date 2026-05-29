@@ -22,15 +22,26 @@ _DUPLICATE_SNAPSHOT_WINDOW_SECONDS = 2.0
 _BRIDGE_SOURCES = frozenset({"supabase_bridge", "supabase_bridge_init"})
 
 
+def _normalize_utc_naive(dt: datetime) -> datetime:
+    """Return a naive UTC datetime safe for comparisons with _utc_now()."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def parse_iso_ts(value: Any) -> Optional[datetime]:
     if not value:
         return None
     try:
         if isinstance(value, str):
             s = value.strip()
+            if not s:
+                return None
             if s.endswith("Z"):
-                s = s[:-1]
-            return datetime.fromisoformat(s)
+                s = s[:-1] + "+00:00"
+            return _normalize_utc_naive(datetime.fromisoformat(s))
+        if isinstance(value, datetime):
+            return _normalize_utc_naive(value)
     except Exception:
         return None
     return None
@@ -151,7 +162,9 @@ def note_local_game_transition(
     normalized = str(status or "").strip().lower()
     if normalized not in {"ready", "playing"}:
         return
-    runtime.local_game_transition_at[gid] = at if at is not None else _utc_now()
+    runtime.local_game_transition_at[gid] = (
+        _normalize_utc_naive(at) if at is not None else _utc_now()
+    )
 
 
 def should_accept_remote_playing_command(
@@ -196,7 +209,7 @@ def record_remote_playing_accepted(
     if not gid:
         return
     if cfg_ts is not None:
-        runtime.last_processed_remote_playing_at[gid] = cfg_ts
+        runtime.last_processed_remote_playing_at[gid] = _normalize_utc_naive(cfg_ts)
 
 
 def should_skip_duplicate_remote_snapshot(
