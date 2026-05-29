@@ -246,6 +246,7 @@ def test_startup_settlement_defers_download_on_first_snapshot(
 
     # Startup recovery skips games already present locally; keep pong off the ensure list.
     (workspace / "apps" / "pong").mkdir(parents=True)
+    (workspace / "apps" / "chess").mkdir(parents=True)
 
     apply(
         {

@@ -154,9 +154,12 @@ def run_main_loop(
                     term_widget_processes(ctx.pages)
                     ctx.transition_to(in_game_state_cls())
                     try:
-                        get_remote_sync().request_set_game_status(
-                            ctx.game_id, "playing"
-                        )
+                        if ctx.set_game_status:
+                            ctx.set_game_status(ctx.game_id, "playing")
+                        else:
+                            get_remote_sync().request_set_game_status(
+                                ctx.game_id, "playing"
+                            )
                     except Exception as e:
                         _log.warning("Error updating remote game status to playing: %s", e)
             else:

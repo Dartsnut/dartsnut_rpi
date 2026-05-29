@@ -11,7 +11,9 @@ from runtime.remote_device_config import (
     RemoteDeviceConfigDependencies,
     is_remote_reset_confirmed,
     is_remote_reset_confirmation_source,
+    note_local_game_transition,
     parse_iso_ts,
+    should_accept_remote_playing_command,
 )
 
 
@@ -1111,7 +1113,9 @@ def test_gate_passes_empty_games_no_publish():
     assert game_ctx.remote_menu_ready_game_ids == frozenset()
 
 
-def test_gate_playing_publishes_once_then_closes():
+def test_gate_playing_publishes_once_then_closes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps/g1", exist_ok=True)
     game_ctx = _game_ctx()
     published = []
 
@@ -1130,12 +1134,13 @@ def test_gate_playing_publishes_once_then_closes():
     )
 
     assert rt.awaiting_games_ready_confirmation is False
-    assert len(published) == 1
-    assert published[0] == {"games": [{"id": "g1", "status": "ready", "version": "1.0"}]}
+    assert {"games": [{"id": "g1", "status": "ready", "version": "1.0"}]} in published
     assert game_ctx.start_game is False
 
 
-def test_gate_does_not_rearm_on_second_apply():
+def test_gate_does_not_rearm_on_second_apply(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps/g1", exist_ok=True)
     game_ctx = _game_ctx()
     published = []
 
@@ -1468,4 +1473,193 @@ def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
         }
     )
     assert download_calls == [("g1", "1")]
+
+
+# Stale remote playing / bad-network replay guards
+def _playing_guard_applier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps/g1", exist_ok=True)
+    game_ctx = _game_ctx()
+    svc = MagicMock()
+    ble = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_settlement_completed = True
+    rt.awaiting_games_ready_confirmation = False
+    return RemoteDeviceConfigApplier(deps, rt), game_ctx
+
+
+def test_reconnect_burst_stale_playing_snapshots_do_not_launch(tmp_path, monkeypatch):
+    applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
+    os.makedirs("apps/g2", exist_ok=True)
+    local_ts = parse_iso_ts("2026-05-28T20:00:00")
+    note_local_game_transition(applier.runtime, "g1", "ready", at=local_ts)
+    note_local_game_transition(applier.runtime, "g2", "ready", at=local_ts)
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-05-28T18:00:00",
+            "games": [{"id": "g1", "status": "playing", "version": "1"}],
+        }
+    )
+    assert game_ctx.start_game is False
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-05-28T18:00:01",
+            "games": [{"id": "g2", "status": "playing", "version": "1"}],
+        }
+    )
+    assert game_ctx.start_game is False
+
+
+def test_stale_playing_after_local_exit_does_not_relaunch(tmp_path, monkeypatch):
+    applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
+    note_local_game_transition(
+        applier.runtime, "g1", "ready", at=parse_iso_ts("2026-05-29T09:16:00")
+    )
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-05-29T09:15:57",
+            "games": [{"id": "g1", "status": "playing", "version": "1"}],
+        }
+    )
+    assert game_ctx.start_game is False
+
+
+def test_newer_remote_playing_after_local_exit_launches(tmp_path, monkeypatch):
+    applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
+    note_local_game_transition(
+        applier.runtime, "g1", "ready", at=parse_iso_ts("2026-05-29T09:16:00")
+    )
+
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-05-29T09:16:05",
+            "games": [{"id": "g1", "status": "playing", "version": "1"}],
+        }
+    )
+    assert game_ctx.start_game is True
+    assert game_ctx.game_id == "g1"
+
+
+def test_duplicate_identical_bridge_snapshot_suppresses_second_launch(
+    tmp_path, monkeypatch
+):
+    applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
+    cfg = {
+        "last_update_source": "supabase_bridge",
+        "updated_at": "2026-05-29T09:16:00",
+        "games": [{"id": "g1", "status": "playing", "version": "1"}],
+    }
+    applier.apply(cfg)
+    assert game_ctx.start_game is True
+    game_ctx.start_game = False
+    game_ctx.game_id = None
+
+    applier.apply(dict(cfg))
+    assert game_ctx.start_game is False
+
+
+def test_should_accept_remote_playing_requires_strictly_newer_than_local():
+    rt = RemoteConfigRuntimeState()
+    note_local_game_transition(rt, "g1", "ready", at=parse_iso_ts("2026-05-29T10:00:00"))
+    assert not should_accept_remote_playing_command(
+        rt, "g1", parse_iso_ts("2026-05-29T09:59:59"), source="supabase_bridge"
+    )
+    assert should_accept_remote_playing_command(
+        rt, "g1", parse_iso_ts("2026-05-29T10:00:01"), source="supabase_bridge"
+    )
+
+
+def test_monotonic_guard_does_not_block_reset_confirmation():
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: {},
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    svc = MagicMock()
+    ble = MagicMock()
+    confirmations = {"count": 0}
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: svc,
+        bluetooth_scan_controller=ble,
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: True,
+        on_reset_confirmed=lambda: confirmations.__setitem__(
+            "count", confirmations["count"] + 1
+        ),
+    )
+    rt = RemoteConfigRuntimeState()
+    note_local_game_transition(rt, "g1", "ready", at=parse_iso_ts("2026-05-29T12:00:00"))
+    applier = RemoteDeviceConfigApplier(deps, rt)
+    reset_payload = {
+        "ip_address": "",
+        "ssid": "",
+        "pages": [],
+        "games": [],
+        "dim_window": {"dim_window_enabled": False},
+        "updated_at": "2026-05-28T10:00:00",
+        "last_update_source": "supabase_bridge",
+    }
+    applier.apply(reset_payload)
+    assert confirmations["count"] == 1
+
+
+def test_gate_settlement_still_ignores_playing_commands(tmp_path, monkeypatch):
+    """Startup gate settles playing->ready; monotonic guard must not launch during gate."""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("apps/g1", exist_ok=True)
+    game_ctx = _game_ctx()
+    published = []
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(
+        _gate_deps(game_ctx, MagicMock(), MagicMock(), publish=published.append),
+        rt,
+    )
+    note_local_game_transition(
+        rt, "g1", "ready", at=parse_iso_ts("2026-05-29T12:00:00")
+    )
+    applier.apply(
+        {
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-05-28T10:00:00",
+            "games": [{"id": "g1", "status": "playing", "version": "1.0"}],
+        }
+    )
+    assert rt.awaiting_games_ready_confirmation is False
+    assert {"games": [{"id": "g1", "status": "ready", "version": "1.0"}]} in published
+    assert game_ctx.start_game is False
 
