@@ -8,9 +8,11 @@ use std::io::ErrorKind;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Message};
 use url::Url;
@@ -38,6 +40,14 @@ struct SupabaseConfig {
     key: String,
     device_id: String,
 }
+
+#[derive(Clone, Default)]
+struct RestProbeSnapshot {
+    latency_ms: Option<u64>,
+    probe_ok: bool,
+}
+
+const PROBE_INTERVAL_SECS: u64 = 30;
 
 fn parse_socket_path() -> String {
     for arg in env::args() {
@@ -258,34 +268,138 @@ fn merge_games_patch_with_remote_state(
     patch_obj.insert("games".to_string(), Value::Array(merged_games));
 }
 
-fn remote_device_exists(client: &Client, cfg: &SupabaseConfig) -> Result<bool> {
+fn remote_devices_query_url(cfg: &SupabaseConfig, select: &str) -> Result<Url> {
     let mut url = Url::parse(&format!(
         "{}/rest/v1/remote_devices",
         cfg.url.trim_end_matches('/')
     ))
     .context("invalid remote_devices url")?;
     url.query_pairs_mut()
-        .append_pair("select", "device_id")
+        .append_pair("select", select)
         .append_pair("device_id", &format!("eq.{}", cfg.device_id))
         .append_pair("limit", "1");
+    Ok(url)
+}
 
-    let rows: Vec<Value> = client
+fn probe_remote_devices_latency_ms(client: &Client, cfg: &SupabaseConfig) -> RestProbeSnapshot {
+    let url = match remote_devices_query_url(cfg, "device_id") {
+        Ok(u) => u,
+        Err(_) => return RestProbeSnapshot::default(),
+    };
+    let started = Instant::now();
+    let resp = client
         .get(url)
         .header("apikey", &cfg.key)
         .header("Authorization", format!("Bearer {}", cfg.key))
-        .send()?
-        .error_for_status()?
-        .json()?;
+        .send();
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match resp {
+        Ok(response) => {
+            let _ = response.bytes();
+            RestProbeSnapshot {
+                latency_ms: Some(elapsed_ms),
+                probe_ok: true,
+            }
+        }
+        Err(_) => RestProbeSnapshot::default(),
+    }
+}
+
+fn send_bridge_health(
+    writer: &Arc<Mutex<UnixStream>>,
+    state: &str,
+    probe: &RestProbeSnapshot,
+) {
+    let mut payload = json!({ "state": state });
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("rest_probe_ok".to_string(), json!(probe.probe_ok));
+        if let Some(ms) = probe.latency_ms {
+            obj.insert("rest_latency_ms".to_string(), json!(ms));
+        }
+    }
+    let _ = send_msg(writer, "bridge_health", payload);
+}
+
+fn remote_device_exists(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    probe_cache: Option<&Arc<Mutex<RestProbeSnapshot>>>,
+) -> Result<bool> {
+    let url = remote_devices_query_url(cfg, "device_id")?;
+    let started = Instant::now();
+    let response = client
+        .get(url)
+        .header("apikey", &cfg.key)
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .send()?;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if response.status().is_success() {
+        if let Some(cache) = probe_cache {
+            if let Ok(mut snap) = cache.lock() {
+                snap.latency_ms = Some(elapsed_ms);
+                snap.probe_ok = true;
+            }
+        }
+    }
+    let rows: Vec<Value> = response.error_for_status()?.json()?;
     Ok(!rows.is_empty())
 }
 
-fn apply_initial_state_with_retry(client: &Client, cfg: &SupabaseConfig, patch: Value) -> Result<()> {
+fn run_rest_probe_loop(
+    writer: Arc<Mutex<UnixStream>>,
+    cfg: SupabaseConfig,
+    wake_rx: mpsc::Receiver<()>,
+    realtime_connected: Arc<AtomicBool>,
+    probe_cache: Arc<Mutex<RestProbeSnapshot>>,
+    probe_in_flight: Arc<AtomicBool>,
+) {
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("bridge: failed to build probe http client: {e}");
+            return;
+        }
+    };
+
+    loop {
+        let _ = wake_rx.recv_timeout(Duration::from_secs(PROBE_INTERVAL_SECS));
+        if probe_in_flight.swap(true, Ordering::AcqRel) {
+            continue;
+        }
+        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        {
+            let mut cache = probe_cache.lock().expect("probe cache lock poisoned");
+            *cache = snapshot.clone();
+        }
+        let state = if realtime_connected.load(Ordering::Relaxed) {
+            "connected"
+        } else {
+            "disconnected"
+        };
+        let cache = probe_cache
+            .lock()
+            .expect("probe cache lock poisoned")
+            .clone();
+        send_bridge_health(&writer, state, &cache);
+        probe_in_flight.store(false, Ordering::Release);
+    }
+}
+
+fn apply_initial_state_with_retry(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    patch: Value,
+    probe_cache: Option<&Arc<Mutex<RestProbeSnapshot>>>,
+) -> Result<()> {
     let max_attempts = 8u32;
     let mut backoff_seconds = 1u64;
     let mut last_err: Option<anyhow::Error> = None;
 
     for attempt in 1..=max_attempts {
-        match remote_device_exists(client, cfg) {
+        match remote_device_exists(client, cfg, probe_cache) {
             Ok(false) => match rpc_apply_patch(client, cfg, patch.clone(), true, None) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -455,12 +569,30 @@ fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
         && !is_game_state_payload(state)
 }
 
-fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
+fn run_realtime_loop(
+    writer: Arc<Mutex<UnixStream>>,
+    cfg: SupabaseConfig,
+    probe_wake_tx: mpsc::Sender<()>,
+    realtime_connected: Arc<AtomicBool>,
+    probe_cache: Arc<Mutex<RestProbeSnapshot>>,
+) {
+    let emit_health = |state: &str| {
+        let snap = probe_cache
+            .lock()
+            .expect("probe cache lock poisoned")
+            .clone();
+        send_bridge_health(&writer, state, &snap);
+    };
+    let signal_probe = || {
+        let _ = probe_wake_tx.send(());
+    };
     let ws_url = match build_realtime_ws_url(&cfg) {
         Ok(u) => u,
         Err(e) => {
             eprintln!("bridge: invalid realtime url: {e}");
-            let _ = send_msg(&writer, "bridge_health", json!({ "state": "disconnected" }));
+            realtime_connected.store(false, Ordering::Relaxed);
+            emit_health("disconnected");
+            signal_probe();
             return;
         }
     };
@@ -473,7 +605,9 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("bridge: realtime connect failed: {e}");
-                let _ = send_msg(&writer, "bridge_health", json!({ "state": "disconnected" }));
+                realtime_connected.store(false, Ordering::Relaxed);
+                emit_health("disconnected");
+                signal_probe();
                 thread::sleep(Duration::from_secs(backoff_seconds));
                 backoff_seconds = (backoff_seconds * 2).min(30);
                 continue;
@@ -504,13 +638,17 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
             .send(Message::Text(join_payload.to_string().into()))
             .is_err()
         {
-            let _ = send_msg(&writer, "bridge_health", json!({ "state": "disconnected" }));
+            realtime_connected.store(false, Ordering::Relaxed);
+            emit_health("disconnected");
+            signal_probe();
             thread::sleep(Duration::from_secs(backoff_seconds));
             backoff_seconds = (backoff_seconds * 2).min(30);
             continue;
         }
 
-        let _ = send_msg(&writer, "bridge_health", json!({ "state": "connected" }));
+        realtime_connected.store(true, Ordering::Relaxed);
+        emit_health("connected");
+        signal_probe();
         let mut heartbeat_ref: u64 = 2;
         let mut ticks_since_heartbeat = 0u64;
 
@@ -549,7 +687,8 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                         let config_payload = build_config_payload(record, &state);
                         if send_msg(&writer, kind, config_payload).is_ok() {
                             sent_initial = true;
-                            let _ = send_msg(&writer, "bridge_health", json!({ "state": "connected" }));
+                            realtime_connected.store(true, Ordering::Relaxed);
+                            emit_health("connected");
                         }
                     }
                 }
@@ -571,11 +710,9 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                                     .send(Message::Text(hb_payload.to_string().into()))
                                     .is_err()
                                 {
-                                    let _ = send_msg(
-                                        &writer,
-                                        "bridge_health",
-                                        json!({ "state": "disconnected" }),
-                                    );
+                                    realtime_connected.store(false, Ordering::Relaxed);
+                                    emit_health("disconnected");
+                                    signal_probe();
                                     break;
                                 }
                             }
@@ -583,7 +720,9 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
                         }
                     }
                     eprintln!("bridge: realtime read error: {e}");
-                    let _ = send_msg(&writer, "bridge_health", json!({ "state": "disconnected" }));
+                    realtime_connected.store(false, Ordering::Relaxed);
+                    emit_health("disconnected");
+                    signal_probe();
                     break;
                 }
             }
@@ -594,6 +733,28 @@ fn run_realtime_loop(writer: Arc<Mutex<UnixStream>>, cfg: SupabaseConfig) {
 }
 
 fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "--probe-latency") {
+        let cfg = load_supabase_config()?;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .context("failed to build probe http client")?;
+        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        if snapshot.probe_ok {
+            println!(
+                "{}",
+                json!({
+                    "rest_latency_ms": snapshot.latency_ms,
+                    "rest_probe_ok": true
+                })
+            );
+            return Ok(());
+        }
+        println!("{}", json!({ "rest_probe_ok": false }));
+        std::process::exit(1);
+    }
+
     let socket_path = parse_socket_path();
     let cfg = load_supabase_config()?;
     let client = Client::builder()
@@ -615,10 +776,44 @@ fn main() -> Result<()> {
 
     send_msg(&writer, "ready", json!({}))?;
 
+    let probe_cache = Arc::new(Mutex::new(RestProbeSnapshot::default()));
+    let realtime_connected = Arc::new(AtomicBool::new(false));
+    let probe_in_flight = Arc::new(AtomicBool::new(false));
+    let (probe_wake_tx, probe_wake_rx) = mpsc::channel();
+
+    let writer_probe = Arc::clone(&writer);
+    let cfg_probe = cfg.clone();
+    let probe_cache_probe = Arc::clone(&probe_cache);
+    let realtime_connected_probe = Arc::clone(&realtime_connected);
+    let probe_in_flight_probe = Arc::clone(&probe_in_flight);
+    thread::spawn(move || {
+        run_rest_probe_loop(
+            writer_probe,
+            cfg_probe,
+            probe_wake_rx,
+            realtime_connected_probe,
+            probe_cache_probe,
+            probe_in_flight_probe,
+        );
+    });
+    let _ = probe_wake_tx.send(());
+
     let writer_clone = Arc::clone(&writer);
     let cfg_clone = cfg.clone();
-    thread::spawn(move || run_realtime_loop(writer_clone, cfg_clone));
+    let probe_cache_rt = Arc::clone(&probe_cache);
+    let probe_wake_tx_rt = probe_wake_tx.clone();
+    let realtime_connected_rt = Arc::clone(&realtime_connected);
+    thread::spawn(move || {
+        run_realtime_loop(
+            writer_clone,
+            cfg_clone,
+            probe_wake_tx_rt,
+            realtime_connected_rt,
+            probe_cache_rt,
+        );
+    });
 
+    let probe_cache_main = Arc::clone(&probe_cache);
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -633,7 +828,12 @@ fn main() -> Result<()> {
         };
         match msg.kind.as_str() {
             "initial_state" => {
-                if let Err(e) = apply_initial_state_with_retry(&client, &cfg, msg.payload) {
+                if let Err(e) = apply_initial_state_with_retry(
+                    &client,
+                    &cfg,
+                    msg.payload,
+                    Some(&probe_cache_main),
+                ) {
                     eprintln!(
                         "bridge: giving up initial state write after retries: {e}"
                     );
@@ -739,6 +939,54 @@ mod tests {
         assert!(out.get("games").is_none());
         assert!(out.get("bluetooth").is_none());
         assert_eq!(out.get("volume").and_then(|v| v.as_i64()), Some(50));
+    }
+
+    #[test]
+    fn probe_remote_devices_latency_ms_records_elapsed_on_http_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let body = b"[]";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let cfg = SupabaseConfig {
+            url: format!("http://127.0.0.1:{}", addr.port()),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let client = Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .expect("client");
+        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        let _ = server.join();
+
+        assert!(snapshot.probe_ok);
+        assert!(snapshot.latency_ms.is_some());
+    }
+
+    #[test]
+    fn probe_remote_devices_latency_ms_fails_on_unreachable_host() {
+        let cfg = SupabaseConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let client = Client::builder()
+            .timeout(Duration::from_millis(200))
+            .build()
+            .expect("client");
+        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        assert!(!snapshot.probe_ok);
+        assert!(snapshot.latency_ms.is_none());
     }
 
     #[test]

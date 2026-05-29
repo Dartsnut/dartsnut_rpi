@@ -224,3 +224,33 @@ def test_restart_supabase_sync_skips_restart_when_already_connected(monkeypatch)
     ssb.restart_supabase_sync({}, lambda: None, lambda _cfg: None)
 
     assert calls == []
+
+
+def test_bridge_health_updates_rest_probe_cache():
+    with ssb._rest_probe_lock:
+        ssb._last_rest_latency_ms = None
+        ssb._last_rest_probe_ok = False
+
+    ssb._update_rest_probe_cache(
+        {
+            "state": "connected",
+            "rest_latency_ms": 142,
+            "rest_probe_ok": True,
+        }
+    )
+
+    assert ssb.get_supabase_rest_latency_ms() == 142
+    assert ssb.get_supabase_rest_probe_ok() is True
+
+
+def test_bridge_health_probe_failure_clears_latency():
+    ssb._update_rest_probe_cache(
+        {
+            "state": "disconnected",
+            "rest_probe_ok": False,
+            "rest_latency_ms": None,
+        }
+    )
+
+    assert ssb.get_supabase_rest_probe_ok() is False
+    assert ssb.get_supabase_rest_latency_ms() is None
