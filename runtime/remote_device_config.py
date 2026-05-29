@@ -10,13 +10,23 @@ import logging
 import os
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
 from domain.game_remote_sync import handle_incoming_game_status
 
 _log = logging.getLogger(__name__)
+
+_DUPLICATE_SNAPSHOT_WINDOW_SECONDS = 2.0
+_BRIDGE_SOURCES = frozenset({"supabase_bridge", "supabase_bridge_init"})
+
+
+def _normalize_utc_naive(dt: datetime) -> datetime:
+    """Return a naive UTC datetime safe for comparisons with _utc_now()."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def parse_iso_ts(value: Any) -> Optional[datetime]:
@@ -25,9 +35,13 @@ def parse_iso_ts(value: Any) -> Optional[datetime]:
     try:
         if isinstance(value, str):
             s = value.strip()
+            if not s:
+                return None
             if s.endswith("Z"):
-                s = s[:-1]
-            return datetime.fromisoformat(s)
+                s = s[:-1] + "+00:00"
+            return _normalize_utc_naive(datetime.fromisoformat(s))
+        if isinstance(value, datetime):
+            return _normalize_utc_naive(value)
     except Exception:
         return None
     return None
@@ -106,6 +120,119 @@ def games_cfg_for_startup_recovery(
     return out
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def snapshot_dedupe_fingerprint(config: dict) -> str:
+    """Stable fingerprint for duplicate remote snapshot suppression."""
+    games = normalize_games_list(config)
+    game_part = sorted(
+        (
+            str(g.get("id") or ""),
+            str(g.get("status") or "").strip().lower(),
+            str(g.get("version") or ""),
+        )
+        for g in games
+        if isinstance(g, dict)
+    )
+    return json.dumps(
+        {
+            "updated_at": config.get("updated_at") or config.get("device_updated_at"),
+            "last_update_source": config.get("last_update_source"),
+            "games": game_part,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def note_local_game_transition(
+    runtime: "RemoteConfigRuntimeState",
+    game_id: str,
+    status: str,
+    *,
+    at: Optional[datetime] = None,
+) -> None:
+    """Record a local UI-driven game status transition for monotonic guards."""
+    gid = str(game_id or "").strip()
+    if not gid:
+        return
+    normalized = str(status or "").strip().lower()
+    if normalized not in {"ready", "playing"}:
+        return
+    runtime.local_game_transition_at[gid] = (
+        _normalize_utc_naive(at) if at is not None else _utc_now()
+    )
+
+
+def should_accept_remote_playing_command(
+    runtime: "RemoteConfigRuntimeState",
+    game_id: str,
+    cfg_ts: Optional[datetime],
+    *,
+    source: str = "",
+) -> bool:
+    """
+    True when a remote `playing` command should be honored.
+
+    Requires remote updated_at to be strictly newer than the last local transition
+    for that game, and not a replay of an already-processed playing command.
+    """
+    gid = str(game_id or "").strip()
+    if not gid:
+        return False
+    src = str(source or "").strip().lower()
+
+    local_at = runtime.local_game_transition_at.get(gid)
+    if local_at is not None:
+        if cfg_ts is None:
+            if src in _BRIDGE_SOURCES:
+                return False
+        elif cfg_ts <= local_at:
+            return False
+
+    processed_at = runtime.last_processed_remote_playing_at.get(gid)
+    if processed_at is not None and cfg_ts is not None and cfg_ts <= processed_at:
+        return False
+
+    return True
+
+
+def record_remote_playing_accepted(
+    runtime: "RemoteConfigRuntimeState",
+    game_id: str,
+    cfg_ts: Optional[datetime],
+) -> None:
+    gid = str(game_id or "").strip()
+    if not gid:
+        return
+    if cfg_ts is not None:
+        runtime.last_processed_remote_playing_at[gid] = _normalize_utc_naive(cfg_ts)
+
+
+def should_skip_duplicate_remote_snapshot(
+    runtime: "RemoteConfigRuntimeState", config: dict
+) -> bool:
+    """Suppress repeated identical bridge snapshots in a short window."""
+    source = str(config.get("last_update_source") or "").strip().lower()
+    if source not in _BRIDGE_SOURCES:
+        return False
+    fp = snapshot_dedupe_fingerprint(config)
+    now = _utc_now()
+    if (
+        runtime.last_remote_snapshot_fingerprint == fp
+        and runtime.last_remote_snapshot_applied_at is not None
+        and (now - runtime.last_remote_snapshot_applied_at).total_seconds()
+        < _DUPLICATE_SNAPSHOT_WINDOW_SECONDS
+    ):
+        return True
+    runtime.last_remote_snapshot_fingerprint = fp
+    runtime.last_remote_snapshot_applied_at = now
+    return False
+
+
 def are_remote_gate_stable_games(games_cfg: list[dict[str, Any]]) -> bool:
     """True when all games are in stable startup statuses: ready/downloading."""
     for g in games_cfg:
@@ -160,6 +287,10 @@ class RemoteConfigRuntimeState:
     has_seen_remote_pages_snapshot: bool = False
     last_applied_non_bridge_pages_fingerprint: Optional[str] = None
     last_remote_controller_macs: set[str] = field(default_factory=set)
+    local_game_transition_at: Dict[str, datetime] = field(default_factory=dict)
+    last_processed_remote_playing_at: Dict[str, datetime] = field(default_factory=dict)
+    last_remote_snapshot_fingerprint: Optional[str] = None
+    last_remote_snapshot_applied_at: Optional[datetime] = None
 
 
 @dataclass
@@ -370,6 +501,12 @@ class RemoteDeviceConfigApplier:
             deps.on_reset_confirmed()
 
         skip_game_commands = False
+        skip_games_dedupe = should_skip_duplicate_remote_snapshot(rt, config)
+        if skip_games_dedupe:
+            _log.info(
+                "remote config: skip duplicate bridge snapshot within %.1fs",
+                _DUPLICATE_SNAPSHOT_WINDOW_SECONDS,
+            )
         if rt.awaiting_games_ready_confirmation:
             games_cfg = normalize_games_list(config)
             self._apply_menu_ready_from_games(ctx, games_cfg)
@@ -558,12 +695,13 @@ class RemoteDeviceConfigApplier:
                     pass
                 rt.remote_downloading_game_ids.discard(removed_game_id)
 
-            if skip_game_commands:
+            if skip_game_commands or skip_games_dedupe:
                 pass
             else:
                 if not rt.startup_missing_ready_games_recovery_done:
                     self._recover_missing_ready_games_on_startup(games_cfg)
 
+                source = str(config.get("last_update_source", "") or "").strip().lower()
                 for g in games_cfg:
                     if not isinstance(g, dict):
                         continue
@@ -612,6 +750,7 @@ class RemoteDeviceConfigApplier:
 
                     def _request_launch(gid: str) -> None:
                         if _current_game_id() != gid:
+                            record_remote_playing_accepted(rt, gid, cfg_ts)
                             ctx.start_game = True
                             ctx.game_id = gid
 
@@ -629,6 +768,16 @@ class RemoteDeviceConfigApplier:
                         game_id, expected_version
                     ):
                         _set_status(game_id, "ready")
+                        continue
+
+                    if status == "playing" and not should_accept_remote_playing_command(
+                        rt, game_id, cfg_ts, source=source
+                    ):
+                        _log.info(
+                            "remote config: ignore stale playing game_id=%s cfg_ts=%s",
+                            game_id,
+                            cfg_ts,
+                        )
                         continue
 
                     handle_incoming_game_status(

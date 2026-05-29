@@ -8,7 +8,20 @@ from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
 from network_utils import get_primary_ipv4
+from runtime.remote_sync_port import get_remote_sync
 from states.base import BaseState
+
+try:
+    from supabase_sync_bridge import (
+        get_supabase_rest_latency_ms,
+        get_supabase_rest_probe_ok,
+    )
+except ImportError:
+    def get_supabase_rest_latency_ms():
+        return None
+
+    def get_supabase_rest_probe_ok():
+        return False
 
 # Rate limit WiFi RSSI: refresh every ~5 seconds
 RSSI_MIN_INTERVAL = 5
@@ -52,6 +65,34 @@ def _rssi_to_color(rssi):
     if rssi >= -65:
         return (0, 255, 0)
     return (255, 0, 0)
+
+
+def _latency_to_color(ms):
+    """Map Supabase REST round-trip (ms) to (R, G, B)."""
+    if ms is None:
+        return (128, 128, 128)
+    if ms <= 300:
+        return (0, 255, 0)
+    return (255, 0, 0)
+
+
+def _bridge_active_wifi_icon_color(ctx):
+    """Cloud-aware WiFi icon when the Supabase bridge process is running."""
+    if not ctx.wifi_connected:
+        return (128, 128, 128)
+    sync = get_remote_sync()
+    if not sync.is_connected() or not get_supabase_rest_probe_ok():
+        return (255, 0, 0)
+    latency_ms = get_supabase_rest_latency_ms()
+    if latency_ms is None:
+        return (128, 128, 128)
+    return _latency_to_color(latency_ms)
+
+
+def _settings_wifi_icon_color(ctx):
+    if get_remote_sync().is_bridge_active():
+        return _bridge_active_wifi_icon_color(ctx)
+    return _rssi_to_color(_get_wifi_rssi_cached())
 
 
 def _tint_icon_rgba(icon_rgba, color):
@@ -260,8 +301,7 @@ class SettingsState(BaseState):
                     (0, y, 127, y + item_height - 1), fill=(40, 40, 40)
                 )
             if item["name"] == "IP":
-                rssi = _get_wifi_rssi_cached()
-                color = _rssi_to_color(rssi)
+                color = _settings_wifi_icon_color(ctx)
                 icon_rgba = wifi_icon.convert("RGBA")
                 tinted = _tint_icon_rgba(icon_rgba, color)
                 icon_y = y + (item_height - wifi_icon.size[1]) // 2

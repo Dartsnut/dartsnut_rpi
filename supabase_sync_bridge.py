@@ -25,6 +25,9 @@ _bridge_proc: Optional[subprocess.Popen] = None
 _bridge_lock = threading.Lock()
 _connected = False
 _connected_lock = threading.Lock()
+_last_rest_latency_ms: Optional[int] = None
+_last_rest_probe_ok = False
+_rest_probe_lock = threading.Lock()
 _connectivity_callback: Optional[Callable[[bool], None]] = None
 _remote_game_ids: Optional[set[str]] = None
 _remote_games_by_id: Optional[Dict[str, Dict[str, Any]]] = None
@@ -52,6 +55,32 @@ def _set_connected(connected: bool) -> None:
 def is_supabase_connected() -> bool:
     with _connected_lock:
         return _connected
+
+
+def _update_rest_probe_cache(payload: Dict[str, Any]) -> None:
+    global _last_rest_latency_ms, _last_rest_probe_ok
+    with _rest_probe_lock:
+        if "rest_probe_ok" in payload:
+            _last_rest_probe_ok = bool(payload.get("rest_probe_ok"))
+        if "rest_latency_ms" in payload:
+            raw = payload.get("rest_latency_ms")
+            if raw is None:
+                _last_rest_latency_ms = None
+            else:
+                try:
+                    _last_rest_latency_ms = int(raw)
+                except (TypeError, ValueError):
+                    _last_rest_latency_ms = None
+
+
+def get_supabase_rest_latency_ms() -> Optional[int]:
+    with _rest_probe_lock:
+        return _last_rest_latency_ms
+
+
+def get_supabase_rest_probe_ok() -> bool:
+    with _rest_probe_lock:
+        return _last_rest_probe_ok
 
 
 def set_supabase_connectivity_callback(
@@ -538,6 +567,7 @@ class _SyncClient:
                                 except Exception:
                                     pass
                             elif kind == "bridge_health" and isinstance(payload, dict):
+                                _update_rest_probe_cache(payload)
                                 _set_connected(
                                     str(payload.get("state", "")).lower() == "connected"
                                 )

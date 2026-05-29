@@ -308,7 +308,14 @@ ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
-ctx.set_game_status = lambda gid, st: get_remote_sync().request_set_game_status(gid, st)
+def _set_game_status_from_local_ui(game_id: str, status: str) -> None:
+    from runtime.remote_device_config import note_local_game_transition
+
+    note_local_game_transition(_remote_config_runtime, game_id, status)
+    get_remote_sync().request_set_game_status(game_id, status)
+
+
+ctx.set_game_status = _set_game_status_from_local_ui
 
 _app_ctx = ctx
 
