@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import socket
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
+
+from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 
 SOCKET_PATH = "/tmp/dartsnut-supabase-sync.sock"
 _DEFAULT_BRIDGE_BIN = os.path.join(
@@ -285,41 +286,6 @@ def _normalize_device_id(value: Any) -> str:
     return raw
 
 
-def _resolve_hardware_version() -> str:
-    cache_path = os.path.join(os.getcwd(), ".hardware_version.json")
-    try:
-        with open(cache_path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        if isinstance(payload, dict):
-            value = str(payload.get("hardware_version", "")).strip().lower()
-            if value:
-                return value
-    except Exception:
-        pass
-
-    try:
-        output = subprocess.check_output(["lsusb"]).decode("utf-8", errors="ignore")
-        for line in output.splitlines():
-            match = re.search(
-                r"\bID\s+[0-9a-fA-F]{4}:([0-9a-fA-F]{4})\b.*\bPIXELDARTS\b",
-                line.strip(),
-                flags=re.IGNORECASE,
-            )
-            if not match:
-                continue
-            value = match.group(1).lower()
-            try:
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump({"hardware_version": value}, f)
-            except Exception:
-                pass
-            return value
-    except Exception:
-        pass
-
-    return ""
-
-
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     brightness_raw = device_info.get("brightness")
     volume_raw = device_info.get("volume")
@@ -344,9 +310,9 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         "dim_level": device_info.get("dim_level", 0),
         "dim_restore_seconds": device_info.get("dim_restore_seconds", 0),
     }
-    hardware_version = str(device_info.get("hardware_version", "")).strip().lower()
+    hardware_version = resolve_pixeldarts_hardware_version()
     if not hardware_version:
-        hardware_version = _resolve_hardware_version()
+        hardware_version = str(device_info.get("hardware_version", "")).strip().lower()
 
     device_meta = {
         "id": resolved_device_id,

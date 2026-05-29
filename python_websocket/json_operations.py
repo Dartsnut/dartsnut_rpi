@@ -3,7 +3,6 @@ import logging
 import os
 from pathlib import Path
 import base64
-import re
 import subprocess
 from python_websocket.error_handler import (
     ErrorCode,
@@ -11,6 +10,7 @@ from python_websocket.error_handler import (
     handle_file_not_found,
 )
 from machine_state_service import get_machine_state_service
+from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.remote_sync_port import get_remote_sync
 
 APPS_DIR = "apps"  # Update this to your desired save directory
@@ -20,61 +20,6 @@ _log = logging.getLogger(__name__)
 
 def _apps_path(*parts):
     return os.path.join(os.getcwd(), APPS_DIR, *parts)
-
-
-def _hardware_cache_path():
-    return os.path.join(os.getcwd(), ".hardware_version.json")
-
-
-def _extract_pixeldarts_pid(lsusb_output):
-    for line in (lsusb_output or "").splitlines():
-        match = re.search(
-            r"\bID\s+[0-9a-fA-F]{4}:([0-9a-fA-F]{4})\b.*\bPIXELDARTS\b",
-            line.strip(),
-            flags=re.IGNORECASE,
-        )
-        if match:
-            return match.group(1).lower()
-    return ""
-
-
-def _read_cached_hardware_version():
-    try:
-        with open(_hardware_cache_path(), "r", encoding="utf-8") as file:
-            payload = json.load(file)
-        if not isinstance(payload, dict):
-            return ""
-        value = str(payload.get("hardware_version", "")).strip().lower()
-        return value
-    except Exception:
-        return ""
-
-
-def _write_cached_hardware_version(version):
-    try:
-        with open(_hardware_cache_path(), "w", encoding="utf-8") as file:
-            json.dump({"hardware_version": version}, file)
-    except Exception as e:
-        _log.debug("Failed to persist hardware cache: %s", e)
-
-
-def _get_hardware_version():
-    cached = _read_cached_hardware_version()
-    if cached:
-        return cached
-    try:
-        output = subprocess.check_output(["lsusb"]).decode("utf-8", errors="ignore")
-        version = _extract_pixeldarts_pid(output)
-        if version:
-            _write_cached_hardware_version(version)
-            return version
-    except Exception:
-        pass
-    return ""
-
-
-def resolve_pixeldarts_hardware_version():
-    return _get_hardware_version()
 
 
 def _normalize_relative_path(path_value):

@@ -77,7 +77,7 @@ from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
-from python_websocket.json_operations import resolve_pixeldarts_hardware_version
+from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
