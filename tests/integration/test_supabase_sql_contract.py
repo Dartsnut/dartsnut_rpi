@@ -71,3 +71,115 @@ def test_apply_remote_device_patch_merges_and_sets_source():
     assert row["state"]["brightness"] == 70
     assert row["state"]["volume"] == 25
     assert row["last_update_source"] == "integration_test"
+
+
+def test_apply_remote_device_patch_preserves_legacy_games_replace_behavior():
+    base_url, api_key = _require_contract_env()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    device_id = f"ITEST-GAMES-LEGACY-{uuid.uuid4()}"
+    rpc_url = f"{base_url}/rest/v1/rpc/apply_remote_device_patch"
+    row_url = f"{base_url}/rest/v1/remote_devices"
+
+    seed = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {
+                "games": [
+                    {"id": "g1", "status": "ready", "version": "1"},
+                    {"id": "g2", "status": "ready", "version": "1"},
+                ]
+            },
+            "p_full": False,
+            "p_source": "integration_test",
+        },
+        timeout=15,
+    )
+    assert seed.status_code in (200, 201), seed.text
+
+    partial = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {
+                "games": [{"id": "g1", "status": "playing", "version": "1"}]
+            },
+            "p_full": False,
+            "p_source": "integration_test",
+        },
+        timeout=15,
+    )
+    assert partial.status_code in (200, 201), partial.text
+
+    query = requests.get(
+        row_url,
+        headers=headers,
+        params={"device_id": f"eq.{device_id}", "select": "state"},
+        timeout=15,
+    )
+    assert query.status_code == 200, query.text
+    games = query.json()[0]["state"]["games"]
+    assert games == [{"id": "g1", "status": "playing", "version": "1"}]
+
+
+def test_apply_remote_device_patch_v2_merges_games_by_id():
+    base_url, api_key = _require_contract_env()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    device_id = f"ITEST-GAMES-{uuid.uuid4()}"
+    rpc_url = f"{base_url}/rest/v1/rpc/apply_remote_device_patch_v2"
+    row_url = f"{base_url}/rest/v1/remote_devices"
+
+    seed = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {
+                "games": [
+                    {"id": "g1", "status": "ready", "version": "1"},
+                    {"id": "g2", "status": "ready", "version": "1"},
+                ]
+            },
+            "p_full": False,
+            "p_source": "integration_test",
+        },
+        timeout=15,
+    )
+    assert seed.status_code in (200, 201), seed.text
+
+    partial = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {
+                "games": [{"id": "g1", "status": "playing", "version": "1"}]
+            },
+            "p_full": False,
+            "p_source": "integration_test",
+        },
+        timeout=15,
+    )
+    assert partial.status_code in (200, 201), partial.text
+
+    query = requests.get(
+        row_url,
+        headers=headers,
+        params={"device_id": f"eq.{device_id}", "select": "state"},
+        timeout=15,
+    )
+    assert query.status_code == 200, query.text
+    games = {g["id"]: g for g in query.json()[0]["state"]["games"]}
+    assert set(games) == {"g1", "g2"}
+    assert games["g1"]["status"] == "playing"
+    assert games["g2"]["status"] == "ready"

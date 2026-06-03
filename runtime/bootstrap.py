@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 import assets
 from runtime import device_json_identity
@@ -122,6 +122,7 @@ def start_background_subsystems(
     check_connection_loop: Callable[[], None],
     network_state_remote_loop: Callable[[], None],
     apply_remote_config: Callable[[Dict[str, Any]], None],
+    on_sync_game_ready: Optional[Callable[[Any], None]] = None,
     on_remote_connectivity_changed: Callable[[bool], None],
     request_network_state_refresh: Callable[[], None],
     remote_config_runtime: Any,
@@ -177,7 +178,10 @@ def start_background_subsystems(
 
     try:
         get_remote_sync().start_sync_if_available(
-            device_info or {}, reload_config, apply_remote_config
+            device_info or {},
+            reload_config,
+            apply_remote_config,
+            on_sync_game_ready,
         )
     except Exception as e:
         _log.error("Failed to start Supabase sync: %s", e)

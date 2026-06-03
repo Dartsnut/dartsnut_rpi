@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.sync.engine import SyncEngine
+from runtime.sync.outbox import SyncOutbox
+from runtime.sync.reducer import ReducedGameReady
 
 SOCKET_PATH = "/tmp/dartsnut-supabase-sync.sock"
 _DEFAULT_BRIDGE_BIN = os.path.join(
@@ -33,8 +36,14 @@ _connectivity_callback: Optional[Callable[[bool], None]] = None
 _remote_game_ids: Optional[set[str]] = None
 _remote_games_by_id: Optional[Dict[str, Dict[str, Any]]] = None
 _remote_game_ids_lock = threading.Lock()
+_sync_engine: Optional[SyncEngine] = None
+_on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None
 
 _log = logging.getLogger(__name__)
+
+
+def get_sync_engine() -> Optional[SyncEngine]:
+    return _sync_engine
 
 
 def _set_connected(connected: bool) -> None:
@@ -583,13 +592,28 @@ class _SyncClient:
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
         initial_state: Dict[str, Any],
+        sync_engine: SyncEngine,
+        on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None,
     ) -> None:
         self._socket_path = socket_path
         self._reload_config = reload_config
         self._on_config_updated = on_config_updated
         self._initial_state = initial_state
+        self._sync_engine = sync_engine
+        self._on_game_ready = on_game_ready
         self._conn: Optional[socket.socket] = None
         self._conn_lock = threading.Lock()
+        self._first_remote_row = True
+
+        def _outbox_send(
+            ref: str, patch: Dict[str, Any], full: bool, source: Optional[str]
+        ) -> bool:
+            return self.send_rpc_patch(ref, patch, full=full, source=source)
+
+        outbox = SyncOutbox(_outbox_send)
+        outbox.start()
+        sync_engine.attach_outbox(outbox)
+        self._outbox = outbox
 
     def start_server(self) -> None:
         def _server() -> None:
@@ -625,24 +649,57 @@ class _SyncClient:
                             payload = msg.get("payload")
                             if kind == "ready":
                                 self.send_state(self._initial_state, full=True)
-                            elif kind in ("config", "config_initial") and isinstance(
-                                payload, dict
-                            ):
-                                _remember_remote_game_ids(payload)
-                                cfg = _normalize_config_payload(payload)
-                                if kind == "config_initial":
-                                    try:
-                                        cfg = _merge_remote_and_local(payload)
-                                    except Exception:
-                                        cfg = _normalize_config_payload(payload)
+                            elif kind in (
+                                "remote_row",
+                                "config",
+                                "config_initial",
+                            ) and isinstance(payload, dict):
+                                is_first = kind == "config_initial" or (
+                                    kind == "remote_row" and self._first_remote_row
+                                )
+                                if kind == "remote_row":
+                                    self._first_remote_row = False
                                 try:
-                                    self._on_config_updated(cfg)
+                                    self._sync_engine.ingest_remote_row(
+                                        payload,
+                                        is_first_after_connect=is_first,
+                                    )
+                                    reduced = self._sync_engine.consume_pending_game_ready()
+                                    if reduced is not None and self._on_game_ready:
+                                        self._on_game_ready(reduced)
                                 except Exception:
-                                    pass
+                                    _log.exception("sync ingest failed")
                                 try:
                                     self._reload_config()
                                 except Exception:
                                     pass
+                            elif kind == "ack":
+                                ref = str(
+                                    msg.get("ref")
+                                    or (
+                                        payload.get("ref")
+                                        if isinstance(payload, dict)
+                                        else ""
+                                    )
+                                    or ""
+                                )
+                                if ref:
+                                    self._outbox.on_ack(ref)
+                            elif kind == "error":
+                                ref = str(
+                                    msg.get("ref")
+                                    or (
+                                        payload.get("ref")
+                                        if isinstance(payload, dict)
+                                        else ""
+                                    )
+                                    or ""
+                                )
+                                err = ""
+                                if isinstance(payload, dict):
+                                    err = str(payload.get("message") or "")
+                                if ref:
+                                    self._outbox.on_error(ref, err)
                             elif kind == "bridge_health" and isinstance(payload, dict):
                                 _update_rest_probe_cache(payload)
                                 _set_connected(
@@ -661,8 +718,39 @@ class _SyncClient:
         self, payload: Dict[str, Any], *, full: bool = False, source: Optional[str] = None
     ) -> bool:
         payload = _coerce_pages_games_lists(dict(payload))
-        kind = "initial_state" if full else "device_state"
-        message: Dict[str, Any] = {"kind": kind, "payload": payload}
+        if full:
+            return self.send_rpc_patch(
+                "initial",
+                payload,
+                full=True,
+                source=source,
+                legacy_kind="initial_state",
+            )
+        return self.send_rpc_patch(
+            "legacy",
+            payload,
+            full=False,
+            source=source,
+            legacy_kind="device_state",
+        )
+
+    def send_rpc_patch(
+        self,
+        ref: str,
+        payload: Dict[str, Any],
+        *,
+        full: bool = False,
+        source: Optional[str] = None,
+        legacy_kind: Optional[str] = None,
+    ) -> bool:
+        payload = _coerce_pages_games_lists(dict(payload))
+        kind = legacy_kind or "rpc_patch"
+        message: Dict[str, Any] = {
+            "kind": kind,
+            "ref": ref,
+            "payload": payload,
+            "full": full,
+        }
         source_value = str(source or "").strip()
         if source_value:
             message["source"] = source_value
@@ -710,8 +798,11 @@ def start_supabase_sync_if_available(
     device_info: Dict[str, Any],
     reload_config: Callable[[], None],
     on_config_updated: Callable[[Dict[str, Any]], None],
+    on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None,
 ) -> None:
-    ensure_supabase_sync_running(device_info, reload_config, on_config_updated)
+    ensure_supabase_sync_running(
+        device_info, reload_config, on_config_updated, on_game_ready=on_game_ready
+    )
 
 
 def publish_device_state_update(
@@ -719,7 +810,10 @@ def publish_device_state_update(
 ) -> None:
     if not isinstance(partial_state, dict) or not partial_state:
         return
-    global _client
+    global _sync_engine, _client
+    if _sync_engine is not None:
+        _sync_engine.publish_partial(partial_state, source=source)
+        return
     with _bridge_lock:
         client = _client
     if client is None:
@@ -822,8 +916,16 @@ def ensure_supabase_sync_running(
     device_info: Dict[str, Any],
     reload_config: Callable[[], None],
     on_config_updated: Callable[[Dict[str, Any]], None],
+    on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None,
 ) -> None:
-    global _client, _bridge_proc, _remote_game_ids
+    global _client, _bridge_proc, _remote_game_ids, _sync_engine, _on_game_ready
+    _on_game_ready = on_game_ready
+    _sync_engine = SyncEngine(
+        on_apply_config=on_config_updated,
+        merge_on_first_connect=_merge_remote_and_local,
+        normalize_config=_normalize_config_payload,
+        remember_remote_game_ids=_remember_remote_game_ids,
+    )
     with _bridge_lock:
         with _remote_game_ids_lock:
             global _remote_games_by_id
@@ -845,6 +947,8 @@ def ensure_supabase_sync_running(
             reload_config,
             on_config_updated,
             _build_initial_state(device_info),
+            _sync_engine,
+            on_game_ready=on_game_ready,
         )
         _set_connected(False)
         _client.start_server()
@@ -871,6 +975,7 @@ def restart_supabase_sync(
     device_info: Dict[str, Any],
     reload_config: Callable[[], None],
     on_config_updated: Callable[[Dict[str, Any]], None],
+    on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None,
 ) -> None:
     # Avoid churn when callers request a restart while the bridge is already
     # active and healthy (common during startup connectivity polling).
@@ -878,7 +983,9 @@ def restart_supabase_sync(
         return
     stop_supabase_sync()
     time.sleep(0.05)
-    ensure_supabase_sync_running(device_info, reload_config, on_config_updated)
+    ensure_supabase_sync_running(
+        device_info, reload_config, on_config_updated, on_game_ready=on_game_ready
+    )
 
 
 def stop_supabase_sync() -> None:

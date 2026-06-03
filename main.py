@@ -392,7 +392,10 @@ _remote_config_applier = RemoteDeviceConfigApplier(
             _websocket_service_registry.bluetooth_ops.disconnect_and_unpair_device
         ),
         request_config_refresh=lambda: get_remote_sync().restart_sync(
-            get_device_info() or {}, reload_config, _apply_remote_config
+            get_device_info() or {},
+            reload_config,
+            _apply_remote_config,
+            _on_sync_game_ready,
         ),
         set_time_zone=set_time_zone,
         term_game_process=term_game_process,
@@ -412,6 +415,12 @@ _remote_config_applier = RemoteDeviceConfigApplier(
 def _apply_remote_config(config: dict) -> None:
     """Apply remote configuration; implementation in remote_device_config."""
     _remote_config_applier.apply(config)
+
+
+def _on_sync_game_ready(reduced) -> None:
+    from runtime.sync.engine import SyncEngine
+
+    SyncEngine.apply_game_ready_to_ctx(_app_ctx, reduced)
 
 
 def locate_device():
@@ -695,7 +704,10 @@ def check_connection_loop():
                 try:
                     di = get_device_info()
                     get_remote_sync().restart_sync(
-                        di or {}, reload_config, _apply_remote_config
+                        di or {},
+                        reload_config,
+                        _apply_remote_config,
+                        _on_sync_game_ready,
                     )
                     request_network_state_refresh()
                 except Exception as e:
@@ -791,6 +803,7 @@ start_background_subsystems(
     check_connection_loop=check_connection_loop,
     network_state_remote_loop=network_state_remote_loop,
     apply_remote_config=_apply_remote_config,
+    on_sync_game_ready=_on_sync_game_ready,
     on_remote_connectivity_changed=_on_remote_connectivity_changed,
     request_network_state_refresh=request_network_state_refresh,
     remote_config_runtime=_remote_config_runtime,

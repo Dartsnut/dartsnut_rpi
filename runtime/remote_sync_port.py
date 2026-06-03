@@ -44,6 +44,7 @@ class RemoteSyncPort(Protocol):
         device_info: Dict[str, Any],
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
+        on_game_ready: Optional[Callable[[Any], None]] = None,
     ) -> None: ...
 
     def restart_sync(
@@ -51,6 +52,7 @@ class RemoteSyncPort(Protocol):
         device_info: Dict[str, Any],
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
+        on_game_ready: Optional[Callable[[Any], None]] = None,
     ) -> None: ...
 
     def is_bridge_active(self) -> bool: ...
@@ -84,6 +86,7 @@ class NoOpRemoteSync:
         device_info: Dict[str, Any],
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
+        on_game_ready: Optional[Callable[[Any], None]] = None,
     ) -> None:
         return None
 
@@ -92,6 +95,7 @@ class NoOpRemoteSync:
         device_info: Dict[str, Any],
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
+        on_game_ready: Optional[Callable[[Any], None]] = None,
     ) -> None:
         return None
 
@@ -127,16 +131,22 @@ class SupabaseRemoteSync:
         device_info: Dict[str, Any],
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
+        on_game_ready: Optional[Callable[[Any], None]] = None,
     ) -> None:
-        _ssb.start_supabase_sync_if_available(device_info, reload_config, on_config_updated)
+        _ssb.start_supabase_sync_if_available(
+            device_info, reload_config, on_config_updated, on_game_ready=on_game_ready
+        )
 
     def restart_sync(
         self,
         device_info: Dict[str, Any],
         reload_config: Callable[[], None],
         on_config_updated: Callable[[Dict[str, Any]], None],
+        on_game_ready: Optional[Callable[[Any], None]] = None,
     ) -> None:
-        _ssb.restart_supabase_sync(device_info, reload_config, on_config_updated)
+        _ssb.restart_supabase_sync(
+            device_info, reload_config, on_config_updated, on_game_ready=on_game_ready
+        )
 
     def is_bridge_active(self) -> bool:
         return _ssb.is_supabase_bridge_active()

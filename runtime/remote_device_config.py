@@ -443,13 +443,20 @@ class RemoteDeviceConfigApplier:
 
     @staticmethod
     def _apply_menu_ready_from_games(ctx: AppContext, games_cfg: list[dict[str, Any]]) -> None:
-        ctx.remote_menu_ready_game_ids = frozenset(
-            str(g["id"])
-            for g in games_cfg
-            if isinstance(g, dict)
-            and g.get("id")
-            and str(g.get("status", "")).strip().lower() == "ready"
+        from runtime.sync.game_ready import resolve_authoritative_ready_ids
+
+        previous = ctx.remote_menu_ready_game_ids
+        authoritative = resolve_authoritative_ready_ids(
+            previous,
+            games_cfg,
+            games_key_present=True,
         )
+        if authoritative is None:
+            return
+        if previous == authoritative:
+            ctx.reload_game_menu = True
+            return
+        ctx.remote_menu_ready_game_ids = authoritative
         ctx.reload_game_menu = True
 
     def _run_startup_game_settlement(

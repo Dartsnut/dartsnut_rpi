@@ -26,6 +26,10 @@ struct BridgeMessage {
     payload: Value,
     #[serde(default)]
     source: Option<String>,
+    #[serde(default)]
+    r#ref: Option<String>,
+    #[serde(default)]
+    full: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,7 +172,7 @@ fn rpc_apply_patch(
     full: bool,
     source_override: Option<&str>,
 ) -> Result<()> {
-    let mut patch_obj = match patch {
+    let patch_obj = match patch {
         Value::Object(obj) => obj,
         other => {
             let mut obj = serde_json::Map::new();
@@ -176,10 +180,8 @@ fn rpc_apply_patch(
             obj
         }
     };
-    if !full {
-        merge_games_patch_with_remote_state(client, cfg, &mut patch_obj);
-    }
-    let url = format!("{}/rest/v1/rpc/apply_remote_device_patch", cfg.url.trim_end_matches('/'));
+    // Games array merge is handled in Postgres (merge_games_array_by_id).
+    let url = rpc_patch_url(cfg);
     let source = source_override
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -201,6 +203,14 @@ fn rpc_apply_patch(
     Ok(())
 }
 
+fn rpc_patch_url(cfg: &SupabaseConfig) -> String {
+    format!(
+        "{}/rest/v1/rpc/apply_remote_device_patch_v2",
+        cfg.url.trim_end_matches('/')
+    )
+}
+
+#[allow(dead_code)]
 fn merge_games_patch_with_remote_state(
     client: &Client,
     cfg: &SupabaseConfig,
@@ -598,7 +608,6 @@ fn run_realtime_loop(
     };
 
     let mut backoff_seconds = 1u64;
-    let mut sent_initial = false;
     loop {
         let connect_result = connect(ws_url.as_str());
         let (mut socket, _) = match connect_result {
@@ -683,10 +692,8 @@ fn run_realtime_loop(
                         if should_filter_bridge_echo(source, &state) {
                             continue;
                         }
-                        let kind = if sent_initial { "config" } else { "config_initial" };
                         let config_payload = build_config_payload(record, &state);
-                        if send_msg(&writer, kind, config_payload).is_ok() {
-                            sent_initial = true;
+                        if send_msg(&writer, "remote_row", config_payload).is_ok() {
                             realtime_connected.store(true, Ordering::Relaxed);
                             emit_health("connected");
                         }
@@ -826,27 +833,76 @@ fn main() -> Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
+        let write_ref = msg
+            .r#ref
+            .clone()
+            .unwrap_or_else(|| "legacy".to_string());
+        let is_full = msg.full.unwrap_or(false);
         match msg.kind.as_str() {
-            "initial_state" => {
-                if let Err(e) = apply_initial_state_with_retry(
-                    &client,
-                    &cfg,
-                    msg.payload,
-                    Some(&probe_cache_main),
-                ) {
-                    eprintln!(
-                        "bridge: giving up initial state write after retries: {e}"
-                    );
+            "initial_state" | "rpc_patch" => {
+                let full = is_full || msg.kind == "initial_state";
+                let result = if full && msg.kind == "initial_state" {
+                    apply_initial_state_with_retry(
+                        &client,
+                        &cfg,
+                        msg.payload,
+                        Some(&probe_cache_main),
+                    )
+                } else {
+                    rpc_apply_patch(
+                        &client,
+                        &cfg,
+                        msg.payload,
+                        full,
+                        msg.source.as_deref(),
+                    )
+                };
+                match result {
+                    Ok(()) => {
+                        let _ = send_msg(
+                            &writer,
+                            "ack",
+                            json!({"ref": write_ref}),
+                        );
+                    }
+                    Err(e) => {
+                        let _ = send_msg(
+                            &writer,
+                            "error",
+                            json!({
+                                "ref": write_ref,
+                                "message": e.to_string(),
+                            }),
+                        );
+                    }
                 }
             }
             "device_state" => {
-                let _ = rpc_apply_patch(
+                match rpc_apply_patch(
                     &client,
                     &cfg,
                     msg.payload,
                     false,
                     msg.source.as_deref(),
-                );
+                ) {
+                    Ok(()) => {
+                        let _ = send_msg(
+                            &writer,
+                            "ack",
+                            json!({"ref": write_ref}),
+                        );
+                    }
+                    Err(e) => {
+                        let _ = send_msg(
+                            &writer,
+                            "error",
+                            json!({
+                                "ref": write_ref,
+                                "message": e.to_string(),
+                            }),
+                        );
+                    }
+                }
             }
             _ => {}
         }
@@ -925,6 +981,20 @@ mod tests {
             Some("mobile_app_test")
         );
         assert!(payload.get("games").is_some());
+    }
+
+    #[test]
+    fn rpc_patch_url_uses_v2_function() {
+        let cfg = SupabaseConfig {
+            url: "https://example.supabase.co".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+
+        assert_eq!(
+            rpc_patch_url(&cfg),
+            "https://example.supabase.co/rest/v1/rpc/apply_remote_device_patch_v2"
+        );
     }
 
     #[test]

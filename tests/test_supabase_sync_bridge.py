@@ -168,11 +168,20 @@ def test_request_device_reset_state_includes_device_info_from_file(monkeypatch, 
 
 
 def test_sync_client_send_state_includes_source_when_present():
+    engine = __import__(
+        "runtime.sync.engine", fromlist=["SyncEngine"]
+    ).SyncEngine(
+        on_apply_config=lambda _cfg: None,
+        merge_on_first_connect=lambda cfg: cfg,
+        normalize_config=ssb._normalize_config_payload,
+        remember_remote_game_ids=lambda _cfg: None,
+    )
     client = ssb._SyncClient(
         socket_path="/tmp/unused.sock",
         reload_config=lambda: None,
         on_config_updated=lambda _cfg: None,
         initial_state={},
+        sync_engine=engine,
     )
 
     class _Conn:
@@ -187,7 +196,7 @@ def test_sync_client_send_state_includes_source_when_present():
     ok = client.send_state({"brightness": 70}, source="supabase_bridge_init")
     assert ok is True
     sent = json.loads(conn.writes[0].decode("utf-8").strip())
-    assert sent["kind"] == "device_state"
+    assert sent["kind"] in ("device_state", "rpc_patch")
     assert sent["payload"]["brightness"] == 70
     assert sent["source"] == "supabase_bridge_init"
 

@@ -84,11 +84,30 @@ One-command helper:
 SUPABASE_KEY="<supabase-key>" ./scripts/run_local_supabase_e2e.sh
 ```
 
+## Sync architecture (Python-owned)
+
+- **Rust bridge** (`supabase_bridge/`): credentialed transport only — Realtime subscribe, REST RPC forward, reconnect/health, Unix socket framing. Sends inbound `remote_row` snapshots and returns `ack` / `error` for outbound `rpc_patch` / `initial_state` / `device_state`.
+- **Python sync engine** (`runtime/sync/`): tokenizes raw rows into semantic events, reduces them with timestamp/dedupe caches, applies firmware config, and queues outbound patches through a retry **outbox** when the socket is down.
+- **Stored JSON schema** in `remote_devices.state` is unchanged. Older firmware keeps using the legacy `apply_remote_device_patch` RPC with shallow merge semantics. New firmware uses `apply_remote_device_patch_v2`, which merges partial `games` arrays **by `id`** (see migration `20260603120000_merge_games_array_by_id.sql`) so single-game status patches cannot wipe the full games list during network failures.
+- **Game menu resilience**: transient snapshots where all games are `playing`/`downloading` no longer clear the on-device ready set; authoritative empty lists still apply.
+
+### Unix socket message kinds
+
+| Direction | Kind | Purpose |
+|-----------|------|---------|
+| Rust → Python | `ready` | Bridge connected; Python sends initial state |
+| Rust → Python | `remote_row` | Raw remote device state + row metadata (`updated_at`, `last_update_source`) |
+| Rust → Python | `bridge_health` | WS/REST connectivity (`state`, `rest_probe_ok`, `rest_latency_ms`) |
+| Rust → Python | `ack` / `error` | Outbound RPC result (`ref` correlates to Python outbox entry) |
+| Python → Rust | `initial_state` / `rpc_patch` / `device_state` | Outbound state patch (with optional `ref`, `full`, `source`) |
+
+Legacy kinds `config` / `config_initial` are still accepted on the Python side for older bridge binaries.
+
 ## Realtime inbound config
 
 - The Rust bridge subscribes to Supabase Realtime (`postgres_changes`) on `public.remote_devices`.
 - Subscription is filtered to this device only: `device_id=eq.<BLE_MAC_UPPER>`.
-- Inbound rows where `last_update_source = 'supabase_bridge'` are ignored to prevent self-echo loops.
+- Inbound rows where `last_update_source = 'supabase_bridge'` are ignored to prevent self-echo loops (Python reducer also dedupes bridge snapshots).
 - Bridge auto-reconnects with backoff and emits `bridge_health` state over the Unix socket.
 
 ## Device ID behavior
