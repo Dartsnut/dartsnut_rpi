@@ -418,9 +418,12 @@ def _apply_remote_config(config: dict) -> None:
 
 
 def _on_sync_game_ready(reduced) -> None:
-    from runtime.sync.engine import SyncEngine
+    from supabase_sync_bridge import get_sync_engine
 
-    SyncEngine.apply_game_ready_to_ctx(_app_ctx, reduced)
+    engine = get_sync_engine()
+    if engine is None:
+        return
+    engine.apply_game_ready_to_ctx(_app_ctx, reduced)
 
 
 def locate_device():
