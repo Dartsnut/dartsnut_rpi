@@ -245,11 +245,12 @@ require_allowlist_paths_exist() {
 stage_allowlist_only() {
   local p
   log "clearing index and staging allowlist only"
+  log "note: following 'rm' lines are git rm --cached (index only); files remain on disk"
   # Unstage squash result, keep merged working tree.
   git reset HEAD
   # Drop all tracked paths from index; working tree unchanged.
   while IFS= read -r -d '' f; do
-    git rm -f --cached -- "${f}"
+    git rm -f --cached -- "${f}" >/dev/null 2>&1 || true
   done < <(git ls-files -z)
   for p in "${ALLOWLIST[@]}"; do
     git add -- "${p}"
@@ -282,7 +283,13 @@ assert_scripts_allowlist_only() {
 }
 
 assert_index_excludes_legacy_requirements() {
-  if git diff --cached --name-only | grep -qx 'requirements.txt'; then
+  # Staging a deletion of requirements.txt is correct; staging its content is not.
+  local legacy
+  legacy="$(git diff --cached --name-only --diff-filter=ACMR | awk '
+    $0 == "requirements.txt" || $0 == "requirement.txt" { print }
+  ' || true)"
+  if [[ -n "${legacy}" ]]; then
+    printf '%s\n' "${legacy}" >&2
     fail "staged changes include legacy requirements.txt (replaced by pyproject.toml + uv.lock)"
   fi
 }
