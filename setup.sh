@@ -120,7 +120,6 @@ fi
 echo "== System packages / Python (uv) =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
 setup_uv_project
-UV_BIN="$(command -v uv)"
 
 echo "== Kernel / device configuration =="
 
