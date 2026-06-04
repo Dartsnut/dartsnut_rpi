@@ -47,6 +47,19 @@ def parse_iso_ts(value: Any) -> Optional[datetime]:
     return None
 
 
+def resolve_snapshot_updated_at(config: Any) -> Optional[datetime]:
+    """Use the newer of row updated_at and state.device_updated_at."""
+    if not isinstance(config, dict):
+        return None
+    row_at = parse_iso_ts(config.get("updated_at"))
+    device_at = parse_iso_ts(config.get("device_updated_at"))
+    if row_at is None:
+        return device_at
+    if device_at is None:
+        return row_at
+    return row_at if row_at > device_at else device_at
+
+
 def is_remote_reset_confirmed(config: dict) -> bool:
     if not isinstance(config, dict):
         return False
@@ -126,26 +139,9 @@ def _utc_now() -> datetime:
 
 def snapshot_dedupe_fingerprint(config: dict) -> str:
     """Stable fingerprint for duplicate remote snapshot suppression."""
-    games = normalize_games_list(config)
-    game_part = sorted(
-        (
-            str(g.get("id") or ""),
-            str(g.get("status") or "").strip().lower(),
-            str(g.get("version") or ""),
-        )
-        for g in games
-        if isinstance(g, dict)
-    )
-    return json.dumps(
-        {
-            "updated_at": config.get("updated_at") or config.get("device_updated_at"),
-            "last_update_source": config.get("last_update_source"),
-            "games": game_part,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
+    from runtime.sync.fingerprint import snapshot_content_fingerprint
+
+    return snapshot_content_fingerprint(config)
 
 
 def note_local_game_transition(
@@ -331,6 +327,65 @@ class RemoteDeviceConfigApplier:
     def runtime(self) -> RemoteConfigRuntimeState:
         return self._runtime
 
+    def _reconcile_downloading_games(self, games_cfg: list[dict[str, Any]]) -> None:
+        """
+        Resume or clear remote ``downloading`` after interrupted downloads.
+
+        Startup settlement intentionally leaves existing ``downloading`` rows
+        untouched, and the first post-restart snapshot may skip game commands.
+        """
+        deps = self._deps
+        rt = self._runtime
+        for g in games_cfg:
+            if not isinstance(g, dict):
+                continue
+            game_id = str(g.get("id") or "").strip()
+            if not game_id:
+                continue
+            if str(g.get("status") or "").strip().lower() != "downloading":
+                continue
+            expected_version = str(g.get("version") or "").strip()
+            rt.remote_downloading_game_ids.add(game_id)
+
+            if deps.local_game_version_matches(game_id, expected_version):
+                _log.info(
+                    "remote config: reconcile downloading->ready game_id=%s reason=local_version_matches",
+                    game_id,
+                )
+                try:
+                    deps.request_set_game_status(game_id, "ready")
+                except Exception as e:
+                    _log.warning(
+                        "remote config: reconcile ready publish failed game_id=%s: %s",
+                        game_id,
+                        e,
+                    )
+                rt.remote_downloading_game_ids.discard(game_id)
+                continue
+
+            try:
+                ok = deps.ensure_game_downloaded(game_id, expected_version)
+            except Exception:
+                _log.exception(
+                    "remote config: reconcile download exception game_id=%s",
+                    game_id,
+                )
+                ok = False
+            if ok:
+                _log.info(
+                    "remote config: reconcile downloading->ready game_id=%s reason=download_complete",
+                    game_id,
+                )
+                try:
+                    deps.request_set_game_status(game_id, "ready")
+                except Exception as e:
+                    _log.warning(
+                        "remote config: reconcile ready publish failed game_id=%s: %s",
+                        game_id,
+                        e,
+                    )
+                rt.remote_downloading_game_ids.discard(game_id)
+
     def _publish_startup_recovery_game_status(
         self,
         game_id: str,
@@ -443,13 +498,20 @@ class RemoteDeviceConfigApplier:
 
     @staticmethod
     def _apply_menu_ready_from_games(ctx: AppContext, games_cfg: list[dict[str, Any]]) -> None:
-        ctx.remote_menu_ready_game_ids = frozenset(
-            str(g["id"])
-            for g in games_cfg
-            if isinstance(g, dict)
-            and g.get("id")
-            and str(g.get("status", "")).strip().lower() == "ready"
+        from runtime.sync.game_ready import resolve_authoritative_ready_ids
+
+        previous = ctx.remote_menu_ready_game_ids
+        authoritative = resolve_authoritative_ready_ids(
+            previous,
+            games_cfg,
+            games_key_present=True,
         )
+        if authoritative is None:
+            return
+        if previous == authoritative:
+            ctx.reload_game_menu = True
+            return
+        ctx.remote_menu_ready_game_ids = authoritative
         ctx.reload_game_menu = True
 
     def _run_startup_game_settlement(
@@ -489,9 +551,8 @@ class RemoteDeviceConfigApplier:
         deps = self._deps
         rt = self._runtime
         ctx = deps.app_ctx
-        # Prefer row-level updated_at from remote sync payloads. device_updated_at is
-        # local device state time and may remain stale across remote row updates.
-        cfg_ts = parse_iso_ts(config.get("updated_at") or config.get("device_updated_at"))
+        # App writes often bump state.device_updated_at only; row updated_at may lag.
+        cfg_ts = resolve_snapshot_updated_at(config)
 
         if (
             deps.is_reset_in_progress()
@@ -680,6 +741,8 @@ class RemoteDeviceConfigApplier:
                 games_cfg = []
             else:
                 games_cfg = normalize_games_list(config)
+                if games_cfg and (skip_game_commands or skip_games_dedupe):
+                    self._reconcile_downloading_games(games_cfg)
                 if not skip_game_commands:
                     self._apply_menu_ready_from_games(ctx, games_cfg)
 

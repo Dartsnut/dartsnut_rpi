@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 Environment=DARTSNUT_LOG_LEVEL=INFO
-ExecStart=/home/rpi/dartsnut_rpi/venv0/bin/python /home/rpi/dartsnut_rpi/main.py
+ExecStart=/home/rpi/dartsnut_rpi/uv run main.py
 Restart=always
 
 [Install]

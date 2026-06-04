@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
 from states.base import BaseState
+from states.settings import should_show_bridge_disconnect_icon
 
 
 def _check_firmware_updated_flag() -> bool:
@@ -81,6 +82,20 @@ class MenuState(BaseState):
         draw.text((text_x, 152), text, fill=(255, 255, 255), font=assets.font8)
         if _check_firmware_updated_flag():
             _draw_firmware_updated_text(draw, -1, 120, assets.font8)
+        if not ctx.wifi_connected:
+            if (time.time() % 2) < 1:
+                menu_image.paste(
+                    assets.wifi_disconnect_icon,
+                    (117, 0),
+                    assets.wifi_disconnect_icon.convert("RGBA"),
+                )
+        elif should_show_bridge_disconnect_icon(ctx):
+            if (time.time() % 2) < 1:
+                menu_image.paste(
+                    assets.internet_disconnect_icon,
+                    (117, 0),
+                    assets.internet_disconnect_icon.convert("RGBA"),
+                )
         ctx.display.update_frame_buffer(menu_image)
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:

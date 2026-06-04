@@ -1,0 +1,14 @@
+# Dartsnut managed default app dependencies.
+[project]
+name = "dartsnut-game-default"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy==2.4.2",
+    "pillow==12.1.1",
+    "pydartsnut==1.2.1",
+    "pygame-ce==2.5.7",
+]
+
+[tool.uv]
+package = false

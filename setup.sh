@@ -2,10 +2,12 @@
 
 REPO_DIR="/home/rpi/dartsnut_rpi"
 SERVICES_DIR="${REPO_DIR}/services"
-VENV_DIR="${REPO_DIR}/venv0"
-VENV_PIP="${VENV_DIR}/bin/pip"
+UV_ENV_SCRIPT="${REPO_DIR}/scripts/uv_env.sh"
 SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
 INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
+
+# shellcheck source=scripts/uv_env.sh
+source "${UV_ENV_SCRIPT}"
 
 SYSTEMD_UNITS_UPDATED=0
 
@@ -115,13 +117,9 @@ else
     echo "quiet already present in /boot/firmware/cmdline.txt"
 fi
 
-echo "== System packages / Python venv =="
+echo "== System packages / Python (uv) =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
-
-sudo python3 -m venv "${VENV_DIR}"
-
-sudo "${VENV_PIP}" install --upgrade pip
-sudo "${VENV_PIP}" install -r "${REPO_DIR}/requirements.txt"
+setup_uv_project
 
 echo "== Kernel / device configuration =="
 
@@ -182,8 +180,7 @@ sudo git config --global --add safe.directory "${REPO_DIR}"
 
 CRON_SCHEDULE="0 3 * * *"  # 3am every day
 UPDATE_SCRIPT="${REPO_DIR}/check_and_update.py"
-PYTHON_INTERPRETER="${VENV_DIR}/bin/python"
-CRON_ENTRY="${CRON_SCHEDULE} ${PYTHON_INTERPRETER} ${UPDATE_SCRIPT} >> /var/log/dartsnut_update.log 2>&1"
+CRON_ENTRY="${CRON_SCHEDULE} ${UV_BIN} run --directory ${REPO_DIR} ${UPDATE_SCRIPT} >> /var/log/dartsnut_update.log 2>&1"
 
 EXISTING_CRON=$(sudo crontab -l 2>/dev/null || echo "")
 

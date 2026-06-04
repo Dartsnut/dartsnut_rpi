@@ -15,7 +15,17 @@ import tempfile
 import requests
 from PIL import Image
 
-from core.helpers import set_pdeathsig, get_user_data_store_path
+from core.helpers import (
+    get_user_data_store_path,
+    app_dir,
+    repo_root,
+    uv_run_script_command,
+    app_python_command,
+    subprocess_launch_kwargs,
+    signal_process_group,
+    terminate_process_group,
+)
+from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
 from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
@@ -163,6 +173,8 @@ def download_app(url: str, md5: str) -> bool:
             )
         except subprocess.CalledProcessError:
             return False
+        if not ensure_app_venv_after_extract(download_path, url=url):
+            _log.warning("download_app: venv setup failed for url=%s", url)
         return True
     except Exception as e:
         _log.error("Error downloading app: %s", e)
@@ -179,8 +191,7 @@ def _kill_widget_process(widget_entry: dict, widget_id: str, reason: str = "") -
                 widget_id,
                 f" ({reason})" if reason else "",
             )
-            os.kill(process.pid, signal.SIGCONT)
-            os.kill(process.pid, signal.SIGKILL)
+            terminate_process_group(process.pid)
         shm = widget_entry.get("shm")
         if shm:
             try:
@@ -323,6 +334,9 @@ def restart_widget_process(
     if not os.path.isdir(widget_path):
         _request_missing_widget_download(widget_id)
         return
+    if not ensure_app_venv(widget_id):
+        _log.error("Failed to set up virtualenv for widget %s", widget_id)
+        return
     try:
         page_uuid = page["uuid"]
         shm_name = f"widget_{page_uuid}_{widget_index}_shm"
@@ -340,10 +354,7 @@ def restart_widget_process(
                 shared_memory.SharedMemory(name=name).unlink()
         shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
         shm.buf[0] = 1
-        command = [
-            os.path.join(os.getcwd(), "venv0/bin/python"),
-            os.path.join(os.getcwd(), "apps/", widget_id, "main.py"),
-        ]
+        command = app_python_command(widget_id, "main.py")
         command.extend(
             ["--params", json.dumps(process_widget_fields(widget_id, widget["fields"]))]
         )
@@ -351,8 +362,8 @@ def restart_widget_process(
         command.extend(["--data-store", get_user_data_store_path(widget_id)])
         process = subprocess.Popen(
             command,
-            cwd=os.path.join("./apps/", widget_id),
-            preexec_fn=set_pdeathsig,
+            cwd=app_dir(widget_id),
+            **subprocess_launch_kwargs(),
         )
         widget_entry["process"] = process
         widget_entry["shm"] = shm
@@ -521,14 +532,11 @@ def start_page_process(page: dict) -> dict:
                 pass
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
-                command = [
-                    os.path.join(os.getcwd(), "venv0/bin/python"),
-                    os.path.join(os.getcwd(), "default.py"),
-                ]
+                command = uv_run_script_command("default.py")
                 command.extend(["--params", "{}", "--shm", shm_name])
                 command.extend(["--data-store", get_user_data_store_path("0")])
                 process = subprocess.Popen(
-                    command, cwd=os.getcwd(), preexec_fn=set_pdeathsig
+                    command, cwd=repo_root(), **subprocess_launch_kwargs()
                 )
                 widgets.append(
                     {
@@ -556,6 +564,18 @@ def start_page_process(page: dict) -> dict:
                 }
             )
             continue
+        if not ensure_app_venv(widget["id"]):
+            _log.error("Failed to set up virtualenv for widget %s", widget["id"])
+            widgets.append(
+                {
+                    "process": None,
+                    "shm": None,
+                    "widget": widget,
+                    "launched": False,
+                    "has_small_widget": None,
+                }
+            )
+            continue
         if os.path.isdir(widget_path):
             page_uuid = page["uuid"]
             shm_name = f"widget_{page_uuid}_{widget_index}_shm"
@@ -571,10 +591,7 @@ def start_page_process(page: dict) -> dict:
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
                 shm.buf[0] = 1
-                command = [
-                    os.path.join(os.getcwd(), "venv0/bin/python"),
-                    os.path.join(os.getcwd(), "apps/", widget["id"], "main.py"),
-                ]
+                command = app_python_command(widget["id"], "main.py")
                 command.extend(
                     [
                         "--params",
@@ -587,8 +604,8 @@ def start_page_process(page: dict) -> dict:
                 )
                 process = subprocess.Popen(
                     command,
-                    cwd=os.path.join("./apps/", widget["id"]),
-                    preexec_fn=set_pdeathsig,
+                    cwd=app_dir(widget["id"]),
+                    **subprocess_launch_kwargs(),
                 )
                 widgets.append(
                     {
@@ -616,7 +633,7 @@ def start_page_process(page: dict) -> dict:
             proc = w.get("process")
             if proc is None:
                 continue
-            os.kill(proc.pid, signal.SIGSTOP)
+            signal_process_group(proc.pid, signal.SIGSTOP)
             w["launched"] = False
         except Exception as e:
             _log.warning("Error pausing widget process: %s", e)
@@ -662,8 +679,7 @@ def term_widget_processes(pages: list) -> None:
             try:
                 p = widget.get("process")
                 if p and p.poll() is None:
-                    os.kill(p.pid, signal.SIGCONT)
-                    os.kill(p.pid, signal.SIGKILL)
+                    terminate_process_group(p.pid)
                 shm = widget.get("shm")
                 if shm:
                     shm.close()
