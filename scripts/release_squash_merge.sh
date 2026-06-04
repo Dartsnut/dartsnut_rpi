@@ -80,7 +80,15 @@ fail() {
 }
 
 index_lock_mtime() {
-  python3 -c "import os, sys; print(int(os.path.getmtime(sys.argv[1])))" "$1"
+  # Lock may disappear between -f test and mtime (git finished); treat as unlocked.
+  python3 -c "
+import os, sys
+p = sys.argv[1]
+try:
+    print(int(os.path.getmtime(p)))
+except FileNotFoundError:
+    raise SystemExit(1)
+" "$1"
 }
 
 release_clear_stale_index_lock() {
@@ -88,7 +96,7 @@ release_clear_stale_index_lock() {
   local now mtime
   [[ -f "${GIT_INDEX_LOCK}" ]] || return 0
   now=$(date +%s)
-  mtime="$(index_lock_mtime "${GIT_INDEX_LOCK}")"
+  mtime="$(index_lock_mtime "${GIT_INDEX_LOCK}" 2>/dev/null)" || return 0
   age=$((now - mtime))
   if (( age < 15 )); then
     return 0
