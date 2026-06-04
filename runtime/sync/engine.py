@@ -106,9 +106,6 @@ class SyncEngine:
                 applied = True
             except Exception as e:
                 _log.warning("sync engine: apply events failed: %s", e)
-            for event in accepted:
-                if isinstance(event, FullSnapshot):
-                    self.reducer.cache.has_seen_remote_row = True
         self._pending_game_ready = game_ready
         return applied or game_ready is not None
 
