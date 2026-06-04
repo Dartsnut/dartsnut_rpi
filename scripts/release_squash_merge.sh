@@ -4,9 +4,10 @@
 #
 # Pi layout (see setup.sh / update.sh): repo lives at /home/rpi/dartsnut_rpi.
 # Release branch carries only what is needed to run main.py, setup.sh, update.sh,
-# systemd units, assets, Python trees, pyproject.toml, uv.lock, system-packages, and the
-# compiled Supabase sync binary at ./bridge (no supabase/ or supabase_bridge/ in
-# the release commit).
+# systemd units, assets, Python trees (including core/app_defaults and runtime/sync),
+# vendored ./uv + uv.sha256, pyproject.toml, uv.lock, scripts/uv_env.sh,
+# system-packages, and the compiled Supabase sync binary at ./bridge (no supabase/,
+# supabase_bridge/, tests/, docs/, or legacy requirements.txt in the release commit).
 #
 # Flow: checkout release -> ff-only origin/release -> merge --squash master ->
 # optional cargo bridge build -> clear index -> stage allowlist only -> verify ->
@@ -151,10 +152,15 @@ require_allowlist_paths_exist() {
     if [[ ! -e "${REPO_ROOT}/${p}" ]]; then
       printf '[release-squash] missing path after merge/build: %s\n' "${p}" >&2
       missing=1
+      continue
+    fi
+    if [[ "${p}" == "uv" && ! -x "${REPO_ROOT}/${p}" ]]; then
+      printf '[release-squash] vendored uv is not executable: %s\n' "${p}" >&2
+      missing=1
     fi
   done
   if [[ "${missing}" -ne 0 ]]; then
-    fail "one or more allowlist paths are missing; fix master or allowlist"
+    fail "one or more allowlist paths are missing or invalid; fix master or allowlist"
   fi
 }
 
@@ -186,10 +192,20 @@ assert_index_excludes_supabase_trees() {
 
 assert_scripts_allowlist_only() {
   local extra
-  extra="$(git diff --cached --name-only | awk '/^scripts\// && $0 != "scripts/install_system_packages.sh" { print }' || true)"
+  extra="$(git diff --cached --name-only | awk '
+    /^scripts\// &&
+      $0 != "scripts/install_system_packages.sh" &&
+      $0 != "scripts/uv_env.sh" { print }
+  ' || true)"
   if [[ -n "${extra}" ]]; then
     printf '%s\n' "${extra}" >&2
-    fail "unexpected scripts/ paths staged (only scripts/install_system_packages.sh allowed)"
+    fail "unexpected scripts/ paths staged (only scripts/install_system_packages.sh and scripts/uv_env.sh allowed)"
+  fi
+}
+
+assert_index_excludes_legacy_requirements() {
+  if git diff --cached --name-only | grep -qx 'requirements.txt'; then
+    fail "staged changes include legacy requirements.txt (replaced by pyproject.toml + uv.lock)"
   fi
 }
 
@@ -251,6 +267,7 @@ main() {
 
   assert_index_excludes_supabase_trees
   assert_scripts_allowlist_only
+  assert_index_excludes_legacy_requirements
 
   if git diff --cached --quiet; then
     fail "no changes staged after allowlist; nothing to commit"
