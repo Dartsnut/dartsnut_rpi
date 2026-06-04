@@ -79,16 +79,16 @@ fail() {
   exit 1
 }
 
+index_lock_mtime() {
+  python3 -c "import os, sys; print(int(os.path.getmtime(sys.argv[1])))" "$1"
+}
+
 release_clear_stale_index_lock() {
   local age=0
   local now mtime
   [[ -f "${GIT_INDEX_LOCK}" ]] || return 0
   now=$(date +%s)
-  if stat -f %m "${GIT_INDEX_LOCK}" >/dev/null 2>&1; then
-    mtime=$(stat -f %m "${GIT_INDEX_LOCK}")
-  else
-    mtime=$(stat -c %Y "${GIT_INDEX_LOCK}")
-  fi
+  mtime="$(index_lock_mtime "${GIT_INDEX_LOCK}")"
   age=$((now - mtime))
   if (( age < 15 )); then
     return 0
