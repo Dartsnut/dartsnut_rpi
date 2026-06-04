@@ -75,29 +75,86 @@ def get_local_game_version(gameid: str) -> str:
         return ""
 
 
+def compare_game_versions(left: str, right: str) -> int:
+    """
+    Compare dotted numeric game versions (e.g. 1.2.3).
+
+    Returns -1, 0, or 1. Non-numeric versions fall back to string ordering.
+    """
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if a == b:
+        return 0
+
+    def _parts(value: str) -> tuple[int, ...] | None:
+        out: list[int] = []
+        for piece in value.split("."):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if not piece.isdigit():
+                return None
+            out.append(int(piece))
+        return tuple(out)
+
+    ap = _parts(a)
+    bp = _parts(b)
+    if ap is not None and bp is not None:
+        width = max(len(ap), len(bp))
+        ap = ap + (0,) * (width - len(ap))
+        bp = bp + (0,) * (width - len(bp))
+        if ap > bp:
+            return 1
+        if ap < bp:
+            return -1
+        return 0
+    return (a > b) - (a < b)
+
+
+def resolve_game_version_for_sync(game_id: str, remote_version: str = "") -> str:
+    """Prefer the higher of local and remote version strings for Supabase publish."""
+    local = get_local_game_version(game_id)
+    remote = str(remote_version or "").strip()
+    if not remote:
+        return local
+    if not local:
+        return remote
+    return local if compare_game_versions(local, remote) >= 0 else remote
+
+
 def local_game_version_matches(gameid: str, remote_version: str) -> bool:
-    """Return True only when local game exists and versions match exactly."""
+    """Return True when local game exists and version is >= remote target."""
     expected = str(remote_version or "").strip()
     if not expected:
         return False
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     if not os.path.isdir(game_path):
         return False
-    return get_local_game_version(gameid) == expected
+    local = get_local_game_version(gameid)
+    if not local:
+        return False
+    return compare_game_versions(local, expected) >= 0
 
 
 def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
-    """Ensure local game exists and matches remote_version when provided."""
+    """Ensure local game exists and is at least remote_version when provided."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     expected_version = str(remote_version or "").strip()
     if os.path.isdir(game_path):
         if not expected_version:
             return True
         local_version = get_local_game_version(gameid)
-        if local_version == expected_version:
+        if compare_game_versions(local_version, expected_version) >= 0:
+            if local_version != expected_version:
+                _log.info(
+                    "Game %s local version %s >= target %s; treating as up to date",
+                    gameid,
+                    local_version or "(empty)",
+                    expected_version,
+                )
             return True
         _log.info(
-            "Game %s local version %s != target %s; downloading update",
+            "Game %s local version %s < target %s; downloading update",
             gameid,
             local_version or "(empty)",
             expected_version,
@@ -122,7 +179,8 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     except Exception as e:
         _log.warning("Error fetching game download info: %s", e)
     if expected_version:
-        return get_local_game_version(gameid) == expected_version
+        local = get_local_game_version(gameid)
+        return compare_game_versions(local, expected_version) >= 0
     return os.path.isdir(game_path)
 
 

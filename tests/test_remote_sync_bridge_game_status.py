@@ -128,6 +128,33 @@ def test_request_set_all_games_ready_prefers_local_version_over_remote(monkeypat
     assert sent == [{"games": [{"id": "chess", "version": "2.0.0", "status": "ready"}]}]
 
 
+def test_request_set_game_status_publishes_higher_local_version(monkeypatch):
+    sent = []
+
+    monkeypatch.setattr(
+        "game_lifecycle.get_games_summary",
+        lambda: [{"id": "chess", "version": "1.0.0", "status": "ready"}],
+    )
+    monkeypatch.setattr(
+        "game_lifecycle.get_local_game_version",
+        lambda _gid: "2.5.0",
+    )
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload: sent.append(payload),
+    )
+    rsb._ssb._remember_remote_game_ids(
+        {"games": [{"id": "chess", "status": "downloading", "version": "2.0.0"}]}
+    )
+
+    rsb.request_set_game_status("chess", "ready")
+
+    assert sent == [
+        {"games": [{"id": "chess", "version": "2.5.0", "status": "ready"}]}
+    ]
+
+
 def test_request_set_all_games_ready_skips_when_remote_ids_unknown(monkeypatch):
     sent = []
     monkeypatch.setattr(rsb._ssb, "_remote_game_ids", None)

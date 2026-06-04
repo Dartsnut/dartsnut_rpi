@@ -829,17 +829,22 @@ def request_set_game_status(game_id: str, status: str) -> None:
     if not game_id:
         return
     try:
-        from game_lifecycle import get_games_summary
+        from game_lifecycle import get_games_summary, resolve_game_version_for_sync
 
         games = get_games_summary()
         remote_ids = _current_remote_game_ids()
         if remote_ids is not None and str(game_id) not in remote_ids:
             return
+        remote_games = _current_remote_games_by_id() or {}
+        remote_entry = remote_games.get(str(game_id), {})
+        remote_version = str(remote_entry.get("version") or "").strip()
         game_payload = {"id": game_id, "version": "", "status": status}
         for g in games:
             if isinstance(g, dict) and g.get("id") == game_id:
-                game_payload["version"] = str(g.get("version") or "")
+                if not remote_version:
+                    remote_version = str(g.get("version") or "").strip()
                 break
+        game_payload["version"] = resolve_game_version_for_sync(game_id, remote_version)
         publish_device_state_update({"games": [game_payload]})
     except Exception:
         pass
