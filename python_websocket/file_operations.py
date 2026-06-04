@@ -16,6 +16,7 @@ from python_websocket.error_handler import (
 )
 
 from machine_state_service import get_machine_state_service
+from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
 
 _log = logging.getLogger(__name__)
 
@@ -433,6 +434,9 @@ def download_app(url, md5):
         if os.path.isfile(download_path):
             os.remove(download_path)
 
+        if not ensure_app_venv_after_extract(None, url=url):
+            _log.warning("download_app: venv setup failed for url=%s", url)
+
         return {"action": "download_app", "url": url, "message": "Success"}
     except Exception as e:
         return handle_exception("download_app", e, "Download failed", url=url)
@@ -584,6 +588,14 @@ def _download_game_worker(game_id):
                 if download_path and os.path.isfile(download_path):
                     os.remove(download_path)
 
+            if not ensure_app_venv(game_id):
+                _set_download_progress(
+                    game_id,
+                    status="error",
+                    error="Virtualenv setup failed",
+                )
+                return
+
             version = _read_version_from_conf(game_id)
             _set_download_progress(
                 game_id, progress=100, status="completed", error=None, version=version
@@ -709,6 +721,14 @@ def _download_game_worker_with_url(game_id, url, md5):
         finally:
             if download_path and os.path.isfile(download_path):
                 os.remove(download_path)
+
+        if not ensure_app_venv(game_id):
+            _set_download_progress(
+                game_id,
+                status="error",
+                error="Virtualenv setup failed",
+            )
+            return
 
         version = _read_version_from_conf(game_id)
         _set_download_progress(

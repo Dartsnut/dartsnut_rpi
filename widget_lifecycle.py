@@ -20,11 +20,12 @@ from core.helpers import (
     app_dir,
     repo_root,
     uv_run_script_command,
-    uv_run_app_command,
+    app_python_command,
     subprocess_launch_kwargs,
     signal_process_group,
     terminate_process_group,
 )
+from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
 from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
@@ -172,6 +173,8 @@ def download_app(url: str, md5: str) -> bool:
             )
         except subprocess.CalledProcessError:
             return False
+        if not ensure_app_venv_after_extract(download_path, url=url):
+            _log.warning("download_app: venv setup failed for url=%s", url)
         return True
     except Exception as e:
         _log.error("Error downloading app: %s", e)
@@ -331,6 +334,9 @@ def restart_widget_process(
     if not os.path.isdir(widget_path):
         _request_missing_widget_download(widget_id)
         return
+    if not ensure_app_venv(widget_id):
+        _log.error("Failed to set up virtualenv for widget %s", widget_id)
+        return
     try:
         page_uuid = page["uuid"]
         shm_name = f"widget_{page_uuid}_{widget_index}_shm"
@@ -348,7 +354,7 @@ def restart_widget_process(
                 shared_memory.SharedMemory(name=name).unlink()
         shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
         shm.buf[0] = 1
-        command = uv_run_app_command(widget_id, "main.py")
+        command = app_python_command(widget_id, "main.py")
         command.extend(
             ["--params", json.dumps(process_widget_fields(widget_id, widget["fields"]))]
         )
@@ -558,6 +564,18 @@ def start_page_process(page: dict) -> dict:
                 }
             )
             continue
+        if not ensure_app_venv(widget["id"]):
+            _log.error("Failed to set up virtualenv for widget %s", widget["id"])
+            widgets.append(
+                {
+                    "process": None,
+                    "shm": None,
+                    "widget": widget,
+                    "launched": False,
+                    "has_small_widget": None,
+                }
+            )
+            continue
         if os.path.isdir(widget_path):
             page_uuid = page["uuid"]
             shm_name = f"widget_{page_uuid}_{widget_index}_shm"
@@ -573,7 +591,7 @@ def start_page_process(page: dict) -> dict:
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
                 shm.buf[0] = 1
-                command = uv_run_app_command(widget["id"], "main.py")
+                command = app_python_command(widget["id"], "main.py")
                 command.extend(
                     [
                         "--params",

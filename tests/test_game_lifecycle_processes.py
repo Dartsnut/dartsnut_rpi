@@ -34,7 +34,9 @@ class _FakeShm:
 
 def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "apps" / "chess").mkdir(parents=True)
+    app_dir = tmp_path / "apps" / "chess"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
     created = {}
     tracked = []
     popen_calls = []
@@ -54,6 +56,7 @@ def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     monkeypatch.setattr(gl.assets, "create_loading_image", lambda: _LoadingImg())
     monkeypatch.setattr(gl, "start_game_tracking", lambda gid: tracked.append(gid))
     monkeypatch.setattr(gl, "get_user_data_store_path", lambda gid: f"/tmp/{gid}.json")
+    monkeypatch.setattr(gl, "ensure_app_venv", lambda gid, force=False: True)
     monkeypatch.setattr(
         gl.subprocess,
         "Popen",
@@ -66,7 +69,19 @@ def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     assert game["launched"] is False
     assert tracked == ["chess"]
     assert popen_calls and popen_calls[0][1] == str(tmp_path / "apps" / "chess")
+    assert popen_calls[0][0][0].endswith("apps/chess/.venv/bin/python")
+    assert popen_calls[0][0][1] == "main.py"
     assert isinstance(created["shm"].buf, bytearray)
+
+
+def test_start_game_process_returns_none_when_venv_setup_fails(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "chess"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setattr(gl, "ensure_app_venv", lambda gid, force=False: False)
+
+    assert gl.start_game_process("chess") is None
 
 
 def test_term_game_process_kills_running_process_and_cleans_resources(monkeypatch):

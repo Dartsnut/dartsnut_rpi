@@ -11,10 +11,11 @@ import requests
 from core.helpers import (
     get_user_data_store_path,
     app_dir,
-    uv_run_app_command,
+    app_python_command,
     subprocess_launch_kwargs,
     terminate_process_group,
 )
+from core.app_env import ensure_app_venv
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -196,6 +197,9 @@ def start_game_process(gameid: str) -> dict:
         ensure_game_downloaded(gameid)
     if not os.path.isdir(game_path):
         return None
+    if not ensure_app_venv(gameid):
+        _log.error("Failed to set up virtualenv for game %s", gameid)
+        return None
     shm_name = "game_shm"
     shm_size = 128 * 160 * 3 + 1
     try:
@@ -210,7 +214,7 @@ def start_game_process(gameid: str) -> dict:
         img_bytes = loading_image.tobytes()
         shm.buf[1 : 1 + len(img_bytes)] = img_bytes
         shm.buf[0] = 0
-        command = uv_run_app_command(gameid, "main.py")
+        command = app_python_command(gameid, "main.py")
         command.extend(["--shm", shm_name])
         command.extend(["--data-store", get_user_data_store_path(gameid)])
         process = subprocess.Popen(

@@ -16,7 +16,7 @@ def set_pdeathsig():
 
 
 def signal_process_group(pid: int, sig: int) -> None:
-    """Signal a subprocess and its children (e.g. uv run -> python)."""
+    """Signal a subprocess and its children."""
     if pid <= 0:
         return
     try:
@@ -33,13 +33,13 @@ def signal_process_group(pid: int, sig: int) -> None:
 
 
 def terminate_process_group(pid: int) -> None:
-    """Force-stop a subprocess tree launched via uv run."""
+    """Force-stop a subprocess tree (app python or uv run wrapper)."""
     signal_process_group(pid, signal.SIGCONT)
     signal_process_group(pid, signal.SIGKILL)
 
 
 def subprocess_launch_kwargs() -> dict:
-    """Common Popen options for uv-run app subprocesses."""
+    """Common Popen options for app subprocesses."""
     return {"start_new_session": True, "preexec_fn": set_pdeathsig}
 
 
@@ -75,6 +75,16 @@ def uv_run_script_command(script_relpath: str, *args: str) -> list[str]:
     return [uv_bin(), "run", script_relpath, *args]
 
 
+def app_python_executable(app_id: str) -> str:
+    """Path to apps/<id>/.venv/bin/python (caller should ensure_app_venv first)."""
+    return os.path.join(app_dir(app_id), ".venv", "bin", "python")
+
+
+def app_python_command(app_id: str, script: str, *args: str) -> list[str]:
+    """Build argv using the app-local venv interpreter."""
+    return [app_python_executable(app_id), script, *args]
+
+
 def uv_run_app_command(app_id: str, script: str, *args: str) -> list[str]:
-    """Build argv for `uv run <script>` with Popen cwd in apps/<id>/ (not repo root)."""
-    return [uv_bin(), "run", script, *args]
+    """Deprecated: use app_python_command after ensure_app_venv."""
+    return app_python_command(app_id, script, *args)

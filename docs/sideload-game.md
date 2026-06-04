@@ -97,11 +97,19 @@ test -f apps/mygame/conf.json && echo "conf.json OK"
 python -m json.tool apps/mygame/conf.json >/dev/null && echo "conf.json valid JSON"
 ```
 
-Optional quick check (same interpreter family as machine runtime):
+The runtime creates a dedicated virtualenv at `apps/<game_id>/.venv` automatically on first download or launch. Apps without their own `pyproject.toml` receive default game dependencies from the firmware templates.
+
+Optional manual venv setup:
+
+```bash
+sudo /root/.local/bin/uv sync --directory apps/mygame
+```
+
+Optional quick check (same interpreter as machine runtime):
 
 ```bash
 cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /root/.local/bin/uv run main.py --shm game_shm --data-store /tmp/mygame_test.json
+sudo apps/mygame/.venv/bin/python main.py --shm game_shm --data-store /tmp/mygame_test.json
 ```
 
 If your game exits with argument errors, update its CLI parser to accept:
@@ -120,11 +128,11 @@ After sideloading:
 Machine UI launch behavior:
 
 - The runtime launches your game as a subprocess using:
-  - executable: `/root/.local/bin/uv run`
+  - executable: `apps/<game_id>/.venv/bin/python`
   - script: `main.py`
   - working directory (`cwd`): `apps/<game_id>/`
 
-`uv` discovers the project `pyproject.toml` in the repo root while keeping the app folder as the process working directory, so relative asset paths work.
+Each game has its own virtualenv under `apps/<game_id>/.venv`. If the app ships a `pyproject.toml`, that file defines dependencies; otherwise the firmware installs default game dependencies on first download or launch.
 
 If the game does not appear:
 
@@ -142,11 +150,11 @@ Use this mode when you want clean logs from only your game process.
 sudo systemctl stop dartsnut_python.service
 ```
 
-1. Run game directly with uv:
+1. Run game directly with its app venv:
 
 ```bash
 cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /root/.local/bin/uv run main.py --shm game_shm --data-store /tmp/mygame_dev.json
+sudo .venv/bin/python main.py --shm game_shm --data-store /tmp/mygame_dev.json
 ```
 
 1. Read logs/errors directly in the same terminal (stdout/stderr).
@@ -190,10 +198,10 @@ You should see entries similar to:
 - Do keep game code in `apps/<game_id>/`.
 - Do set `"type": "game"` in `conf.json`.
 - Do keep `"id"` stable and aligned with your game identity.
-- Do make sure `main.py` exists and starts with the environment Python.
+- Do make sure `main.py` exists and starts with the app venv Python (`apps/<game_id>/.venv/bin/python`).
 - Do log useful startup/runtime errors to stdout/stderr.
 - Do restart `dartsnut_python.service` after major game updates.
-- Do run from `apps/<game_id>/` with `sudo /root/.local/bin/uv run main.py` for local/direct game runs.
+- Do run from `apps/<game_id>/` with `sudo .venv/bin/python main.py` for local/direct game runs (venv is created on first launch if missing).
 
 ### Don't
 
@@ -214,7 +222,7 @@ You should see entries similar to:
   - `main.py` missing
   - parser rejects `--shm` / `--data-store`
   - runtime exception at startup (check journald logs)
-  - wrong Python invocation (run `sudo /root/.local/bin/uv run main.py` from `apps/<game_id>/`, not with `--directory`)
+  - wrong Python invocation (run `sudo .venv/bin/python main.py` from `apps/<game_id>/` after venv setup)
 3. **No useful logs**
   - ensure game prints/logs to stdout/stderr
   - use `journalctl -u dartsnut_python.service -f` while launching
