@@ -128,44 +128,7 @@ fi
 
 echo "== Python deps refresh (uv) =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
-ensure_uv_installed
-sudo rm -rf "${REPO_DIR}/venv0" "${REPO_DIR}/.venv"
-cd "${REPO_DIR}"
-echo "Removing packages whose on-disk namespaces overlap..."
-# Several package pairs install into the same top-level directory:
-#   - `pygame` (legacy) and `pygame-ce` both ship the `pygame/` package
-#   - `PyBluez` / `pybluez` and `pybluez-dartsnut` both ship the `bluetooth` module
-# Uninstall every variant up front so `uv sync` rewrites the files from scratch.
-"${UV_BIN}" pip uninstall -y pygame pygame-ce PyBluez pybluez pybluez-dartsnut || true
-"${UV_BIN}" sync
-
-# Helper: extract the pinned requirement spec (e.g. "pygame-ce==2.5.7") from pyproject.toml.
-requirement_spec() {
-  local package="$1"
-  grep -E "\"${package}==" "${REPO_DIR}/pyproject.toml" | sed -n 's/.*"\([^"]*\)".*/\1/p' | head -n 1
-}
-
-echo "Verifying pygame module (pygame-ce)..."
-if ! "${UV_BIN}" run python -c "import pygame; pygame.Surface" 2>/dev/null; then
-  echo "pygame import incomplete; force-reinstalling pygame-ce..."
-  PYGAME_REQ="$(requirement_spec pygame-ce)"
-  if [ -z "${PYGAME_REQ}" ]; then
-    PYGAME_REQ="pygame-ce"
-  fi
-  "${UV_BIN}" pip install --force-reinstall --no-deps "${PYGAME_REQ}"
-  "${UV_BIN}" run python -c "import pygame; pygame.Surface"
-fi
-
-echo "Verifying bluetooth module (pybluez-dartsnut)..."
-if ! "${UV_BIN}" run python -c "import bluetooth; import bluetooth._bluetooth" 2>/dev/null; then
-  echo "bluetooth import failed; force-reinstalling pybluez-dartsnut..."
-  BLUETOOTH_REQ="$(requirement_spec pybluez-dartsnut)"
-  if [ -z "${BLUETOOTH_REQ}" ]; then
-    BLUETOOTH_REQ="pybluez-dartsnut==0.30"
-  fi
-  "${UV_BIN}" pip install --force-reinstall --no-deps "${BLUETOOTH_REQ}"
-  "${UV_BIN}" run python -c "import bluetooth; import bluetooth._bluetooth"
-fi
+refresh_uv_project
 
 echo "== Network tuning (Supabase / Wi-Fi stability) =="
 

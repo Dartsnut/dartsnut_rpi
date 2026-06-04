@@ -100,8 +100,8 @@ python -m json.tool apps/mygame/conf.json >/dev/null && echo "conf.json valid JS
 Optional quick check (same interpreter family as machine runtime):
 
 ```bash
-cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python ./main.py --shm game_shm --data-store /tmp/mygame_test.json
+cd /home/rpi/dartsnut_rpi
+sudo /root/.local/bin/uv run apps/mygame/main.py --shm game_shm --data-store /tmp/mygame_test.json
 ```
 
 If your game exits with argument errors, update its CLI parser to accept:
@@ -120,13 +120,11 @@ After sideloading:
 Machine UI launch behavior:
 
 - The runtime launches your game as a subprocess using:
-  - executable: `/root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python`
-  - script: `main.py` (relative to `apps/<game_id>/`)
-  - working directory (`cwd`): `apps/<game_id>`
+  - executable: `/root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi`
+  - script: `apps/<game_id>/main.py`
+  - working directory (`cwd`): `/home/rpi/dartsnut_rpi`
 
-Because `cwd` is `apps/<game_id>`, launching `main.py` from other locations may
-change import/path resolution and can cause failures (especially relative imports
-or relative file access).
+Because the runtime passes `apps/<game_id>/main.py` to `uv run` from the repo root, games should resolve paths relative to their own folder (or use absolute paths) rather than assuming `cwd` is `apps/<game_id>`.
 
 If the game does not appear:
 
@@ -147,8 +145,8 @@ sudo systemctl stop dartsnut_python.service
 1. Run game directly with uv:
 
 ```bash
-cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python ./main.py --shm game_shm --data-store /tmp/mygame_dev.json
+cd /home/rpi/dartsnut_rpi
+sudo /root/.local/bin/uv run apps/mygame/main.py --shm game_shm --data-store /tmp/mygame_dev.json
 ```
 
 1. Read logs/errors directly in the same terminal (stdout/stderr).
@@ -195,7 +193,7 @@ You should see entries similar to:
 - Do make sure `main.py` exists and starts with the environment Python.
 - Do log useful startup/runtime errors to stdout/stderr.
 - Do restart `dartsnut_python.service` after major game updates.
-- Do use `sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python` for local/direct game runs.
+- Do use `sudo /root/.local/bin/uv run apps/<game_id>/main.py` from the repo root for local/direct game runs.
 
 ### Don't
 
@@ -203,7 +201,7 @@ You should see entries similar to:
 - Don't ship invalid JSON in `conf.json`.
 - Don't omit required launch args (`--shm`, `--data-store`) in your game parser.
 - Don't run direct game testing while `dartsnut_python.service` is still running.
-- Don't assume relative paths from repo root; runtime `cwd` is `apps/<game_id>/`.
+- Don't assume relative paths from repo root; runtime launches via `uv run apps/<game_id>/main.py` with `cwd` at repo root.
 - Don't block forever before first frame/update without logging.
 - Don't remove or rename `main.py` after sideloading.
 
@@ -216,7 +214,7 @@ You should see entries similar to:
   - `main.py` missing
   - parser rejects `--shm` / `--data-store`
   - runtime exception at startup (check journald logs)
-  - wrong Python invocation (use `sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python` for direct runs)
+  - wrong Python invocation (use `sudo /root/.local/bin/uv run apps/<game_id>/main.py` from repo root for direct runs)
 3. **No useful logs**
   - ensure game prints/logs to stdout/stderr
   - use `journalctl -u dartsnut_python.service -f` while launching

@@ -15,7 +15,7 @@ import tempfile
 import requests
 from PIL import Image
 
-from core.helpers import set_pdeathsig, get_user_data_store_path, uv_run_python_command
+from core.helpers import set_pdeathsig, get_user_data_store_path, uv_run_script_command
 from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
@@ -340,7 +340,7 @@ def restart_widget_process(
                 shared_memory.SharedMemory(name=name).unlink()
         shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
         shm.buf[0] = 1
-        command = uv_run_python_command("main.py")
+        command = uv_run_script_command(f"apps/{widget_id}/main.py")
         command.extend(
             ["--params", json.dumps(process_widget_fields(widget_id, widget["fields"]))]
         )
@@ -348,7 +348,7 @@ def restart_widget_process(
         command.extend(["--data-store", get_user_data_store_path(widget_id)])
         process = subprocess.Popen(
             command,
-            cwd=os.path.join("./apps/", widget_id),
+            cwd=os.getcwd(),
             preexec_fn=set_pdeathsig,
         )
         widget_entry["process"] = process
@@ -518,7 +518,7 @@ def start_page_process(page: dict) -> dict:
                 pass
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
-                command = uv_run_python_command("default.py")
+                command = uv_run_script_command("default.py")
                 command.extend(["--params", "{}", "--shm", shm_name])
                 command.extend(["--data-store", get_user_data_store_path("0")])
                 process = subprocess.Popen(
@@ -565,7 +565,7 @@ def start_page_process(page: dict) -> dict:
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
                 shm.buf[0] = 1
-                command = uv_run_python_command("main.py")
+                command = uv_run_script_command(f"apps/{widget['id']}/main.py")
                 command.extend(
                     [
                         "--params",
@@ -578,7 +578,7 @@ def start_page_process(page: dict) -> dict:
                 )
                 process = subprocess.Popen(
                     command,
-                    cwd=os.path.join("./apps/", widget["id"]),
+                    cwd=os.getcwd(),
                     preexec_fn=set_pdeathsig,
                 )
                 widgets.append(

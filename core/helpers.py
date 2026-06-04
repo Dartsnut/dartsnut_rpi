@@ -34,6 +34,11 @@ def uv_bin() -> str:
     return os.environ.get("DARTSNUT_UV_BIN", "/root/.local/bin/uv")
 
 
-def uv_run_python_command(script: str, *args: str) -> list[str]:
-    repo_root = os.getcwd()
-    return [uv_bin(), "run", "--directory", repo_root, "python", script, *args]
+def repo_root() -> str:
+    return os.getcwd()
+
+
+def uv_run_script_command(script_relpath: str, *args: str) -> list[str]:
+    """Build argv for `uv run <script>` from repo root (e.g. apps/chess/main.py)."""
+    root = repo_root()
+    return [uv_bin(), "run", "--directory", root, script_relpath, *args]

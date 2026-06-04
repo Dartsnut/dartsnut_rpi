@@ -9,7 +9,7 @@ from multiprocessing import shared_memory
 import subprocess
 import requests
 
-from core.helpers import set_pdeathsig, get_user_data_store_path, uv_run_python_command
+from core.helpers import set_pdeathsig, get_user_data_store_path, uv_run_script_command
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -205,12 +205,12 @@ def start_game_process(gameid: str) -> dict:
         img_bytes = loading_image.tobytes()
         shm.buf[1 : 1 + len(img_bytes)] = img_bytes
         shm.buf[0] = 0
-        command = uv_run_python_command("main.py")
+        command = uv_run_script_command(f"apps/{gameid}/main.py")
         command.extend(["--shm", shm_name])
         command.extend(["--data-store", get_user_data_store_path(gameid)])
         process = subprocess.Popen(
             command,
-            cwd=os.path.join("./apps/", gameid),
+            cwd=os.getcwd(),
             preexec_fn=set_pdeathsig,
         )
         try:
