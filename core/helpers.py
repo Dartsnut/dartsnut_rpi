@@ -66,7 +66,16 @@ def repo_root() -> str:
     return os.getcwd()
 
 
+def app_dir(app_id: str) -> str:
+    return os.path.join(repo_root(), "apps", app_id)
+
+
 def uv_run_script_command(script_relpath: str, *args: str) -> list[str]:
-    """Build argv for `uv run <script>` from repo root (e.g. apps/chess/main.py)."""
+    """Build argv for `uv run <script>` with project root as uv --directory."""
     root = repo_root()
     return [uv_bin(), "run", "--directory", root, script_relpath, *args]
+
+
+def uv_run_app_command(app_id: str, script: str, *args: str) -> list[str]:
+    """Build argv for `uv run apps/<id>/<script>`; set Popen cwd to app_dir(app_id)."""
+    return uv_run_script_command(os.path.join("apps", app_id, script), *args)

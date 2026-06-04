@@ -17,7 +17,10 @@ from PIL import Image
 
 from core.helpers import (
     get_user_data_store_path,
+    app_dir,
+    repo_root,
     uv_run_script_command,
+    uv_run_app_command,
     subprocess_launch_kwargs,
     signal_process_group,
     terminate_process_group,
@@ -345,7 +348,7 @@ def restart_widget_process(
                 shared_memory.SharedMemory(name=name).unlink()
         shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
         shm.buf[0] = 1
-        command = uv_run_script_command(f"apps/{widget_id}/main.py")
+        command = uv_run_app_command(widget_id, "main.py")
         command.extend(
             ["--params", json.dumps(process_widget_fields(widget_id, widget["fields"]))]
         )
@@ -353,7 +356,7 @@ def restart_widget_process(
         command.extend(["--data-store", get_user_data_store_path(widget_id)])
         process = subprocess.Popen(
             command,
-            cwd=os.getcwd(),
+            cwd=app_dir(widget_id),
             **subprocess_launch_kwargs(),
         )
         widget_entry["process"] = process
@@ -527,7 +530,7 @@ def start_page_process(page: dict) -> dict:
                 command.extend(["--params", "{}", "--shm", shm_name])
                 command.extend(["--data-store", get_user_data_store_path("0")])
                 process = subprocess.Popen(
-                    command, cwd=os.getcwd(), **subprocess_launch_kwargs()
+                    command, cwd=repo_root(), **subprocess_launch_kwargs()
                 )
                 widgets.append(
                     {
@@ -570,7 +573,7 @@ def start_page_process(page: dict) -> dict:
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
                 shm.buf[0] = 1
-                command = uv_run_script_command(f"apps/{widget['id']}/main.py")
+                command = uv_run_app_command(widget["id"], "main.py")
                 command.extend(
                     [
                         "--params",
@@ -583,7 +586,7 @@ def start_page_process(page: dict) -> dict:
                 )
                 process = subprocess.Popen(
                     command,
-                    cwd=os.getcwd(),
+                    cwd=app_dir(widget["id"]),
                     **subprocess_launch_kwargs(),
                 )
                 widgets.append(

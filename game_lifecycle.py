@@ -10,7 +10,8 @@ import requests
 
 from core.helpers import (
     get_user_data_store_path,
-    uv_run_script_command,
+    app_dir,
+    uv_run_app_command,
     subprocess_launch_kwargs,
     terminate_process_group,
 )
@@ -209,12 +210,12 @@ def start_game_process(gameid: str) -> dict:
         img_bytes = loading_image.tobytes()
         shm.buf[1 : 1 + len(img_bytes)] = img_bytes
         shm.buf[0] = 0
-        command = uv_run_script_command(f"apps/{gameid}/main.py")
+        command = uv_run_app_command(gameid, "main.py")
         command.extend(["--shm", shm_name])
         command.extend(["--data-store", get_user_data_store_path(gameid)])
         process = subprocess.Popen(
             command,
-            cwd=os.getcwd(),
+            cwd=app_dir(gameid),
             **subprocess_launch_kwargs(),
         )
         try:

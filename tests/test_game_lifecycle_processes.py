@@ -65,7 +65,7 @@ def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     assert game["game_id"] == "chess"
     assert game["launched"] is False
     assert tracked == ["chess"]
-    assert popen_calls and popen_calls[0][1] == str(tmp_path)
+    assert popen_calls and popen_calls[0][1] == str(tmp_path / "apps" / "chess")
     assert isinstance(created["shm"].buf, bytearray)
 
 
