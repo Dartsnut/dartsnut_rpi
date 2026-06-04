@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import signal
 
 from PIL import Image
 
@@ -53,7 +54,11 @@ def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     monkeypatch.setattr(gl.assets, "create_loading_image", lambda: _LoadingImg())
     monkeypatch.setattr(gl, "start_game_tracking", lambda gid: tracked.append(gid))
     monkeypatch.setattr(gl, "get_user_data_store_path", lambda gid: f"/tmp/{gid}.json")
-    monkeypatch.setattr(gl.subprocess, "Popen", lambda cmd, cwd, preexec_fn: popen_calls.append((cmd, cwd)) or _Proc())
+    monkeypatch.setattr(
+        gl.subprocess,
+        "Popen",
+        lambda cmd, cwd, **kwargs: popen_calls.append((cmd, cwd, kwargs)) or _Proc(),
+    )
 
     game = gl.start_game_process("chess")
 
@@ -71,7 +76,7 @@ def test_term_game_process_kills_running_process_and_cleans_resources(monkeypatc
     g = {"process": _Proc(pid=9876, running=True), "shm": shm, "game_id": "chess"}
 
     monkeypatch.setattr(gl, "stop_game_tracking", lambda: stopped.append(True))
-    monkeypatch.setattr(gl.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    monkeypatch.setattr(gl, "terminate_process_group", lambda pid: kills.append((pid, signal.SIGKILL)))
 
     gl.term_game_process(g)
 

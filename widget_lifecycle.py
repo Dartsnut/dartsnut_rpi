@@ -15,7 +15,13 @@ import tempfile
 import requests
 from PIL import Image
 
-from core.helpers import set_pdeathsig, get_user_data_store_path, uv_run_script_command
+from core.helpers import (
+    get_user_data_store_path,
+    uv_run_script_command,
+    subprocess_launch_kwargs,
+    signal_process_group,
+    terminate_process_group,
+)
 from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
@@ -179,8 +185,7 @@ def _kill_widget_process(widget_entry: dict, widget_id: str, reason: str = "") -
                 widget_id,
                 f" ({reason})" if reason else "",
             )
-            os.kill(process.pid, signal.SIGCONT)
-            os.kill(process.pid, signal.SIGKILL)
+            terminate_process_group(process.pid)
         shm = widget_entry.get("shm")
         if shm:
             try:
@@ -349,7 +354,7 @@ def restart_widget_process(
         process = subprocess.Popen(
             command,
             cwd=os.getcwd(),
-            preexec_fn=set_pdeathsig,
+            **subprocess_launch_kwargs(),
         )
         widget_entry["process"] = process
         widget_entry["shm"] = shm
@@ -522,7 +527,7 @@ def start_page_process(page: dict) -> dict:
                 command.extend(["--params", "{}", "--shm", shm_name])
                 command.extend(["--data-store", get_user_data_store_path("0")])
                 process = subprocess.Popen(
-                    command, cwd=os.getcwd(), preexec_fn=set_pdeathsig
+                    command, cwd=os.getcwd(), **subprocess_launch_kwargs()
                 )
                 widgets.append(
                     {
@@ -579,7 +584,7 @@ def start_page_process(page: dict) -> dict:
                 process = subprocess.Popen(
                     command,
                     cwd=os.getcwd(),
-                    preexec_fn=set_pdeathsig,
+                    **subprocess_launch_kwargs(),
                 )
                 widgets.append(
                     {
@@ -607,7 +612,7 @@ def start_page_process(page: dict) -> dict:
             proc = w.get("process")
             if proc is None:
                 continue
-            os.kill(proc.pid, signal.SIGSTOP)
+            signal_process_group(proc.pid, signal.SIGSTOP)
             w["launched"] = False
         except Exception as e:
             _log.warning("Error pausing widget process: %s", e)
@@ -653,8 +658,7 @@ def term_widget_processes(pages: list) -> None:
             try:
                 p = widget.get("process")
                 if p and p.poll() is None:
-                    os.kill(p.pid, signal.SIGCONT)
-                    os.kill(p.pid, signal.SIGKILL)
+                    terminate_process_group(p.pid)
                 shm = widget.get("shm")
                 if shm:
                     shm.close()

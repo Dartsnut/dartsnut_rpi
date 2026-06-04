@@ -5,6 +5,7 @@ import signal
 import time
 from PIL import Image
 
+from core.helpers import signal_process_group
 from domain.app_context import AppContext
 from states.base import BaseState
 from widget_lifecycle import (
@@ -70,7 +71,7 @@ class WidgetState(BaseState):
                         if process is None:
                             widget["launched"] = False
                             continue
-                        os.kill(process.pid, signal.SIGCONT)
+                        signal_process_group(process.pid, signal.SIGCONT)
                         widget["launched"] = False
                     except Exception as e:
                         _log.warning("Error resuming next widget process: %s", e)
@@ -97,7 +98,7 @@ class WidgetState(BaseState):
                                     restart_widget_process(widget_entry, pages[i], widget_idx)
                                 continue
                             if process.poll() is None:
-                                os.kill(process.pid, signal.SIGCONT)
+                                signal_process_group(process.pid, signal.SIGCONT)
                                 widget_entry["launched"] = False
                             else:
                                 widget = widget_entry.get("widget")
@@ -120,7 +121,7 @@ class WidgetState(BaseState):
                             else:
                                 process = widget_entry.get("process")
                                 if process and process.poll() is None:
-                                    os.kill(process.pid, signal.SIGSTOP)
+                                    signal_process_group(process.pid, signal.SIGSTOP)
                                     widget_entry["launched"] = False
                         except Exception as e:
                             _log.warning("Error pausing widget process: %s", e)

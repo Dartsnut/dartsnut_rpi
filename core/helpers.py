@@ -15,6 +15,34 @@ def set_pdeathsig():
     libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
 
 
+def signal_process_group(pid: int, sig: int) -> None:
+    """Signal a subprocess and its children (e.g. uv run -> python)."""
+    if pid <= 0:
+        return
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    try:
+        if pgid == os.getpgrp():
+            os.kill(pid, sig)
+        else:
+            os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def terminate_process_group(pid: int) -> None:
+    """Force-stop a subprocess tree launched via uv run."""
+    signal_process_group(pid, signal.SIGCONT)
+    signal_process_group(pid, signal.SIGKILL)
+
+
+def subprocess_launch_kwargs() -> dict:
+    """Common Popen options for uv-run app subprocesses."""
+    return {"start_new_session": True, "preexec_fn": set_pdeathsig}
+
+
 def get_user_data_store_path(app_id: str) -> str:
     """Return user data store path for app_id; default to 'guest' if user_id empty."""
     try:

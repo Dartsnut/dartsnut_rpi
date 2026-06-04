@@ -4,12 +4,16 @@ import io
 import json
 import logging
 import os
-import signal
 from multiprocessing import shared_memory
 import subprocess
 import requests
 
-from core.helpers import set_pdeathsig, get_user_data_store_path, uv_run_script_command
+from core.helpers import (
+    get_user_data_store_path,
+    uv_run_script_command,
+    subprocess_launch_kwargs,
+    terminate_process_group,
+)
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -211,7 +215,7 @@ def start_game_process(gameid: str) -> dict:
         process = subprocess.Popen(
             command,
             cwd=os.getcwd(),
-            preexec_fn=set_pdeathsig,
+            **subprocess_launch_kwargs(),
         )
         try:
             start_game_tracking(gameid)
@@ -244,8 +248,7 @@ def term_game_process(g: dict) -> None:
         except Exception as e:
             _log.warning("Failed to stop game tracking: %s", e)
         if g.get("process") and g["process"].poll() is None:
-            os.kill(g["process"].pid, signal.SIGCONT)
-            os.kill(g["process"].pid, signal.SIGKILL)
+            terminate_process_group(g["process"].pid)
         if g.get("shm"):
             g["shm"].close()
             g["shm"].unlink()
