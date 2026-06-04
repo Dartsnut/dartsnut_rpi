@@ -101,7 +101,7 @@ Optional quick check (same interpreter family as machine runtime):
 
 ```bash
 cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi apps/mygame/main.py --shm game_shm --data-store /tmp/mygame_test.json
+sudo /root/.local/bin/uv run main.py --shm game_shm --data-store /tmp/mygame_test.json
 ```
 
 If your game exits with argument errors, update its CLI parser to accept:
@@ -120,11 +120,11 @@ After sideloading:
 Machine UI launch behavior:
 
 - The runtime launches your game as a subprocess using:
-  - executable: `/root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi`
-  - script: `apps/<game_id>/main.py`
+  - executable: `/root/.local/bin/uv run`
+  - script: `main.py`
   - working directory (`cwd`): `apps/<game_id>/`
 
-Games may use paths relative to their app folder (for example `Image.open("sprite.png")`).
+`uv` discovers the project `pyproject.toml` in the repo root while keeping the app folder as the process working directory, so relative asset paths work.
 
 If the game does not appear:
 
@@ -146,7 +146,7 @@ sudo systemctl stop dartsnut_python.service
 
 ```bash
 cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi apps/mygame/main.py --shm game_shm --data-store /tmp/mygame_dev.json
+sudo /root/.local/bin/uv run main.py --shm game_shm --data-store /tmp/mygame_dev.json
 ```
 
 1. Read logs/errors directly in the same terminal (stdout/stderr).
@@ -193,7 +193,7 @@ You should see entries similar to:
 - Do make sure `main.py` exists and starts with the environment Python.
 - Do log useful startup/runtime errors to stdout/stderr.
 - Do restart `dartsnut_python.service` after major game updates.
-- Do use `sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi apps/<game_id>/main.py` with `cwd` in `apps/<game_id>/` for local/direct game runs.
+- Do run from `apps/<game_id>/` with `sudo /root/.local/bin/uv run main.py` for local/direct game runs.
 
 ### Don't
 
@@ -214,7 +214,7 @@ You should see entries similar to:
   - `main.py` missing
   - parser rejects `--shm` / `--data-store`
   - runtime exception at startup (check journald logs)
-  - wrong Python invocation (run from `apps/<game_id>/` with `uv run --directory /home/rpi/dartsnut_rpi apps/<game_id>/main.py`)
+  - wrong Python invocation (run `sudo /root/.local/bin/uv run main.py` from `apps/<game_id>/`, not with `--directory`)
 3. **No useful logs**
   - ensure game prints/logs to stdout/stderr
   - use `journalctl -u dartsnut_python.service -f` while launching
