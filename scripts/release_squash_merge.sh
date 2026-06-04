@@ -107,27 +107,13 @@ release_acquire_script_lock() {
   trap 'rmdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null || true' EXIT INT TERM
 }
 
-# Serialize git index updates; retry when Cursor/IDE git holds index.lock.
-git() {
+wait_for_unlocked_git_index() {
   local attempt=0
   local max_attempts=120
-  local errfile
-  errfile="$(mktemp)"
   while (( attempt < max_attempts )); do
     release_clear_stale_index_lock
     if [[ ! -f "${GIT_INDEX_LOCK}" ]]; then
-      if command git "$@" 2>"${errfile}"; then
-        rm -f "${errfile}"
-        return 0
-      fi
-      if grep -q 'index.lock' "${errfile}" 2>/dev/null; then
-        attempt=$((attempt + 1))
-        sleep 0.5
-        continue
-      fi
-      cat "${errfile}" >&2
-      rm -f "${errfile}"
-      return 1
+      return 0
     fi
     if (( attempt == 0 || attempt % 10 == 0 )); then
       log "waiting for .git/index.lock to clear (attempt $((attempt + 1))/${max_attempts})"
@@ -135,8 +121,36 @@ git() {
     attempt=$((attempt + 1))
     sleep 0.5
   done
-  rm -f "${errfile}"
   fail "git index.lock still present; close other git UIs or run: rm -f .git/index.lock"
+}
+
+# Retry git when IDE background git holds index.lock. Logs stay on stderr via log().
+git_cmd() {
+  local attempt=0
+  local max_attempts=120
+  local errfile
+  errfile="$(mktemp)"
+  while (( attempt < max_attempts )); do
+    wait_for_unlocked_git_index
+    if command git "$@" 2>"${errfile}"; then
+      rm -f "${errfile}"
+      return 0
+    fi
+    if grep -q 'index.lock' "${errfile}" 2>/dev/null; then
+      attempt=$((attempt + 1))
+      sleep 0.5
+      continue
+    fi
+    cat "${errfile}" >&2
+    rm -f "${errfile}"
+    return 1
+  done
+  rm -f "${errfile}"
+  fail "git failed waiting for index.lock: git $*"
+}
+
+git() {
+  git_cmd "$@"
 }
 
 require_clean_tree() {
@@ -298,21 +312,20 @@ maybe_push_release() {
 
 resolve_squash_conflicts_prefer_master() {
   # During `git merge --squash master` on release, unmerged paths must match master.
-  # Use command git here (not the retry wrapper) to avoid log/git stdout interleaving.
   local f leftover
   log "merge reported conflicts, resolving with master-preferred strategy"
-  release_clear_stale_index_lock
+  wait_for_unlocked_git_index
   while IFS= read -r -d '' f; do
-    if command git show "master:${f}" >/dev/null 2>&1; then
+    if git_cmd show "master:${f}" >/dev/null 2>&1; then
       log "conflict: using master for ${f}"
-      command git checkout "master" -- "${f}"
+      git_cmd checkout "master" -- "${f}"
     else
       log "conflict: removing ${f} (absent on master)"
-      command git rm -f -- "${f}" 2>/dev/null || true
+      git_cmd rm -f -- "${f}" 2>/dev/null || true
     fi
-  done < <(command git diff -z --name-only --diff-filter=U)
-  command git add -A
-  leftover="$(command git diff --name-only --diff-filter=U || true)"
+  done < <(git_cmd diff -z --name-only --diff-filter=U)
+  git_cmd add -A
+  leftover="$(git_cmd diff --name-only --diff-filter=U || true)"
   if [[ -n "${leftover}" ]]; then
     printf '%s\n' "${leftover}" >&2
     fail "unmerged paths remain after conflict resolution"
@@ -377,6 +390,7 @@ main() {
 
   release_acquire_script_lock
   release_clear_stale_index_lock
+  log "tip: pause Cursor/IDE Source Control git activity until this script finishes"
   require_clean_tree
   require_branch_exists "master"
   require_branch_exists "release"
