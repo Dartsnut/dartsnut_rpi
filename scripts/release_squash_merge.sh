@@ -9,7 +9,8 @@
 # system-packages, and the compiled Supabase sync binary at ./bridge (no supabase/,
 # supabase_bridge/, tests/, docs/, or legacy requirements.txt in the release commit).
 #
-# Flow: checkout release -> ff-only origin/release -> merge --squash master ->
+# Flow: resolve version -> bump pyproject.toml on master and commit ->
+# checkout release -> ff-only origin/release -> merge --squash master ->
 # optional cargo bridge build -> clear index -> stage allowlist only -> verify ->
 # single commit -> tag vX.Y.Z.
 #
@@ -248,6 +249,57 @@ resolve_squash_conflicts_prefer_master() {
   git add -A
 }
 
+bump_pyproject_version_on_master() {
+  local version="$1"
+  local pyproject="${REPO_ROOT}/pyproject.toml"
+  local current
+
+  log "checking out master and syncing with origin/master"
+  git checkout master
+  if git show-ref --verify --quiet "refs/remotes/origin/master"; then
+    git merge --ff-only origin/master
+  fi
+
+  if [[ ! -f "${pyproject}" ]]; then
+    fail "missing ${pyproject}"
+  fi
+
+  current="$(grep -E '^version = ' "${pyproject}" | sed -n 's/^version = "\(.*\)"/\1/p' | head -n 1)"
+  if [[ -z "${current}" ]]; then
+    fail "pyproject.toml missing version = \"X.Y.Z\" field"
+  fi
+
+  if [[ "${current}" == "${version}" ]]; then
+    log "pyproject.toml already at ${version}; skipping master bump commit"
+    return 0
+  fi
+
+  log "updating pyproject.toml version ${current} -> ${version}"
+  python3 -c "
+import pathlib
+import re
+import sys
+
+resolved = sys.argv[1]
+path = pathlib.Path(sys.argv[2])
+text = path.read_text(encoding='utf-8')
+new, n = re.subn(
+    r'^version = \".*\"',
+    f'version = \"{resolved}\"',
+    text,
+    count=1,
+    flags=re.M,
+)
+if n != 1:
+    raise SystemExit('failed to update version in pyproject.toml')
+path.write_text(new, encoding='utf-8')
+" "${version}" "${pyproject}"
+
+  git add -- "${pyproject}"
+  git commit -m "chore(release): set pyproject version to ${version}"
+  log "master version commit: $(git rev-parse --short HEAD)"
+}
+
 main() {
   local input_version resolved_version commit_message
   input_version="${1:-}"
@@ -266,6 +318,8 @@ main() {
   commit_message="Release version v${resolved_version}"
 
   log "using version: v${resolved_version}"
+  bump_pyproject_version_on_master "${resolved_version}"
+
   log "checking out release and syncing with origin/release"
   git checkout release
   git merge --ff-only origin/release
