@@ -95,6 +95,15 @@ def _settings_wifi_icon_color(ctx):
     return _rssi_to_color(_get_wifi_rssi_cached())
 
 
+def should_show_bridge_disconnect_icon(ctx) -> bool:
+    """True when Supabase bridge is on and cloud health matches settings red WiFi."""
+    if not get_remote_sync().is_bridge_active():
+        return False
+    if not ctx.wifi_connected:
+        return False
+    return _bridge_active_wifi_icon_color(ctx) == (255, 0, 0)
+
+
 def _tint_icon_rgba(icon_rgba, color):
     """Return a new RGBA image with icon shape tinted to (R, G, B)."""
     r, g, b, a = icon_rgba.split()

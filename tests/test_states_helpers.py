@@ -71,6 +71,36 @@ def test_bridge_active_wifi_icon_color(monkeypatch):
     assert ssettings._bridge_active_wifi_icon_color(ctx) == (128, 128, 128)
 
 
+def test_should_show_bridge_disconnect_icon(monkeypatch):
+    ctx = SimpleNamespace(wifi_connected=True)
+
+    class _SyncInactive:
+        def is_bridge_active(self):
+            return False
+
+    monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _SyncInactive())
+    assert ssettings.should_show_bridge_disconnect_icon(ctx) is False
+
+    class _Sync:
+        def is_bridge_active(self):
+            return True
+
+        def is_connected(self):
+            return True
+
+    monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _Sync())
+    monkeypatch.setattr(ssettings, "get_supabase_rest_probe_ok", lambda: True)
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 50)
+    assert ssettings.should_show_bridge_disconnect_icon(ctx) is False
+
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 400)
+    assert ssettings.should_show_bridge_disconnect_icon(ctx) is True
+
+    monkeypatch.setattr(ssettings, "get_supabase_rest_probe_ok", lambda: False)
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 50)
+    assert ssettings.should_show_bridge_disconnect_icon(ctx) is True
+
+
 def test_settings_wifi_icon_color_uses_rssi_when_bridge_inactive(monkeypatch):
     ctx = SimpleNamespace(wifi_connected=True)
 
