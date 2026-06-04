@@ -232,6 +232,22 @@ maybe_push_release() {
   fi
 }
 
+resolve_squash_conflicts_prefer_master() {
+  # During `git merge --squash master` on release, unmerged paths must match master.
+  # `git checkout --theirs` fails when master deleted a file (e.g. requirements.txt).
+  local f
+  log "merge reported conflicts, resolving with master-preferred strategy"
+  while IFS= read -r -d '' f; do
+    if git show "master:${f}" >/dev/null 2>&1; then
+      git checkout "master" -- "${f}"
+    else
+      log "removing ${f} (absent on master)"
+      git rm -f -- "${f}" 2>/dev/null || true
+    fi
+  done < <(git diff -z --name-only --diff-filter=U)
+  git add -A
+}
+
 main() {
   local input_version resolved_version commit_message
   input_version="${1:-}"
@@ -256,9 +272,7 @@ main() {
 
   log "starting squash merge from master into release"
   if ! git merge --squash master; then
-    log "merge reported conflicts, resolving with master-preferred strategy"
-    git checkout --theirs -- .
-    git add -A
+    resolve_squash_conflicts_prefer_master
   fi
 
   build_bridge_if_enabled
