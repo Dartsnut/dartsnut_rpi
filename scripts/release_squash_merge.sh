@@ -71,7 +71,7 @@ ALLOWLIST=(
 )
 
 log() {
-  printf '[release-squash] %s\n' "$*"
+  printf '[release-squash] %s\n' "$*" >&2
 }
 
 fail() {
@@ -298,21 +298,21 @@ maybe_push_release() {
 
 resolve_squash_conflicts_prefer_master() {
   # During `git merge --squash master` on release, unmerged paths must match master.
-  # `git checkout --theirs` fails when master deleted a file (e.g. requirements.txt).
+  # Use command git here (not the retry wrapper) to avoid log/git stdout interleaving.
   local f leftover
   log "merge reported conflicts, resolving with master-preferred strategy"
+  release_clear_stale_index_lock
   while IFS= read -r -d '' f; do
-    release_clear_stale_index_lock
-    if git show "master:${f}" >/dev/null 2>&1; then
+    if command git show "master:${f}" >/dev/null 2>&1; then
       log "conflict: using master for ${f}"
-      git checkout "master" -- "${f}"
+      command git checkout "master" -- "${f}"
     else
       log "conflict: removing ${f} (absent on master)"
-      git rm -f -- "${f}" 2>/dev/null || true
+      command git rm -f -- "${f}" 2>/dev/null || true
     fi
-  done < <(git diff -z --name-only --diff-filter=U)
-  git add -A
-  leftover="$(git diff --name-only --diff-filter=U || true)"
+  done < <(command git diff -z --name-only --diff-filter=U)
+  command git add -A
+  leftover="$(command git diff --name-only --diff-filter=U || true)"
   if [[ -n "${leftover}" ]]; then
     printf '%s\n' "${leftover}" >&2
     fail "unmerged paths remain after conflict resolution"
