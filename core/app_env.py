@@ -18,6 +18,7 @@ _log = logging.getLogger(__name__)
 
 DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
 STAMP_FILENAME = ".dartsnut_stamp"
+MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
 
 
 def read_app_type(app_id: str) -> str | None:
@@ -95,11 +96,27 @@ def app_venv_ready(app_id: str) -> bool:
         return False
 
 
+def _is_managed_default_pyproject(path: str) -> bool:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.readline().startswith(MANAGED_PYPROJECT_HEADER)
+    except OSError:
+        return False
+
+
 def _materialize_pyproject(app_id: str, app_type: str) -> None:
     dest = _pyproject_path(app_id)
-    if os.path.isfile(dest):
-        return
     template = _template_path(app_type)
+    template_text = template.read_text(encoding="utf-8")
+    if os.path.isfile(dest):
+        if not _is_managed_default_pyproject(dest):
+            return
+        with open(dest, encoding="utf-8") as f:
+            if f.read() == template_text:
+                return
+        shutil.copy2(template, dest)
+        _log.info("Refreshed default pyproject.toml for %s (type=%s)", app_id, app_type)
+        return
     shutil.copy2(template, dest)
     _log.info("Materialized default pyproject.toml for %s (type=%s)", app_id, app_type)
 
@@ -136,8 +153,7 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
     app_type = read_app_type(app_id) or "widget"
     started = time.monotonic()
     try:
-        if not os.path.isfile(_pyproject_path(app_id)):
-            _materialize_pyproject(app_id, app_type)
+        _materialize_pyproject(app_id, app_type)
         _uv_sync(app_id)
         _write_stamp(app_id)
         _log.info(

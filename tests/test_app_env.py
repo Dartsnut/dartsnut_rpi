@@ -57,6 +57,37 @@ def test_app_python_command_path(monkeypatch, tmp_path):
     assert cmd[1:] == ["main.py", "--shm", "x"]
 
 
+def test_materialize_refreshes_managed_pyproject_when_template_changes(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "clock"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "clock", "type": "widget", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (app_dir / "pyproject.toml").write_text(
+        "# Dartsnut managed default app dependencies.\n"
+        'dependencies = ["old==1.0.0"]\n',
+        encoding="utf-8",
+    )
+
+    sync_calls = []
+
+    def _fake_sync(app_id):
+        sync_calls.append(app_id)
+        venv = app_dir / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(app_env, "_uv_sync", _fake_sync)
+    assert app_env.ensure_app_venv("clock") is True
+    assert sync_calls == ["clock"]
+    refreshed = (app_dir / "pyproject.toml").read_text(encoding="utf-8")
+    assert "pydartsnut==" in refreshed
+    assert "aiohttp==" in refreshed
+
+
 def test_ensure_app_venv_uv_failure(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "broken"
