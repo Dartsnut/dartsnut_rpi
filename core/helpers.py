@@ -28,3 +28,12 @@ def get_user_data_store_path(app_id: str) -> str:
         path = f"/var/lib/dartsnut/user/guest/{app_id}/"
         os.makedirs(path, mode=0o755, exist_ok=True)
         return path
+
+
+def uv_bin() -> str:
+    return os.environ.get("DARTSNUT_UV_BIN", "/root/.local/bin/uv")
+
+
+def uv_run_python_command(script: str, *args: str) -> list[str]:
+    repo_root = os.getcwd()
+    return [uv_bin(), "run", "--directory", repo_root, "python", script, *args]

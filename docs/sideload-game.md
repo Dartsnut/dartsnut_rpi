@@ -101,7 +101,7 @@ Optional quick check (same interpreter family as machine runtime):
 
 ```bash
 cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /home/rpi/dartsnut_rpi/venv0/bin/python ./main.py --shm game_shm --data-store /tmp/mygame_test.json
+sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python ./main.py --shm game_shm --data-store /tmp/mygame_test.json
 ```
 
 If your game exits with argument errors, update its CLI parser to accept:
@@ -120,8 +120,8 @@ After sideloading:
 Machine UI launch behavior:
 
 - The runtime launches your game as a subprocess using:
-  - executable: `/home/rpi/dartsnut_rpi/venv0/bin/python`
-  - script: `apps/<game_id>/main.py`
+  - executable: `/root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python`
+  - script: `main.py` (relative to `apps/<game_id>/`)
   - working directory (`cwd`): `apps/<game_id>`
 
 Because `cwd` is `apps/<game_id>`, launching `main.py` from other locations may
@@ -144,11 +144,11 @@ Use this mode when you want clean logs from only your game process.
 sudo systemctl stop dartsnut_python.service
 ```
 
-1. Run game directly with runtime venv Python:
+1. Run game directly with uv:
 
 ```bash
 cd /home/rpi/dartsnut_rpi/apps/mygame
-sudo /home/rpi/dartsnut_rpi/venv0/bin/python ./main.py --shm game_shm --data-store /tmp/mygame_dev.json
+sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python ./main.py --shm game_shm --data-store /tmp/mygame_dev.json
 ```
 
 1. Read logs/errors directly in the same terminal (stdout/stderr).
@@ -195,7 +195,7 @@ You should see entries similar to:
 - Do make sure `main.py` exists and starts with the environment Python.
 - Do log useful startup/runtime errors to stdout/stderr.
 - Do restart `dartsnut_python.service` after major game updates.
-- Do use `sudo ./venv0/bin/python` for local/direct game runs.
+- Do use `sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python` for local/direct game runs.
 
 ### Don't
 
@@ -216,7 +216,7 @@ You should see entries similar to:
   - `main.py` missing
   - parser rejects `--shm` / `--data-store`
   - runtime exception at startup (check journald logs)
-  - wrong Python invocation (use `sudo ./venv0/bin/python` for direct runs)
+  - wrong Python invocation (use `sudo /root/.local/bin/uv run --directory /home/rpi/dartsnut_rpi python` for direct runs)
 3. **No useful logs**
   - ensure game prints/logs to stdout/stderr
   - use `journalctl -u dartsnut_python.service -f` while launching

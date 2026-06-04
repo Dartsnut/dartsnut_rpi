@@ -4,7 +4,7 @@
 #
 # Pi layout (see setup.sh / update.sh): repo lives at /home/rpi/dartsnut_rpi.
 # Release branch carries only what is needed to run main.py, setup.sh, update.sh,
-# systemd units, assets, Python trees, requirements, system-packages, and the
+# systemd units, assets, Python trees, pyproject.toml, uv.lock, system-packages, and the
 # compiled Supabase sync binary at ./bridge (no supabase/ or supabase_bridge/ in
 # the release commit).
 #
@@ -55,9 +55,11 @@ ALLOWLIST=(
   services/99-dartsnut-tcp.conf
   services/logo.ppm
   bridge
-  requirements.txt
+  pyproject.toml
+  uv.lock
   system-packages.txt
   scripts/install_system_packages.sh
+  scripts/uv_env.sh
 )
 
 log() {
