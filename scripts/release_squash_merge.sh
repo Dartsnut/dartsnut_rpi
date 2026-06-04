@@ -29,6 +29,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+GIT_INDEX_LOCK="${REPO_ROOT}/.git/index.lock"
+RELEASE_SCRIPT_LOCK="${REPO_ROOT}/.git/dartsnut-release-squash.lock"
+
 # Paths included in the release commit (minimal device tree).
 ALLOWLIST=(
   .gitattributes
@@ -74,6 +77,66 @@ log() {
 fail() {
   printf '[release-squash] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+release_clear_stale_index_lock() {
+  local age=0
+  local now mtime
+  [[ -f "${GIT_INDEX_LOCK}" ]] || return 0
+  now=$(date +%s)
+  if stat -f %m "${GIT_INDEX_LOCK}" >/dev/null 2>&1; then
+    mtime=$(stat -f %m "${GIT_INDEX_LOCK}")
+  else
+    mtime=$(stat -c %Y "${GIT_INDEX_LOCK}")
+  fi
+  age=$((now - mtime))
+  if (( age < 15 )); then
+    return 0
+  fi
+  if pgrep -x git >/dev/null 2>&1; then
+    return 0
+  fi
+  log "removing stale .git/index.lock (age=${age}s, no git process)"
+  rm -f "${GIT_INDEX_LOCK}"
+}
+
+release_acquire_script_lock() {
+  if ! mkdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null; then
+    fail "release squash already running (or stale ${RELEASE_SCRIPT_LOCK}); remove that directory if no script is active"
+  fi
+  trap 'rmdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null || true' EXIT INT TERM
+}
+
+# Serialize git index updates; retry when Cursor/IDE git holds index.lock.
+git() {
+  local attempt=0
+  local max_attempts=120
+  local errfile
+  errfile="$(mktemp)"
+  while (( attempt < max_attempts )); do
+    release_clear_stale_index_lock
+    if [[ ! -f "${GIT_INDEX_LOCK}" ]]; then
+      if command git "$@" 2>"${errfile}"; then
+        rm -f "${errfile}"
+        return 0
+      fi
+      if grep -q 'index.lock' "${errfile}" 2>/dev/null; then
+        attempt=$((attempt + 1))
+        sleep 0.5
+        continue
+      fi
+      cat "${errfile}" >&2
+      rm -f "${errfile}"
+      return 1
+    fi
+    if (( attempt == 0 || attempt % 10 == 0 )); then
+      log "waiting for .git/index.lock to clear (attempt $((attempt + 1))/${max_attempts})"
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.5
+  done
+  rm -f "${errfile}"
+  fail "git index.lock still present; close other git UIs or run: rm -f .git/index.lock"
 }
 
 require_clean_tree() {
@@ -304,6 +367,8 @@ main() {
   local input_version resolved_version commit_message
   input_version="${1:-}"
 
+  release_acquire_script_lock
+  release_clear_stale_index_lock
   require_clean_tree
   require_branch_exists "master"
   require_branch_exists "release"
