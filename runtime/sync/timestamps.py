@@ -38,3 +38,11 @@ def is_newer_than(candidate: Optional[datetime], baseline: Optional[datetime]) -
     if baseline is None:
         return True
     return candidate > baseline
+
+
+def resolve_snapshot_updated_at(config: Any) -> Optional[datetime]:
+    from runtime.remote_device_config import (
+        resolve_snapshot_updated_at as resolve_remote_snapshot_updated_at,
+    )
+
+    return resolve_remote_snapshot_updated_at(config)

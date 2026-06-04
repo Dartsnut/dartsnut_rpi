@@ -41,6 +41,67 @@ def test_reducer_does_not_clear_ready_on_playing_only_snapshot():
     assert reducer.cache.game_ready_ids == frozenset({"g1"})
 
 
+def test_reducer_accepts_app_settings_change_with_equal_timestamp():
+    reducer = SyncReducer()
+    reducer.cache.has_seen_remote_row = True
+    reducer.cache.last_row_updated_at = datetime(2026, 6, 1, 12, 0, 0)
+    baseline = {
+        "updated_at": "2026-06-01T12:00:00Z",
+        "last_update_source": "mobile_app",
+        "games": [{"id": "g1", "status": "ready", "version": "1"}],
+        "volume": 50,
+    }
+    events = tokenize_snapshot(baseline, emit_full_snapshot=False)
+    accepted, _ = reducer.reduce(events)
+    assert accepted
+
+    updated = dict(baseline)
+    updated["volume"] = 80
+    events = tokenize_snapshot(updated, emit_full_snapshot=False)
+    accepted, _ = reducer.reduce(events)
+    assert accepted
+
+
+def test_reducer_accepts_app_update_when_only_device_updated_at_is_newer():
+    reducer = SyncReducer()
+    reducer.cache.has_seen_remote_row = True
+    reducer.cache.last_row_updated_at = datetime(2026, 6, 1, 10, 0, 0)
+    baseline = {
+        "updated_at": "2026-06-01T10:00:00Z",
+        "device_updated_at": "2026-06-01T10:00:00Z",
+        "last_update_source": "mobile_app",
+        "games": [{"id": "g1", "status": "ready", "version": "1"}],
+        "volume": 50,
+    }
+    events = tokenize_snapshot(baseline, emit_full_snapshot=False)
+    accepted, _ = reducer.reduce(events)
+    assert accepted
+
+    updated = dict(baseline)
+    updated["volume"] = 80
+    updated["device_updated_at"] = "2026-06-01T11:00:00Z"
+    events = tokenize_snapshot(updated, emit_full_snapshot=False)
+    accepted, _ = reducer.reduce(events)
+    assert accepted
+
+
+def test_reducer_rejects_stale_bridge_echo_with_same_fingerprint():
+    reducer = SyncReducer()
+    reducer.cache.has_seen_remote_row = True
+    reducer.cache.last_row_updated_at = datetime(2026, 6, 1, 12, 0, 1)
+    config = {
+        "updated_at": "2026-06-01T12:00:00Z",
+        "last_update_source": "supabase_bridge",
+        "games": [{"id": "g1", "status": "ready", "version": "1"}],
+        "volume": 50,
+    }
+    events = tokenize_snapshot(config, emit_full_snapshot=False)
+    reducer.cache.last_snapshot_fingerprint = events[0].meta.fingerprint
+    reducer.cache.last_snapshot_fingerprint_at = datetime(2026, 6, 1, 12, 0, 1)
+    accepted, _ = reducer.reduce(events)
+    assert accepted == []
+
+
 def test_outbox_retries_when_send_returns_false():
     calls = []
 

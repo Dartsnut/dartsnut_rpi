@@ -6,6 +6,7 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 from domain.app_context import AppContext
+from runtime.sync.event_applier import apply_events
 from runtime.sync.outbox import SyncOutbox
 from runtime.sync.reducer import ReducedGameReady, SyncReducer
 from runtime.sync.tokenizer import tokenize_snapshot
@@ -99,14 +100,15 @@ class SyncEngine:
         game_ready: Optional[ReducedGameReady],
     ) -> bool:
         applied = False
-        for event in accepted:
-            kind = type(event).__name__
-            if kind in ("FullSnapshot", "ResetConfirmed"):
-                try:
-                    self._on_apply_config(event.config)
-                    applied = True
-                except Exception as e:
-                    _log.warning("sync engine: apply config failed: %s", e)
+        if accepted:
+            try:
+                apply_events(accepted, apply_config=self._on_apply_config)
+                applied = True
+            except Exception as e:
+                _log.warning("sync engine: apply events failed: %s", e)
+            for event in accepted:
+                if isinstance(event, FullSnapshot):
+                    self.reducer.cache.has_seen_remote_row = True
         self._pending_game_ready = game_ready
         return applied or game_ready is not None
 

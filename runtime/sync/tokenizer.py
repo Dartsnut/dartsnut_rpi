@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional
 
 from runtime.remote_device_config import (
     is_remote_reset_confirmed,
     is_remote_reset_confirmation_source,
     normalize_games_list,
+    resolve_snapshot_updated_at,
 )
+from runtime.sync.fingerprint import snapshot_content_fingerprint
 from runtime.sync.events import (
     BluetoothChanged,
     DeviceSettingsChanged,
@@ -50,31 +51,12 @@ def _all_entries_non_ready(games_cfg: List[Dict[str, Any]]) -> bool:
 
 
 def snapshot_fingerprint(config: Dict[str, Any]) -> str:
-    games = normalize_games_list(config)
-    game_part = sorted(
-        (
-            str(g.get("id") or ""),
-            str(g.get("status") or "").strip().lower(),
-            str(g.get("version") or ""),
-        )
-        for g in games
-        if isinstance(g, dict)
-    )
-    return json.dumps(
-        {
-            "updated_at": config.get("updated_at") or config.get("device_updated_at"),
-            "last_update_source": config.get("last_update_source"),
-            "games": game_part,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
+    return snapshot_content_fingerprint(config)
 
 
 def build_meta(config: Dict[str, Any]) -> SyncEventMeta:
     return SyncEventMeta(
-        updated_at=parse_iso_ts(config.get("updated_at") or config.get("device_updated_at")),
+        updated_at=resolve_snapshot_updated_at(config),
         last_update_source=str(config.get("last_update_source") or "").strip().lower(),
         fingerprint=snapshot_fingerprint(config),
     )

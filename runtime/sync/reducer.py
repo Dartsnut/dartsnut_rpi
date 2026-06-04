@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import FrozenSet, List, Optional, Tuple
 
@@ -15,6 +16,8 @@ from runtime.sync.events import (
 )
 from runtime.sync.game_ready import resolve_authoritative_ready_ids
 from runtime.sync.timestamps import is_newer_than
+
+_log = logging.getLogger(__name__)
 
 _BRIDGE_SOURCES = frozenset({"supabase_bridge", "supabase_bridge_init"})
 _DUPLICATE_SNAPSHOT_WINDOW_SECONDS = 2.0
@@ -67,9 +70,12 @@ class SyncReducer:
         return accepted, game_ready
 
     def _accept_row_meta(self, meta: SyncEventMeta) -> bool:
+        fingerprint_changed = meta.fingerprint != self.cache.last_snapshot_fingerprint
+        timestamp_newer = is_newer_than(meta.updated_at, self.cache.last_row_updated_at)
+
         if meta.last_update_source in _BRIDGE_SOURCES:
             if (
-                meta.fingerprint == self.cache.last_snapshot_fingerprint
+                not fingerprint_changed
                 and self.cache.last_snapshot_fingerprint_at is not None
                 and meta.updated_at is not None
                 and (meta.updated_at - self.cache.last_snapshot_fingerprint_at).total_seconds()
@@ -77,11 +83,23 @@ class SyncReducer:
             ):
                 return False
 
-        if not is_newer_than(meta.updated_at, self.cache.last_row_updated_at):
-            if self.cache.has_seen_remote_row:
+        if self.cache.has_seen_remote_row and not timestamp_newer:
+            if meta.last_update_source in _BRIDGE_SOURCES:
+                _log.debug(
+                    "sync reducer: reject stale bridge row updated_at=%s source=%s",
+                    meta.updated_at,
+                    meta.last_update_source,
+                )
+                return False
+            if not fingerprint_changed:
+                _log.debug(
+                    "sync reducer: reject stale remote row updated_at=%s source=%s",
+                    meta.updated_at,
+                    meta.last_update_source,
+                )
                 return False
 
-        if meta.updated_at is not None:
+        if meta.updated_at is not None and timestamp_newer:
             self.cache.last_row_updated_at = meta.updated_at
         self.cache.last_snapshot_fingerprint = meta.fingerprint
         self.cache.last_snapshot_fingerprint_at = meta.updated_at or _utc_now()

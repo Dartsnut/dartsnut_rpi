@@ -47,6 +47,19 @@ def parse_iso_ts(value: Any) -> Optional[datetime]:
     return None
 
 
+def resolve_snapshot_updated_at(config: Any) -> Optional[datetime]:
+    """Use the newer of row updated_at and state.device_updated_at."""
+    if not isinstance(config, dict):
+        return None
+    row_at = parse_iso_ts(config.get("updated_at"))
+    device_at = parse_iso_ts(config.get("device_updated_at"))
+    if row_at is None:
+        return device_at
+    if device_at is None:
+        return row_at
+    return row_at if row_at > device_at else device_at
+
+
 def is_remote_reset_confirmed(config: dict) -> bool:
     if not isinstance(config, dict):
         return False
@@ -126,26 +139,9 @@ def _utc_now() -> datetime:
 
 def snapshot_dedupe_fingerprint(config: dict) -> str:
     """Stable fingerprint for duplicate remote snapshot suppression."""
-    games = normalize_games_list(config)
-    game_part = sorted(
-        (
-            str(g.get("id") or ""),
-            str(g.get("status") or "").strip().lower(),
-            str(g.get("version") or ""),
-        )
-        for g in games
-        if isinstance(g, dict)
-    )
-    return json.dumps(
-        {
-            "updated_at": config.get("updated_at") or config.get("device_updated_at"),
-            "last_update_source": config.get("last_update_source"),
-            "games": game_part,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
+    from runtime.sync.fingerprint import snapshot_content_fingerprint
+
+    return snapshot_content_fingerprint(config)
 
 
 def note_local_game_transition(
@@ -555,9 +551,8 @@ class RemoteDeviceConfigApplier:
         deps = self._deps
         rt = self._runtime
         ctx = deps.app_ctx
-        # Prefer row-level updated_at from remote sync payloads. device_updated_at is
-        # local device state time and may remain stale across remote row updates.
-        cfg_ts = parse_iso_ts(config.get("updated_at") or config.get("device_updated_at"))
+        # App writes often bump state.device_updated_at only; row updated_at may lag.
+        cfg_ts = resolve_snapshot_updated_at(config)
 
         if (
             deps.is_reset_in_progress()
@@ -746,7 +741,7 @@ class RemoteDeviceConfigApplier:
                 games_cfg = []
             else:
                 games_cfg = normalize_games_list(config)
-                if games_cfg:
+                if games_cfg and (skip_game_commands or skip_games_dedupe):
                     self._reconcile_downloading_games(games_cfg)
                 if not skip_game_commands:
                     self._apply_menu_ready_from_games(ctx, games_cfg)
