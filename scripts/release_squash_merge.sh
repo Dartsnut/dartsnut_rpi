@@ -29,7 +29,10 @@ cd "${REPO_ROOT}"
 
 # Paths included in the release commit (minimal device tree).
 ALLOWLIST=(
+  .gitattributes
   .gitignore
+  uv
+  uv.sha256
   main.py
   check_and_update.py
   default.py

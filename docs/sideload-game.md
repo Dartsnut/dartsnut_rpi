@@ -102,7 +102,7 @@ The runtime creates a dedicated virtualenv at `apps/<game_id>/.venv` automatical
 Optional manual venv setup:
 
 ```bash
-sudo /root/.local/bin/uv sync --directory apps/mygame
+sudo /home/rpi/dartsnut_rpi/uv sync --directory apps/mygame
 ```
 
 Optional quick check (same interpreter as machine runtime):

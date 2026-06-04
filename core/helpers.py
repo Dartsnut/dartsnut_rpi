@@ -59,7 +59,7 @@ def get_user_data_store_path(app_id: str) -> str:
 
 
 def uv_bin() -> str:
-    return os.environ.get("DARTSNUT_UV_BIN", "/root/.local/bin/uv")
+    return os.environ.get("DARTSNUT_UV_BIN", os.path.join(repo_root(), "uv"))
 
 
 def repo_root() -> str:
