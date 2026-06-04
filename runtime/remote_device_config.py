@@ -331,6 +331,65 @@ class RemoteDeviceConfigApplier:
     def runtime(self) -> RemoteConfigRuntimeState:
         return self._runtime
 
+    def _reconcile_downloading_games(self, games_cfg: list[dict[str, Any]]) -> None:
+        """
+        Resume or clear remote ``downloading`` after interrupted downloads.
+
+        Startup settlement intentionally leaves existing ``downloading`` rows
+        untouched, and the first post-restart snapshot may skip game commands.
+        """
+        deps = self._deps
+        rt = self._runtime
+        for g in games_cfg:
+            if not isinstance(g, dict):
+                continue
+            game_id = str(g.get("id") or "").strip()
+            if not game_id:
+                continue
+            if str(g.get("status") or "").strip().lower() != "downloading":
+                continue
+            expected_version = str(g.get("version") or "").strip()
+            rt.remote_downloading_game_ids.add(game_id)
+
+            if deps.local_game_version_matches(game_id, expected_version):
+                _log.info(
+                    "remote config: reconcile downloading->ready game_id=%s reason=local_version_matches",
+                    game_id,
+                )
+                try:
+                    deps.request_set_game_status(game_id, "ready")
+                except Exception as e:
+                    _log.warning(
+                        "remote config: reconcile ready publish failed game_id=%s: %s",
+                        game_id,
+                        e,
+                    )
+                rt.remote_downloading_game_ids.discard(game_id)
+                continue
+
+            try:
+                ok = deps.ensure_game_downloaded(game_id, expected_version)
+            except Exception:
+                _log.exception(
+                    "remote config: reconcile download exception game_id=%s",
+                    game_id,
+                )
+                ok = False
+            if ok:
+                _log.info(
+                    "remote config: reconcile downloading->ready game_id=%s reason=download_complete",
+                    game_id,
+                )
+                try:
+                    deps.request_set_game_status(game_id, "ready")
+                except Exception as e:
+                    _log.warning(
+                        "remote config: reconcile ready publish failed game_id=%s: %s",
+                        game_id,
+                        e,
+                    )
+                rt.remote_downloading_game_ids.discard(game_id)
+
     def _publish_startup_recovery_game_status(
         self,
         game_id: str,
@@ -687,6 +746,8 @@ class RemoteDeviceConfigApplier:
                 games_cfg = []
             else:
                 games_cfg = normalize_games_list(config)
+                if games_cfg:
+                    self._reconcile_downloading_games(games_cfg)
                 if not skip_game_commands:
                     self._apply_menu_ready_from_games(ctx, games_cfg)
 

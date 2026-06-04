@@ -123,6 +123,29 @@ def test_game_select_game_list_refreshes_after_remote_apply_and_refresh(
     assert app_ctx.reload_game_menu is False
 
 
+def test_gate_snapshot_reconciles_stuck_downloading_when_local_matches(
+    remote_config_harness,
+):
+    """Interrupted download: first snapshot has skip_game_commands but reconcile runs."""
+    apply = remote_config_harness["apply"]
+    events = remote_config_harness["events"]
+    deps = remote_config_harness["deps"]
+    runtime = remote_config_harness["runtime"]
+    runtime.awaiting_games_ready_confirmation = True
+    runtime.startup_settlement_completed = False
+
+    deps.local_game_version_matches = lambda gid, ver: gid == "chess" and ver == "2.0.0"
+    apply(
+        {
+            "updated_at": "2026-04-01T10:00:00",
+            "games": [{"id": "chess", "status": "downloading", "version": "2.0.0"}],
+        }
+    )
+
+    assert ("chess", "ready") in events["status_updates"]
+    assert events["ensure_download_calls"] == []
+
+
 def test_inbound_downloading_with_matching_local_version_publishes_ready(remote_config_harness):
     apply = remote_config_harness["apply"]
     events = remote_config_harness["events"]

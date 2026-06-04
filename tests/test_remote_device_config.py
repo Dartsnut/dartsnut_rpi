@@ -1132,6 +1132,43 @@ def test_gate_passes_empty_games_no_publish():
     assert game_ctx.remote_menu_ready_game_ids == frozenset()
 
 
+def test_gate_reconciles_stuck_downloading_when_local_matches():
+    """First post-restart snapshot skips game commands but still clears downloading."""
+    game_ctx = _game_ctx()
+    status_updates = []
+
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: MagicMock(),
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda gid, st: status_updates.append((gid, st)),
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda *_a: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda gid, ver: gid == "g1" and ver == "2.0.0",
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply(
+        {
+            "updated_at": "2026-04-01T10:00:00",
+            "games": [{"id": "g1", "status": "downloading", "version": "2.0.0"}],
+        }
+    )
+
+    assert status_updates == [("g1", "ready")]
+    assert rt.remote_downloading_game_ids == set()
+    assert rt.awaiting_games_ready_confirmation is False
+
+
 def test_gate_playing_publishes_once_then_closes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     os.makedirs("apps/g1", exist_ok=True)
