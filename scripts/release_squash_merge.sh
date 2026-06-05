@@ -9,7 +9,7 @@
 # system-packages, and the compiled Supabase sync binary at ./bridge (no supabase/,
 # supabase_bridge/, tests/, docs/, or legacy requirements.txt in the release commit).
 #
-# Flow: resolve version -> bump pyproject.toml on master and commit ->
+# Flow: resolve version -> bump pyproject.toml and uv.lock on master and commit ->
 # checkout release -> ff-only origin/release -> merge --squash master ->
 # optional cargo bridge build -> clear index -> stage allowlist only -> verify ->
 # single commit -> tag vX.Y.Z.
@@ -351,7 +351,8 @@ resolve_squash_conflicts_prefer_master() {
 bump_pyproject_version_on_master() {
   local version="$1"
   local pyproject="${REPO_ROOT}/pyproject.toml"
-  local current
+  local uv_lock="${REPO_ROOT}/uv.lock"
+  local current_pyproject current_uv_lock
 
   log "checking out master and syncing with origin/master"
   git checkout master
@@ -362,40 +363,68 @@ bump_pyproject_version_on_master() {
   if [[ ! -f "${pyproject}" ]]; then
     fail "missing ${pyproject}"
   fi
+  if [[ ! -f "${uv_lock}" ]]; then
+    fail "missing ${uv_lock}"
+  fi
 
-  current="$(grep -E '^version = ' "${pyproject}" | sed -n 's/^version = "\(.*\)"/\1/p' | head -n 1)"
-  if [[ -z "${current}" ]]; then
+  current_pyproject="$(grep -E '^version = ' "${pyproject}" | sed -n 's/^version = "\(.*\)"/\1/p' | head -n 1)"
+  if [[ -z "${current_pyproject}" ]]; then
     fail "pyproject.toml missing version = \"X.Y.Z\" field"
   fi
 
-  if [[ "${current}" == "${version}" ]]; then
-    log "pyproject.toml already at ${version}; skipping master bump commit"
+  current_uv_lock="$(python3 -c "
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
+match = re.search(r'name = \"dartsnut-rpi\"\nversion = \"([^\"]+)\"', text)
+if match is None:
+    raise SystemExit('uv.lock missing dartsnut-rpi package version')
+print(match.group(1))
+" "${uv_lock}")"
+
+  if [[ "${current_pyproject}" == "${version}" && "${current_uv_lock}" == "${version}" ]]; then
+    log "pyproject.toml and uv.lock already at ${version}; skipping master bump commit"
     return 0
   fi
 
-  log "updating pyproject.toml version ${current} -> ${version}"
+  log "updating project version -> ${version} (pyproject.toml: ${current_pyproject}, uv.lock: ${current_uv_lock})"
   python3 -c "
 import pathlib
 import re
 import sys
 
 resolved = sys.argv[1]
-path = pathlib.Path(sys.argv[2])
-text = path.read_text(encoding='utf-8')
-new, n = re.subn(
+pyproject = pathlib.Path(sys.argv[2])
+uv_lock = pathlib.Path(sys.argv[3])
+
+py_text = pyproject.read_text(encoding='utf-8')
+py_new, py_n = re.subn(
     r'^version = \".*\"',
     f'version = \"{resolved}\"',
-    text,
+    py_text,
     count=1,
     flags=re.M,
 )
-if n != 1:
+if py_n != 1:
     raise SystemExit('failed to update version in pyproject.toml')
-path.write_text(new, encoding='utf-8')
-" "${version}" "${pyproject}"
+pyproject.write_text(py_new, encoding='utf-8')
 
-  git add -- "${pyproject}"
-  git commit -m "chore(release): set pyproject version to ${version}"
+lock_text = uv_lock.read_text(encoding='utf-8')
+lock_new, lock_n = re.subn(
+    r'(name = \"dartsnut-rpi\"\nversion = \")[^\"]+(\")',
+    rf'\\g<1>{resolved}\\2',
+    lock_text,
+    count=1,
+)
+if lock_n != 1:
+    raise SystemExit('failed to update dartsnut-rpi version in uv.lock')
+uv_lock.write_text(lock_new, encoding='utf-8')
+" "${version}" "${pyproject}" "${uv_lock}"
+
+  git add -- "${pyproject}" "${uv_lock}"
+  git commit -m "chore(release): set project version to ${version}"
   log "master version commit: $(git rev-parse --short HEAD)"
 }
 
