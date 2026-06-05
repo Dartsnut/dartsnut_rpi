@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::Utc;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -51,7 +52,36 @@ struct RestProbeSnapshot {
     probe_ok: bool,
 }
 
+#[derive(Clone, Default)]
+struct ProbeState {
+    snapshot: RestProbeSnapshot,
+    last_outbound_at: Option<Instant>,
+}
+
 const PROBE_INTERVAL_SECS: u64 = 30;
+
+fn record_outbound_success(state: &mut ProbeState, latency_ms: u64) {
+    state.snapshot = RestProbeSnapshot {
+        latency_ms: Some(latency_ms),
+        probe_ok: true,
+    };
+    state.last_outbound_at = Some(Instant::now());
+}
+
+fn record_outbound_failure(state: &mut ProbeState) {
+    state.snapshot.probe_ok = false;
+    state.snapshot.latency_ms = None;
+}
+
+fn outbound_within_idle_window(state: &ProbeState, idle: Duration) -> bool {
+    state
+        .last_outbound_at
+        .is_some_and(|t| t.elapsed() < idle)
+}
+
+fn device_updated_at_iso_timestamp() -> String {
+    Utc::now().to_rfc3339()
+}
 
 fn parse_socket_path() -> String {
     for arg in env::args() {
@@ -210,6 +240,30 @@ fn rpc_patch_url(cfg: &SupabaseConfig) -> String {
     )
 }
 
+fn rpc_apply_patch_recorded(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    patch: Value,
+    full: bool,
+    source_override: Option<&str>,
+    rpc_lock: &Arc<Mutex<()>>,
+    probe_state: &Arc<Mutex<ProbeState>>,
+) -> Result<()> {
+    let _guard = rpc_lock
+        .lock()
+        .map_err(|_| anyhow::anyhow!("rpc apply lock poisoned"))?;
+    let started = Instant::now();
+    let result = rpc_apply_patch(client, cfg, patch, full, source_override);
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if let Ok(mut state) = probe_state.lock() {
+        match &result {
+            Ok(()) => record_outbound_success(&mut state, elapsed_ms),
+            Err(_) => record_outbound_failure(&mut state),
+        }
+    }
+    result
+}
+
 #[allow(dead_code)]
 fn merge_games_patch_with_remote_state(
     client: &Client,
@@ -291,28 +345,43 @@ fn remote_devices_query_url(cfg: &SupabaseConfig, select: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn probe_remote_devices_latency_ms(client: &Client, cfg: &SupabaseConfig) -> RestProbeSnapshot {
-    let url = match remote_devices_query_url(cfg, "device_id") {
-        Ok(u) => u,
-        Err(_) => return RestProbeSnapshot::default(),
-    };
-    let started = Instant::now();
-    let resp = client
-        .get(url)
-        .header("apikey", &cfg.key)
-        .header("Authorization", format!("Bearer {}", cfg.key))
-        .send();
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    match resp {
-        Ok(response) => {
-            let _ = response.bytes();
-            RestProbeSnapshot {
-                latency_ms: Some(elapsed_ms),
-                probe_ok: true,
-            }
+fn probe_idle_device_updated_at_write(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    rpc_lock: &Arc<Mutex<()>>,
+    probe_state: &Arc<Mutex<ProbeState>>,
+) -> RestProbeSnapshot {
+    let patch = json!({
+        "device_updated_at": device_updated_at_iso_timestamp(),
+    });
+    let _ = rpc_apply_patch_recorded(
+        client,
+        cfg,
+        patch,
+        false,
+        Some(SOURCE_SUPABASE_BRIDGE),
+        rpc_lock,
+        probe_state,
+    );
+    probe_state
+        .lock()
+        .map(|s| s.snapshot.clone())
+        .unwrap_or_default()
+}
+
+fn run_probe_tick(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    rpc_lock: &Arc<Mutex<()>>,
+    probe_state: &Arc<Mutex<ProbeState>>,
+) -> RestProbeSnapshot {
+    let idle = Duration::from_secs(PROBE_INTERVAL_SECS);
+    if let Ok(state) = probe_state.lock() {
+        if outbound_within_idle_window(&state, idle) {
+            return state.snapshot.clone();
         }
-        Err(_) => RestProbeSnapshot::default(),
     }
+    probe_idle_device_updated_at_write(client, cfg, rpc_lock, probe_state)
 }
 
 fn send_bridge_health(
@@ -330,27 +399,13 @@ fn send_bridge_health(
     let _ = send_msg(writer, "bridge_health", payload);
 }
 
-fn remote_device_exists(
-    client: &Client,
-    cfg: &SupabaseConfig,
-    probe_cache: Option<&Arc<Mutex<RestProbeSnapshot>>>,
-) -> Result<bool> {
+fn remote_device_exists(client: &Client, cfg: &SupabaseConfig) -> Result<bool> {
     let url = remote_devices_query_url(cfg, "device_id")?;
-    let started = Instant::now();
     let response = client
         .get(url)
         .header("apikey", &cfg.key)
         .header("Authorization", format!("Bearer {}", cfg.key))
         .send()?;
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    if response.status().is_success() {
-        if let Some(cache) = probe_cache {
-            if let Ok(mut snap) = cache.lock() {
-                snap.latency_ms = Some(elapsed_ms);
-                snap.probe_ok = true;
-            }
-        }
-    }
     let rows: Vec<Value> = response.error_for_status()?.json()?;
     Ok(!rows.is_empty())
 }
@@ -360,7 +415,8 @@ fn run_rest_probe_loop(
     cfg: SupabaseConfig,
     wake_rx: mpsc::Receiver<()>,
     realtime_connected: Arc<AtomicBool>,
-    probe_cache: Arc<Mutex<RestProbeSnapshot>>,
+    probe_state: Arc<Mutex<ProbeState>>,
+    rpc_apply_lock: Arc<Mutex<()>>,
     probe_in_flight: Arc<AtomicBool>,
 ) {
     let client = match Client::builder()
@@ -379,21 +435,13 @@ fn run_rest_probe_loop(
         if probe_in_flight.swap(true, Ordering::AcqRel) {
             continue;
         }
-        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
-        {
-            let mut cache = probe_cache.lock().expect("probe cache lock poisoned");
-            *cache = snapshot.clone();
-        }
-        let state = if realtime_connected.load(Ordering::Relaxed) {
+        let snapshot = run_probe_tick(&client, &cfg, &rpc_apply_lock, &probe_state);
+        let ws_state = if realtime_connected.load(Ordering::Relaxed) {
             "connected"
         } else {
             "disconnected"
         };
-        let cache = probe_cache
-            .lock()
-            .expect("probe cache lock poisoned")
-            .clone();
-        send_bridge_health(&writer, state, &cache);
+        send_bridge_health(&writer, ws_state, &snapshot);
         probe_in_flight.store(false, Ordering::Release);
     }
 }
@@ -402,26 +450,46 @@ fn apply_initial_state_with_retry(
     client: &Client,
     cfg: &SupabaseConfig,
     patch: Value,
-    probe_cache: Option<&Arc<Mutex<RestProbeSnapshot>>>,
+    rpc_lock: &Arc<Mutex<()>>,
+    probe_state: &Arc<Mutex<ProbeState>>,
 ) -> Result<()> {
     let max_attempts = 8u32;
     let mut backoff_seconds = 1u64;
     let mut last_err: Option<anyhow::Error> = None;
 
     for attempt in 1..=max_attempts {
-        match remote_device_exists(client, cfg, probe_cache) {
-            Ok(false) => match rpc_apply_patch(client, cfg, patch.clone(), true, None) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    eprintln!(
-                        "bridge: initial full state write failed (attempt {attempt}/{max_attempts}): {e}"
-                    );
-                    last_err = Some(e);
+        match remote_device_exists(client, cfg) {
+            Ok(false) => {
+                match rpc_apply_patch_recorded(
+                    client,
+                    cfg,
+                    patch.clone(),
+                    true,
+                    None,
+                    rpc_lock,
+                    probe_state,
+                ) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        eprintln!(
+                            "bridge: initial full state write failed (attempt {attempt}/{max_attempts}): {e}"
+                        );
+                        last_err = Some(e);
+                    }
                 }
-            },
+            }
             Ok(true) => {
-                let delta_patch = strip_runtime_overwrites_for_existing_device_initial_state(patch.clone());
-                match rpc_apply_patch(client, cfg, delta_patch, false, None) {
+                let delta_patch =
+                    strip_runtime_overwrites_for_existing_device_initial_state(patch.clone());
+                match rpc_apply_patch_recorded(
+                    client,
+                    cfg,
+                    delta_patch,
+                    false,
+                    None,
+                    rpc_lock,
+                    probe_state,
+                ) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         eprintln!(
@@ -433,7 +501,15 @@ fn apply_initial_state_with_retry(
             }
             Err(e) => {
                 eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
-                match rpc_apply_patch(client, cfg, patch.clone(), true, None) {
+                match rpc_apply_patch_recorded(
+                    client,
+                    cfg,
+                    patch.clone(),
+                    true,
+                    None,
+                    rpc_lock,
+                    probe_state,
+                ) {
                     Ok(()) => return Ok(()),
                     Err(write_err) => {
                         eprintln!(
@@ -584,12 +660,13 @@ fn run_realtime_loop(
     cfg: SupabaseConfig,
     probe_wake_tx: mpsc::Sender<()>,
     realtime_connected: Arc<AtomicBool>,
-    probe_cache: Arc<Mutex<RestProbeSnapshot>>,
+    probe_state: Arc<Mutex<ProbeState>>,
 ) {
     let emit_health = |state: &str| {
-        let snap = probe_cache
+        let snap = probe_state
             .lock()
-            .expect("probe cache lock poisoned")
+            .expect("probe state lock poisoned")
+            .snapshot
             .clone();
         send_bridge_health(&writer, state, &snap);
     };
@@ -747,7 +824,10 @@ fn main() -> Result<()> {
             .timeout(Duration::from_secs(3))
             .build()
             .context("failed to build probe http client")?;
-        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        let rpc_apply_lock = Arc::new(Mutex::new(()));
+        let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+        let snapshot =
+            probe_idle_device_updated_at_write(&client, &cfg, &rpc_apply_lock, &probe_state);
         if snapshot.probe_ok {
             println!(
                 "{}",
@@ -783,14 +863,16 @@ fn main() -> Result<()> {
 
     send_msg(&writer, "ready", json!({}))?;
 
-    let probe_cache = Arc::new(Mutex::new(RestProbeSnapshot::default()));
+    let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+    let rpc_apply_lock = Arc::new(Mutex::new(()));
     let realtime_connected = Arc::new(AtomicBool::new(false));
     let probe_in_flight = Arc::new(AtomicBool::new(false));
     let (probe_wake_tx, probe_wake_rx) = mpsc::channel();
 
     let writer_probe = Arc::clone(&writer);
     let cfg_probe = cfg.clone();
-    let probe_cache_probe = Arc::clone(&probe_cache);
+    let probe_state_probe = Arc::clone(&probe_state);
+    let rpc_apply_lock_probe = Arc::clone(&rpc_apply_lock);
     let realtime_connected_probe = Arc::clone(&realtime_connected);
     let probe_in_flight_probe = Arc::clone(&probe_in_flight);
     thread::spawn(move || {
@@ -799,7 +881,8 @@ fn main() -> Result<()> {
             cfg_probe,
             probe_wake_rx,
             realtime_connected_probe,
-            probe_cache_probe,
+            probe_state_probe,
+            rpc_apply_lock_probe,
             probe_in_flight_probe,
         );
     });
@@ -807,7 +890,7 @@ fn main() -> Result<()> {
 
     let writer_clone = Arc::clone(&writer);
     let cfg_clone = cfg.clone();
-    let probe_cache_rt = Arc::clone(&probe_cache);
+    let probe_state_rt = Arc::clone(&probe_state);
     let probe_wake_tx_rt = probe_wake_tx.clone();
     let realtime_connected_rt = Arc::clone(&realtime_connected);
     thread::spawn(move || {
@@ -816,11 +899,12 @@ fn main() -> Result<()> {
             cfg_clone,
             probe_wake_tx_rt,
             realtime_connected_rt,
-            probe_cache_rt,
+            probe_state_rt,
         );
     });
 
-    let probe_cache_main = Arc::clone(&probe_cache);
+    let rpc_apply_lock_main = Arc::clone(&rpc_apply_lock);
+    let probe_state_main = Arc::clone(&probe_state);
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -846,15 +930,18 @@ fn main() -> Result<()> {
                         &client,
                         &cfg,
                         msg.payload,
-                        Some(&probe_cache_main),
+                        &rpc_apply_lock_main,
+                        &probe_state_main,
                     )
                 } else {
-                    rpc_apply_patch(
+                    rpc_apply_patch_recorded(
                         &client,
                         &cfg,
                         msg.payload,
                         full,
                         msg.source.as_deref(),
+                        &rpc_apply_lock_main,
+                        &probe_state_main,
                     )
                 };
                 match result {
@@ -878,12 +965,14 @@ fn main() -> Result<()> {
                 }
             }
             "device_state" => {
-                match rpc_apply_patch(
+                match rpc_apply_patch_recorded(
                     &client,
                     &cfg,
                     msg.payload,
                     false,
                     msg.source.as_deref(),
+                    &rpc_apply_lock_main,
+                    &probe_state_main,
                 ) {
                     Ok(()) => {
                         let _ = send_msg(
@@ -913,6 +1002,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn reset_confirmation_shape_is_detected() {
@@ -1012,11 +1102,65 @@ mod tests {
     }
 
     #[test]
-    fn probe_remote_devices_latency_ms_records_elapsed_on_http_response() {
+    fn outbound_within_idle_window_true_after_recent_outbound() {
+        let mut state = ProbeState::default();
+        record_outbound_success(&mut state, 42);
+        assert!(outbound_within_idle_window(
+            &state,
+            Duration::from_secs(PROBE_INTERVAL_SECS)
+        ));
+    }
+
+    #[test]
+    fn outbound_within_idle_window_false_when_never_outbound() {
+        let state = ProbeState::default();
+        assert!(!outbound_within_idle_window(
+            &state,
+            Duration::from_secs(PROBE_INTERVAL_SECS)
+        ));
+    }
+
+    #[test]
+    fn record_outbound_failure_clears_probe_ok_but_keeps_last_outbound_at() {
+        let mut state = ProbeState::default();
+        record_outbound_success(&mut state, 10);
+        let at = state.last_outbound_at;
+        record_outbound_failure(&mut state);
+        assert!(!state.snapshot.probe_ok);
+        assert!(state.snapshot.latency_ms.is_none());
+        assert_eq!(state.last_outbound_at, at);
+    }
+
+    #[test]
+    fn run_probe_tick_reuses_snapshot_when_outbound_recent() {
+        let cfg = SupabaseConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let client = Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .expect("client");
+        let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+        {
+            let mut s = probe_state.lock().expect("lock");
+            record_outbound_success(&mut s, 99);
+        }
+        let rpc_lock = Arc::new(Mutex::new(()));
+        let snap = run_probe_tick(&client, &cfg, &rpc_lock, &probe_state);
+        assert!(snap.probe_ok);
+        assert_eq!(snap.latency_ms, Some(99));
+    }
+
+    #[test]
+    fn probe_idle_device_updated_at_write_records_latency_on_rpc_success() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         let server = thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
                 let body = b"[]";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1036,15 +1180,30 @@ mod tests {
             .timeout(Duration::from_secs(3))
             .build()
             .expect("client");
-        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        let rpc_lock = Arc::new(Mutex::new(()));
+        let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+        let snapshot =
+            probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
         let _ = server.join();
 
         assert!(snapshot.probe_ok);
         assert!(snapshot.latency_ms.is_some());
+        let at = probe_state
+            .lock()
+            .expect("lock")
+            .last_outbound_at
+            .expect("outbound time");
+        assert!(outbound_within_idle_window(
+            &ProbeState {
+                snapshot: snapshot.clone(),
+                last_outbound_at: Some(at),
+            },
+            Duration::from_secs(PROBE_INTERVAL_SECS)
+        ));
     }
 
     #[test]
-    fn probe_remote_devices_latency_ms_fails_on_unreachable_host() {
+    fn probe_idle_device_updated_at_write_fails_on_unreachable_host() {
         let cfg = SupabaseConfig {
             url: "http://127.0.0.1:1".to_string(),
             key: "test-key".to_string(),
@@ -1054,7 +1213,10 @@ mod tests {
             .timeout(Duration::from_millis(200))
             .build()
             .expect("client");
-        let snapshot = probe_remote_devices_latency_ms(&client, &cfg);
+        let rpc_lock = Arc::new(Mutex::new(()));
+        let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+        let snapshot =
+            probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
         assert!(!snapshot.probe_ok);
         assert!(snapshot.latency_ms.is_none());
     }

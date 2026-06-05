@@ -97,7 +97,7 @@ SUPABASE_KEY="<supabase-key>" ./scripts/run_local_supabase_e2e.sh
 |-----------|------|---------|
 | Rust → Python | `ready` | Bridge connected; Python sends initial state |
 | Rust → Python | `remote_row` | Raw remote device state + row metadata (`updated_at`, `last_update_source`) |
-| Rust → Python | `bridge_health` | WS/REST connectivity (`state`, `rest_probe_ok`, `rest_latency_ms`) |
+| Rust → Python | `bridge_health` | WS connectivity (`state`) plus REST health (`rest_probe_ok`, `rest_latency_ms` from last successful outbound v2 RPC) |
 | Rust → Python | `ack` / `error` | Outbound RPC result (`ref` correlates to Python outbox entry) |
 | Python → Rust | `initial_state` / `rpc_patch` / `device_state` | Outbound state patch (with optional `ref`, `full`, `source`) |
 
@@ -109,6 +109,15 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 - Subscription is filtered to this device only: `device_id=eq.<BLE_MAC_UPPER>`.
 - Inbound rows where `last_update_source = 'supabase_bridge'` are ignored to prevent self-echo loops (Python reducer also dedupes bridge snapshots).
 - Bridge auto-reconnects with backoff and emits `bridge_health` state over the Unix socket.
+
+### REST health and idle `device_updated_at` heartbeat
+
+- `rest_latency_ms` is the round-trip time of the **last successful** `apply_remote_device_patch_v2` RPC (games, settings, initial state, or idle heartbeat). Settings WiFi color uses this write RTT, not a separate read probe.
+- Every outbound patch RPC records latency and `last_outbound_at` in the bridge. Failed RPCs clear `rest_probe_ok` until the next success.
+- A background probe wakes every 30s and always emits `bridge_health`. If an outbound RPC succeeded within the last 30s, it **reuses** the cached snapshot (no extra Supabase call).
+- When idle for 30s or more, the probe posts a timestamp-only patch (`device_updated_at`, `last_update_source = supabase_bridge`). That heartbeat is filtered on the Realtime inbound path (non-game bridge echo) so it does not re-apply local config.
+- All v2 patch RPCs (socket thread and idle probe) share one mutex so concurrent writes cannot race.
+- Read-only `remote_devices` GET (row existence during initial connect) does not update latency.
 
 ## Device ID behavior
 
