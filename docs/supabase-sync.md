@@ -107,7 +107,7 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 
 - The Rust bridge subscribes to Supabase Realtime (`postgres_changes`) on `public.remote_devices`.
 - Subscription is filtered to this device only: `device_id=eq.<BLE_MAC_UPPER>`.
-- Inbound rows where `last_update_source = 'supabase_bridge'` are ignored to prevent self-echo loops (Python reducer also dedupes bridge snapshots).
+- Inbound rows where `last_update_source = 'supabase_bridge_heartbeat'` are always ignored. Other `supabase_bridge` rows are ignored unless they carry games or reset-confirmation state (Python reducer also dedupes bridge snapshots).
 - Bridge auto-reconnects with backoff and emits `bridge_health` state over the Unix socket.
 
 ### REST health and idle `device_updated_at` heartbeat
@@ -115,7 +115,7 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 - `rest_latency_ms` is the round-trip time of the **last successful** `apply_remote_device_patch_v2` RPC (games, settings, initial state, or idle heartbeat). Settings WiFi color uses this write RTT, not a separate read probe.
 - Every outbound patch RPC records latency and `last_outbound_at` in the bridge. Failed RPCs clear `rest_probe_ok` until the next success.
 - A background probe wakes every 30s and always emits `bridge_health`. If an outbound RPC succeeded within the last 30s, it **reuses** the cached snapshot (no extra Supabase call).
-- When idle for 30s or more, the probe posts a timestamp-only patch (`device_updated_at`, `last_update_source = supabase_bridge`). That heartbeat is filtered on the Realtime inbound path (non-game bridge echo) so it does not re-apply local config.
+- When idle for 30s or more, the probe posts a timestamp-only patch (`device_updated_at`, `last_update_source = supabase_bridge_heartbeat`). Realtime rows with that source are always dropped in Rust before Python sees them (full row state still contains games/pages from the DB merge).
 - All v2 patch RPCs (socket thread and idle probe) share one mutex so concurrent writes cannot race.
 - Read-only `remote_devices` GET (row existence during initial connect) does not update latency.
 

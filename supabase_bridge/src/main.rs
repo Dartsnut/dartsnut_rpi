@@ -194,6 +194,7 @@ fn send_msg(writer: &Arc<Mutex<UnixStream>>, kind: &str, payload: Value) -> Resu
 
 const SOURCE_SUPABASE_BRIDGE: &str = "supabase_bridge";
 const SOURCE_SUPABASE_BRIDGE_INIT: &str = "supabase_bridge_init";
+const SOURCE_SUPABASE_BRIDGE_HEARTBEAT: &str = "supabase_bridge_heartbeat";
 
 fn rpc_apply_patch(
     client: &Client,
@@ -359,7 +360,7 @@ fn probe_idle_device_updated_at_write(
         cfg,
         patch,
         false,
-        Some(SOURCE_SUPABASE_BRIDGE),
+        Some(SOURCE_SUPABASE_BRIDGE_HEARTBEAT),
         rpc_lock,
         probe_state,
     );
@@ -647,6 +648,9 @@ fn is_game_state_payload(state: &Value) -> bool {
 }
 
 fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
+    if source == SOURCE_SUPABASE_BRIDGE_HEARTBEAT {
+        return true;
+    }
     if source == SOURCE_SUPABASE_BRIDGE_INIT {
         return false;
     }
@@ -1049,6 +1053,27 @@ mod tests {
             "dim_window": {"dim_window_enabled": false}
         });
         assert!(!should_filter_bridge_echo(SOURCE_SUPABASE_BRIDGE_INIT, &state));
+    }
+
+    #[test]
+    fn bridge_echo_filter_drops_heartbeat_even_with_full_state() {
+        let state = json!({
+            "device_updated_at": "2026-06-05T08:40:58Z",
+            "pages": [{"uuid": "p1"}],
+            "games": [{"id": "chess", "status": "ready"}]
+        });
+        assert!(should_filter_bridge_echo(
+            SOURCE_SUPABASE_BRIDGE_HEARTBEAT,
+            &state
+        ));
+    }
+
+    #[test]
+    fn bridge_echo_filter_still_forwards_bridge_games_echo() {
+        let state = json!({
+            "games": [{"id": "chess", "status": "ready"}]
+        });
+        assert!(!should_filter_bridge_echo(SOURCE_SUPABASE_BRIDGE, &state));
     }
 
     #[test]
