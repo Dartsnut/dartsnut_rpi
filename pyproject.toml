@@ -1,6 +1,6 @@
 [project]
 name = "dartsnut-rpi"
-version = "2.0.10"
+version = "2.0.11"
 requires-python = ">=3.11"
 dependencies = [
     "bluezero==0.9.1",
