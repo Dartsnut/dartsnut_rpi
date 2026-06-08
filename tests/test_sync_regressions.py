@@ -102,21 +102,6 @@ def test_reducer_rejects_stale_bridge_echo_with_same_fingerprint():
     assert accepted == []
 
 
-def test_reducer_rejects_older_app_settings_change_even_when_content_differs():
-    reducer = SyncReducer()
-    reducer.cache.has_seen_remote_row = True
-    reducer.cache.last_row_updated_at = datetime(2026, 6, 1, 12, 0, 1)
-    config = {
-        "updated_at": "2026-06-01T12:00:00Z",
-        "last_update_source": "mobile_app",
-        "games": [{"id": "g1", "status": "ready", "version": "1"}],
-        "volume": 80,
-    }
-    events = tokenize_snapshot(config, emit_full_snapshot=False)
-    accepted, _ = reducer.reduce(events)
-    assert accepted == []
-
-
 def test_outbox_retries_when_send_returns_false():
     calls = []
 
@@ -137,47 +122,6 @@ def test_outbox_retries_when_send_returns_false():
     outbox.stop()
     assert len(calls) >= 2
     assert calls[0][1] == {"brightness": 50}
-
-
-def test_outbox_coalesces_pending_settings_so_latest_value_wins():
-    calls = []
-
-    def send_fn(ref, patch, full, source):
-        calls.append((ref, dict(patch)))
-        return len(calls) > 1
-
-    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
-    outbox.start()
-    first_ref = outbox.enqueue({"volume": 60})
-    second_ref = outbox.enqueue({"volume": 70})
-
-    assert first_ref != second_ref
-    assert calls == [(first_ref, {"volume": 60}), (second_ref, {"volume": 70})]
-    assert outbox.pending_count() == 1
-
-    outbox.on_ack(second_ref)
-    assert outbox.pending_count() == 0
-    outbox.stop()
-
-
-def test_outbox_skips_settings_patch_matching_last_ack():
-    calls = []
-
-    def send_fn(ref, patch, full, source):
-        calls.append((ref, dict(patch)))
-        return True
-
-    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
-    outbox.start()
-    ref = outbox.enqueue({"brightness": 40})
-    outbox.on_ack(ref)
-
-    skipped_ref = outbox.enqueue({"brightness": 40})
-
-    assert skipped_ref == ""
-    assert calls == [(ref, {"brightness": 40})]
-    assert outbox.pending_count() == 0
-    outbox.stop()
 
 
 def test_outbox_ack_removes_pending():

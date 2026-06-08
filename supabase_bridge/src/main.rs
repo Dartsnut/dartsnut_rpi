@@ -74,7 +74,9 @@ fn record_outbound_failure(state: &mut ProbeState) {
 }
 
 fn outbound_within_idle_window(state: &ProbeState, idle: Duration) -> bool {
-    state.last_outbound_at.is_some_and(|t| t.elapsed() < idle)
+    state
+        .last_outbound_at
+        .is_some_and(|t| t.elapsed() < idle)
 }
 
 fn device_updated_at_iso_timestamp() -> String {
@@ -117,11 +119,7 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
                 "UNKNOWN-DEVICE".to_string()
             })
         });
-    Ok(SupabaseConfig {
-        url,
-        key,
-        device_id,
-    })
+    Ok(SupabaseConfig { url, key, device_id })
 }
 
 fn normalize_mac(value: &str) -> Option<String> {
@@ -167,7 +165,10 @@ fn resolve_device_id() -> Result<String> {
         }
     }
 
-    for cmd in [("hciconfig", vec!["-a"]), ("bluetoothctl", vec!["list"])] {
+    for cmd in [
+        ("hciconfig", vec!["-a"]),
+        ("bluetoothctl", vec!["list"]),
+    ] {
         if let Ok(out) = Command::new(cmd.0).args(cmd.1).output() {
             if out.status.success() {
                 if let Ok(stdout) = String::from_utf8(out.stdout) {
@@ -345,47 +346,6 @@ fn remote_devices_query_url(cfg: &SupabaseConfig, select: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn fetch_remote_device_snapshot(client: &Client, cfg: &SupabaseConfig) -> Result<Option<Value>> {
-    let url = remote_devices_query_url(cfg, "state,updated_at,last_update_source")?;
-    let response = client
-        .get(url)
-        .header("apikey", &cfg.key)
-        .header("Authorization", format!("Bearer {}", cfg.key))
-        .send()?;
-    let rows: Vec<Value> = response.error_for_status()?.json()?;
-    let Some(record) = rows.first() else {
-        return Ok(None);
-    };
-    let Some(state) = record.get("state") else {
-        return Ok(None);
-    };
-    let mut payload = build_config_payload(record, state);
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert(
-            "snapshot_origin".to_string(),
-            Value::String("rest_fetch".to_string()),
-        );
-    }
-    Ok(Some(payload))
-}
-
-fn send_fetched_remote_snapshot(
-    writer: &Arc<Mutex<UnixStream>>,
-    client: &Client,
-    cfg: &SupabaseConfig,
-) -> Result<bool> {
-    match fetch_remote_device_snapshot(client, cfg)? {
-        Some(payload) => {
-            send_msg(writer, "remote_row", payload)?;
-            Ok(true)
-        }
-        None => {
-            send_msg(writer, "remote_row_missing", json!({}))?;
-            Ok(false)
-        }
-    }
-}
-
 fn probe_idle_device_updated_at_write(
     client: &Client,
     cfg: &SupabaseConfig,
@@ -425,7 +385,11 @@ fn run_probe_tick(
     probe_idle_device_updated_at_write(client, cfg, rpc_lock, probe_state)
 }
 
-fn send_bridge_health(writer: &Arc<Mutex<UnixStream>>, state: &str, probe: &RestProbeSnapshot) {
+fn send_bridge_health(
+    writer: &Arc<Mutex<UnixStream>>,
+    state: &str,
+    probe: &RestProbeSnapshot,
+) {
     let mut payload = json!({ "state": state });
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("rest_probe_ok".to_string(), json!(probe.probe_ok));
@@ -456,7 +420,10 @@ fn run_rest_probe_loop(
     rpc_apply_lock: Arc<Mutex<()>>,
     probe_in_flight: Arc<AtomicBool>,
 ) {
-    let client = match Client::builder().timeout(Duration::from_secs(3)).build() {
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             eprintln!("bridge: failed to build probe http client: {e}");
@@ -534,9 +501,7 @@ fn apply_initial_state_with_retry(
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}"
-                );
+                eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
                 match rpc_apply_patch_recorded(
                     client,
                     cfg,
@@ -589,12 +554,7 @@ fn build_realtime_ws_url(cfg: &SupabaseConfig) -> Result<Url> {
     let scheme = match base.scheme() {
         "https" => "wss",
         "http" => "ws",
-        other => {
-            return Err(anyhow::anyhow!(
-                "unsupported supabase url scheme: {}",
-                other
-            ))
-        }
+        other => return Err(anyhow::anyhow!("unsupported supabase url scheme: {}", other)),
     };
     base.set_scheme(scheme)
         .map_err(|_| anyhow::anyhow!("failed to set websocket scheme"))?;
@@ -634,10 +594,7 @@ fn build_config_payload(record: &Value, state: &Value) -> Value {
 
     if let Some(obj) = payload.as_object_mut() {
         if let Some(updated_at) = record.get("updated_at").and_then(|v| v.as_str()) {
-            obj.insert(
-                "updated_at".to_string(),
-                Value::String(updated_at.to_string()),
-            );
+            obj.insert("updated_at".to_string(), Value::String(updated_at.to_string()));
         }
         if let Some(source) = record.get("last_update_source").and_then(|v| v.as_str()) {
             obj.insert(
@@ -684,7 +641,10 @@ fn is_reset_confirmation_state(state: &Value) -> bool {
 }
 
 fn is_game_state_payload(state: &Value) -> bool {
-    state.get("games").and_then(|v| v.as_array()).is_some()
+    state
+        .get("games")
+        .and_then(|v| v.as_array())
+        .is_some()
 }
 
 fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
@@ -721,16 +681,6 @@ fn run_realtime_loop(
         Ok(u) => u,
         Err(e) => {
             eprintln!("bridge: invalid realtime url: {e}");
-            realtime_connected.store(false, Ordering::Relaxed);
-            emit_health("disconnected");
-            signal_probe();
-            return;
-        }
-    };
-    let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("bridge: failed to build realtime snapshot client: {e}");
             realtime_connected.store(false, Ordering::Relaxed);
             emit_health("disconnected");
             signal_probe();
@@ -789,9 +739,6 @@ fn run_realtime_loop(
         realtime_connected.store(true, Ordering::Relaxed);
         emit_health("connected");
         signal_probe();
-        if let Err(e) = send_fetched_remote_snapshot(&writer, &client, &cfg) {
-            eprintln!("bridge: remote snapshot fetch after realtime join failed: {e}");
-        }
         let mut heartbeat_ref: u64 = 2;
         let mut ticks_since_heartbeat = 0u64;
 
@@ -919,9 +866,6 @@ fn main() -> Result<()> {
     let reader = BufReader::new(stream);
 
     send_msg(&writer, "ready", json!({}))?;
-    if let Err(e) = send_fetched_remote_snapshot(&writer, &client, &cfg) {
-        eprintln!("bridge: remote snapshot fetch after ready failed: {e}");
-    }
 
     let probe_state = Arc::new(Mutex::new(ProbeState::default()));
     let rpc_apply_lock = Arc::new(Mutex::new(()));
@@ -977,7 +921,10 @@ fn main() -> Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let write_ref = msg.r#ref.clone().unwrap_or_else(|| "legacy".to_string());
+        let write_ref = msg
+            .r#ref
+            .clone()
+            .unwrap_or_else(|| "legacy".to_string());
         let is_full = msg.full.unwrap_or(false);
         match msg.kind.as_str() {
             "initial_state" | "rpc_patch" => {
@@ -1003,7 +950,11 @@ fn main() -> Result<()> {
                 };
                 match result {
                     Ok(()) => {
-                        let _ = send_msg(&writer, "ack", json!({"ref": write_ref}));
+                        let _ = send_msg(
+                            &writer,
+                            "ack",
+                            json!({"ref": write_ref}),
+                        );
                     }
                     Err(e) => {
                         let _ = send_msg(
@@ -1028,7 +979,11 @@ fn main() -> Result<()> {
                     &probe_state_main,
                 ) {
                     Ok(()) => {
-                        let _ = send_msg(&writer, "ack", json!({"ref": write_ref}));
+                        let _ = send_msg(
+                            &writer,
+                            "ack",
+                            json!({"ref": write_ref}),
+                        );
                     }
                     Err(e) => {
                         let _ = send_msg(
@@ -1083,9 +1038,7 @@ mod tests {
     #[test]
     fn game_state_payload_detects_games_array() {
         assert!(is_game_state_payload(&json!({"games": []})));
-        assert!(is_game_state_payload(
-            &json!({"games": [{"id":"g1","status":"ready"}]})
-        ));
+        assert!(is_game_state_payload(&json!({"games": [{"id":"g1","status":"ready"}]})));
         assert!(!is_game_state_payload(&json!({"games": null})));
         assert!(!is_game_state_payload(&json!({"brightness": 70})));
     }
@@ -1099,10 +1052,7 @@ mod tests {
             "games": [],
             "dim_window": {"dim_window_enabled": false}
         });
-        assert!(!should_filter_bridge_echo(
-            SOURCE_SUPABASE_BRIDGE_INIT,
-            &state
-        ));
+        assert!(!should_filter_bridge_echo(SOURCE_SUPABASE_BRIDGE_INIT, &state));
     }
 
     #[test]
@@ -1149,86 +1099,6 @@ mod tests {
     }
 
     #[test]
-    fn fetch_remote_device_snapshot_builds_remote_row_payload() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let server = thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 4096];
-                let _ = stream.read(&mut buf);
-                let body = br#"[{"state":{"volume":70},"updated_at":"2026-06-01T12:00:00Z","last_update_source":"mobile_app"}]"#;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(body);
-            }
-        });
-        let cfg = SupabaseConfig {
-            url: format!("http://127.0.0.1:{}", addr.port()),
-            key: "test-key".to_string(),
-            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
-        };
-        let client = Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .expect("client");
-
-        let payload = fetch_remote_device_snapshot(&client, &cfg)
-            .expect("fetch")
-            .expect("row");
-        let _ = server.join();
-
-        assert_eq!(payload.get("volume").and_then(|v| v.as_i64()), Some(70));
-        assert_eq!(
-            payload.get("updated_at").and_then(|v| v.as_str()),
-            Some("2026-06-01T12:00:00Z")
-        );
-        assert_eq!(
-            payload.get("last_update_source").and_then(|v| v.as_str()),
-            Some("mobile_app")
-        );
-        assert_eq!(
-            payload.get("snapshot_origin").and_then(|v| v.as_str()),
-            Some("rest_fetch")
-        );
-    }
-
-    #[test]
-    fn fetch_remote_device_snapshot_returns_none_for_missing_row() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let server = thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 4096];
-                let _ = stream.read(&mut buf);
-                let body = b"[]";
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(body);
-            }
-        });
-        let cfg = SupabaseConfig {
-            url: format!("http://127.0.0.1:{}", addr.port()),
-            key: "test-key".to_string(),
-            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
-        };
-        let client = Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .expect("client");
-
-        let payload = fetch_remote_device_snapshot(&client, &cfg).expect("fetch");
-        let _ = server.join();
-
-        assert!(payload.is_none());
-    }
-
-    #[test]
     fn rpc_patch_url_uses_v2_function() {
         let cfg = SupabaseConfig {
             url: "https://example.supabase.co".to_string(),
@@ -1243,7 +1113,8 @@ mod tests {
     }
 
     #[test]
-    fn strip_runtime_overwrites_for_existing_device_initial_state_removes_games_and_bluetooth() {
+    fn strip_runtime_overwrites_for_existing_device_initial_state_removes_games_and_bluetooth()
+    {
         let patch = json!({
             "games": [{"id": "chess", "status": "ready"}],
             "bluetooth": {"is_scan": false, "controllers": [], "scan_results": []},
@@ -1336,7 +1207,8 @@ mod tests {
             .expect("client");
         let rpc_lock = Arc::new(Mutex::new(()));
         let probe_state = Arc::new(Mutex::new(ProbeState::default()));
-        let snapshot = probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
+        let snapshot =
+            probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
         let _ = server.join();
 
         assert!(snapshot.probe_ok);
@@ -1368,7 +1240,8 @@ mod tests {
             .expect("client");
         let rpc_lock = Arc::new(Mutex::new(()));
         let probe_state = Arc::new(Mutex::new(ProbeState::default()));
-        let snapshot = probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
+        let snapshot =
+            probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
         assert!(!snapshot.probe_ok);
         assert!(snapshot.latency_ms.is_none());
     }

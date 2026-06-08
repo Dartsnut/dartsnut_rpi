@@ -91,17 +91,6 @@ class SyncReducer:
                     meta.last_update_source,
                 )
                 return False
-            if (
-                meta.updated_at is not None
-                and self.cache.last_row_updated_at is not None
-                and meta.updated_at < self.cache.last_row_updated_at
-            ):
-                _log.debug(
-                    "sync reducer: reject older remote row updated_at=%s source=%s",
-                    meta.updated_at,
-                    meta.last_update_source,
-                )
-                return False
             if not fingerprint_changed:
                 _log.debug(
                     "sync reducer: reject stale remote row updated_at=%s source=%s",
