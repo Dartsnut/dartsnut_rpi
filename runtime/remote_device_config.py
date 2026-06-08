@@ -144,6 +144,62 @@ def snapshot_dedupe_fingerprint(config: dict) -> str:
     return snapshot_content_fingerprint(config)
 
 
+_LOCAL_SETTING_GUARD_SECONDS = 5.0
+
+
+def note_local_setting_change(
+    runtime: "RemoteConfigRuntimeState",
+    key: str,
+    value: int,
+    *,
+    at: Optional[datetime] = None,
+) -> None:
+    """Record a local UI-driven brightness/volume change for remote echo guards."""
+    setting_key = str(key or "").strip().lower()
+    if setting_key not in {"brightness", "volume"}:
+        return
+    runtime.local_setting_value[setting_key] = int(value)
+    runtime.local_setting_changed_at[setting_key] = (
+        _normalize_utc_naive(at) if at is not None else _utc_now()
+    )
+
+
+def should_accept_remote_setting(
+    runtime: "RemoteConfigRuntimeState",
+    key: str,
+    remote_value: int,
+    cfg_ts: Optional[datetime],
+    *,
+    source: str = "",
+) -> bool:
+    """Reject stale bridge brightness/volume while a recent local UI edit is in flight."""
+    setting_key = str(key or "").strip().lower()
+    if setting_key not in {"brightness", "volume"}:
+        return True
+    try:
+        remote_int = int(remote_value)
+    except (TypeError, ValueError):
+        return True
+
+    local_at = runtime.local_setting_changed_at.get(setting_key)
+    local_val = runtime.local_setting_value.get(setting_key)
+    if local_at is None or local_val is None:
+        return True
+    if remote_int == int(local_val):
+        return True
+
+    age = (_utc_now() - local_at).total_seconds()
+    if age > _LOCAL_SETTING_GUARD_SECONDS:
+        return True
+
+    src = str(source or "").strip().lower()
+    if src in _BRIDGE_SOURCES:
+        return False
+    if cfg_ts is not None and cfg_ts <= local_at:
+        return False
+    return True
+
+
 def note_local_game_transition(
     runtime: "RemoteConfigRuntimeState",
     game_id: str,
@@ -287,6 +343,8 @@ class RemoteConfigRuntimeState:
     last_processed_remote_playing_at: Dict[str, datetime] = field(default_factory=dict)
     last_remote_snapshot_fingerprint: Optional[str] = None
     last_remote_snapshot_applied_at: Optional[datetime] = None
+    local_setting_changed_at: Dict[str, datetime] = field(default_factory=dict)
+    local_setting_value: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -585,13 +643,13 @@ class RemoteDeviceConfigApplier:
         try:
             pages = config.get("pages")
             if isinstance(pages, list):
-                service.set_pages(pages, reload_pages=False)
                 source = str(config.get("last_update_source", "") or "").strip().lower()
                 pages_updated_at = parse_iso_ts(config.get("pages_updated_at"))
                 pages_fingerprint = json.dumps(
                     pages, sort_keys=True, separators=(",", ":"), ensure_ascii=True
                 )
                 should_reload_pages = False
+                should_persist_pages = False
 
                 if source == "supabase_bridge":
                     if pages_updated_at is not None:
@@ -618,13 +676,21 @@ class RemoteDeviceConfigApplier:
                         should_reload_pages = (
                             pages_fingerprint != rt.last_applied_pages_fingerprint
                         )
+                    should_persist_pages = (
+                        not rt.has_seen_remote_pages_snapshot
+                        or pages_fingerprint != rt.last_applied_pages_fingerprint
+                    )
                     rt.has_seen_remote_pages_snapshot = True
                     rt.last_applied_pages_fingerprint = pages_fingerprint
                 else:
                     should_reload_pages = (
                         pages_fingerprint != rt.last_applied_non_bridge_pages_fingerprint
                     )
+                    should_persist_pages = should_reload_pages
                     rt.last_applied_non_bridge_pages_fingerprint = pages_fingerprint
+
+                if should_persist_pages:
+                    service.set_pages(pages, reload_pages=False)
 
                 if should_reload_pages:
                     did_soft = (
@@ -711,7 +777,14 @@ class RemoteDeviceConfigApplier:
                         current = int((ctx.get_device_info() or {}).get("brightness"))
                     except Exception:
                         current = None
-                    if current != brightness_val:
+                    setting_source = str(config.get("last_update_source", "") or "").strip().lower()
+                    if current != brightness_val and should_accept_remote_setting(
+                        rt,
+                        "brightness",
+                        brightness_val,
+                        cfg_ts,
+                        source=setting_source,
+                    ):
                         service.set_brightness(brightness_val)
                 except Exception:
                     pass
@@ -724,7 +797,14 @@ class RemoteDeviceConfigApplier:
                         current = int((ctx.get_device_info() or {}).get("volume"))
                     except Exception:
                         current = None
-                    if current != volume_val:
+                    setting_source = str(config.get("last_update_source", "") or "").strip().lower()
+                    if current != volume_val and should_accept_remote_setting(
+                        rt,
+                        "volume",
+                        volume_val,
+                        cfg_ts,
+                        source=setting_source,
+                    ):
                         service.set_volume(volume_val)
                 except Exception:
                     pass

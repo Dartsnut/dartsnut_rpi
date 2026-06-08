@@ -232,6 +232,9 @@ def set_brightness(brightness):
             dim_rt.brightness_before_dim = brightness
             if should_publish:
                 get_remote_sync().publish_partial_state({"brightness": v})
+                from runtime.remote_device_config import note_local_setting_change
+
+                note_local_setting_change(_remote_config_runtime, "brightness", v)
         except Exception as e:
             _log.warning("Error updating device brightness while dimmed: %s", e)
         return
@@ -246,6 +249,9 @@ def set_brightness(brightness):
             _set_brightness_hardware(v)
         if should_publish:
             get_remote_sync().publish_partial_state({"brightness": v})
+            from runtime.remote_device_config import note_local_setting_change
+
+            note_local_setting_change(_remote_config_runtime, "brightness", v)
     except Exception as e:
         _log.warning("Error updating brightness: %s", e)
 
@@ -289,6 +295,9 @@ def set_volume(volume):
         _set_volume_local_only(v)
         if should_publish:
             get_remote_sync().publish_partial_state({"volume": v})
+            from runtime.remote_device_config import note_local_setting_change
+
+            note_local_setting_change(_remote_config_runtime, "volume", v)
     except Exception as e:
         _log.warning("Error updating volume: %s", e)
 

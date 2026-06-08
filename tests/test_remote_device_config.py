@@ -123,6 +123,21 @@ def test_apply_changed_volume_and_brightness_writes_local_settings():
     service.set_volume.assert_called_once_with(44)
 
 
+def test_apply_rejects_stale_bridge_volume_during_local_edit_window():
+    applier, service = _settings_applier({"volume": "70"})
+    note_local_setting_change(applier.runtime, "volume", 70)
+
+    applier.apply(
+        {
+            "volume": 50,
+            "last_update_source": "supabase_bridge",
+            "updated_at": "2026-06-08T12:00:00Z",
+        }
+    )
+
+    service.set_volume.assert_not_called()
+
+
 def test_apply_confirms_reset_only_for_expected_source():
     ctx = AppContext(
         display=MagicMock(),
