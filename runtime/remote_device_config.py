@@ -706,14 +706,26 @@ class RemoteDeviceConfigApplier:
                 try:
                     key = "brightness" if "brightness" in config else "Brightness"
                     brightness_val = int(config.get(key))
-                    service.set_brightness(brightness_val)
+                    current = None
+                    try:
+                        current = int((ctx.get_device_info() or {}).get("brightness"))
+                    except Exception:
+                        current = None
+                    if current != brightness_val:
+                        service.set_brightness(brightness_val)
                 except Exception:
                     pass
 
             if "volume" in config:
                 try:
                     volume_val = int(config.get("volume"))
-                    service.set_volume(volume_val)
+                    current = None
+                    try:
+                        current = int((ctx.get_device_info() or {}).get("volume"))
+                    except Exception:
+                        current = None
+                    if current != volume_val:
+                        service.set_volume(volume_val)
                 except Exception:
                     pass
 
