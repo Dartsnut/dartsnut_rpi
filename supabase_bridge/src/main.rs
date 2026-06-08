@@ -58,7 +58,7 @@ struct ProbeState {
     last_outbound_at: Option<Instant>,
 }
 
-const PROBE_INTERVAL_SECS: u64 = 30;
+const PROBE_INTERVAL_SECS: u64 = 60;
 
 fn record_outbound_success(state: &mut ProbeState, latency_ms: u64) {
     state.snapshot = RestProbeSnapshot {
