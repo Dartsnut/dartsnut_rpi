@@ -1,4 +1,7 @@
 import json
+import os
+import socket
+import time
 
 import supabase_sync_bridge as ssb
 
@@ -199,6 +202,52 @@ def test_sync_client_send_state_includes_source_when_present():
     assert sent["kind"] in ("device_state", "rpc_patch")
     assert sent["payload"]["brightness"] == 70
     assert sent["source"] == "supabase_bridge_init"
+
+
+def test_sync_client_ready_still_sends_initial_state(tmp_path):
+    socket_path = f"/tmp/dn-sync-{time.monotonic_ns()}.sock"
+    engine = __import__(
+        "runtime.sync.engine", fromlist=["SyncEngine"]
+    ).SyncEngine(
+        on_apply_config=lambda _cfg: None,
+        merge_on_first_connect=lambda cfg: cfg,
+        normalize_config=ssb._normalize_config_payload,
+        remember_remote_game_ids=lambda _cfg: None,
+    )
+    client = ssb._SyncClient(
+        socket_path=socket_path,
+        reload_config=lambda: None,
+        on_config_updated=lambda _cfg: None,
+        initial_state={"volume": 50, "brightness": 40},
+        sync_engine=engine,
+    )
+    client.start_server()
+
+    deadline = time.monotonic() + 2.0
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    while True:
+        try:
+            conn.connect(socket_path)
+            break
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+    try:
+        conn.settimeout(2.0)
+        conn.sendall(b'{"kind":"ready","payload":{}}\n')
+        sent = json.loads(conn.recv(4096).decode("utf-8").strip())
+    finally:
+        conn.close()
+        try:
+            os.remove(socket_path)
+        except OSError:
+            pass
+
+    assert sent["kind"] == "initial_state"
+    assert sent["full"] is True
+    assert sent["payload"]["volume"] == 50
+    assert sent["payload"]["brightness"] == 40
 
 
 def test_build_initial_state_prefers_lsusb_over_stale_device_json(monkeypatch):

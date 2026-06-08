@@ -137,3 +137,45 @@ def test_outbox_ack_removes_pending():
     outbox.on_ack(ref)
     assert outbox.pending_count() == 0
     outbox.stop()
+
+
+def test_outbox_coalesces_pending_settings_so_latest_value_wins():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"volume": 60}, source="local")
+    outbox.enqueue({"volume": 70}, source="local")
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {"volume": 70}
+
+
+def test_outbox_keeps_different_source_settings_entries_separate():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"volume": 60}, source="local")
+    outbox.enqueue({"volume": 70}, source="remote")
+
+    assert outbox.pending_count() == 2
+
+
+def test_outbox_skips_settings_patch_matching_last_ack():
+    sent = []
+
+    def send_fn(ref, patch, _full, _source):
+        sent.append((ref, patch))
+        return True
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    ref = outbox.enqueue({"brightness": 40})
+    outbox.on_ack(ref)
+
+    duplicate_ref = outbox.enqueue({"brightness": 40})
+
+    assert duplicate_ref == ""
+    assert outbox.pending_count() == 0
+    assert sent == [(ref, {"brightness": 40})]

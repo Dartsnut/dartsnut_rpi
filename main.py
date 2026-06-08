@@ -207,6 +207,13 @@ def _set_brightness_hardware(brightness):
     dartsnut.set_brightness(brightness)
 
 
+def _current_device_int(key):
+    try:
+        return int((get_device_info() or {}).get(key))
+    except Exception:
+        return None
+
+
 def set_brightness(brightness):
     """
     Public brightness setter used by the rest of the app and websocket layer.
@@ -218,25 +225,57 @@ def set_brightness(brightness):
     if dim_rt.currently_in_dim_window:
         # When in dim window, only update stored brightness and remote sync; keep hardware dimmed.
         try:
+            v = int(brightness)
+            should_publish = _current_device_int("brightness") != v
             if service is not None:
                 service.set_brightness(brightness)
             dim_rt.brightness_before_dim = brightness
-            v = int(brightness)
-            get_remote_sync().publish_partial_state({"brightness": v})
+            if should_publish:
+                get_remote_sync().publish_partial_state({"brightness": v})
         except Exception as e:
             _log.warning("Error updating device brightness while dimmed: %s", e)
         return
 
     # Outside dim window: apply immediately and persist via service.
     try:
+        v = int(brightness)
+        should_publish = _current_device_int("brightness") != v
         if service is not None:
             service.set_brightness(brightness)
         else:
-            _set_brightness_hardware(int(brightness))
-        v = int(brightness)
-        get_remote_sync().publish_partial_state({"brightness": v})
+            _set_brightness_hardware(v)
+        if should_publish:
+            get_remote_sync().publish_partial_state({"brightness": v})
     except Exception as e:
         _log.warning("Error updating brightness: %s", e)
+
+
+def _set_volume_local_only(volume):
+    v = int(volume)
+    service = get_machine_state_service()
+    if service is not None:
+        service.set_volume(v)
+        return
+
+    # Fallback to previous behavior if service is not initialized.
+    if v == 0:
+        subprocess.run(
+            ["amixer", "-c", "0", "sset", "PCM", "mute"],
+            check=True,
+            capture_output=True,
+        )
+    else:
+        mapped_volume = int(50 + (v / 100) * 50)
+        subprocess.run(
+            ["amixer", "-c", "0", "sset", "PCM", "unmute"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["amixer", "-c", "0", "sset", "PCM", f"{mapped_volume}%"],
+            check=True,
+            capture_output=True,
+        )
 
 
 def set_volume(volume):
@@ -244,31 +283,12 @@ def set_volume(volume):
     Public volume setter used by the rest of the app and websocket layer.
     Delegates to MachineStateService for hardware + JSON, then notifies remote sync.
     """
-    service = get_machine_state_service()
     try:
-        if service is not None:
-            service.set_volume(volume)
-        else:
-            # Fallback to previous behavior if service is not initialized.
-            if volume == 0:
-                subprocess.run(
-                    ["amixer", "-c", "0", "sset", "PCM", "mute"],
-                    check=True,
-                    capture_output=True,
-                )
-            else:
-                mapped_volume = int(50 + (volume / 100) * 50)
-                subprocess.run(
-                    ["amixer", "-c", "0", "sset", "PCM", "unmute"],
-                    check=True,
-                    capture_output=True,
-                )
-                subprocess.run(
-                    ["amixer", "-c", "0", "sset", "PCM", f"{mapped_volume}%"],
-                    check=True,
-                    capture_output=True,
-                )
-        get_remote_sync().publish_partial_state({"volume": int(volume)})
+        v = int(volume)
+        should_publish = _current_device_int("volume") != v
+        _set_volume_local_only(v)
+        if should_publish:
+            get_remote_sync().publish_partial_state({"volume": v})
     except Exception as e:
         _log.warning("Error updating volume: %s", e)
 
@@ -811,6 +831,7 @@ start_background_subsystems(
     request_network_state_refresh=request_network_state_refresh,
     remote_config_runtime=_remote_config_runtime,
     websocket_service_registry=_websocket_service_registry,
+    set_startup_volume=_set_volume_local_only,
 )
 
 ctx.reload_conf = False

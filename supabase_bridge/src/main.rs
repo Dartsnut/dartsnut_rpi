@@ -545,6 +545,8 @@ fn strip_runtime_overwrites_for_existing_device_initial_state(mut patch: Value) 
     if let Some(obj) = patch.as_object_mut() {
         obj.remove("games");
         obj.remove("bluetooth");
+        obj.remove("volume");
+        obj.remove("brightness");
     }
     patch
 }
@@ -1113,17 +1115,26 @@ mod tests {
     }
 
     #[test]
-    fn strip_runtime_overwrites_for_existing_device_initial_state_removes_games_and_bluetooth()
+    fn strip_runtime_overwrites_for_existing_device_initial_state_removes_runtime_and_settings_fields()
     {
         let patch = json!({
             "games": [{"id": "chess", "status": "ready"}],
             "bluetooth": {"is_scan": false, "controllers": [], "scan_results": []},
-            "volume": 50
+            "volume": 50,
+            "brightness": 60,
+            "firmware": {"version": "1.0.0", "update": false}
         });
         let out = strip_runtime_overwrites_for_existing_device_initial_state(patch);
         assert!(out.get("games").is_none());
         assert!(out.get("bluetooth").is_none());
-        assert_eq!(out.get("volume").and_then(|v| v.as_i64()), Some(50));
+        assert!(out.get("volume").is_none());
+        assert!(out.get("brightness").is_none());
+        assert_eq!(
+            out.get("firmware")
+                .and_then(|v| v.get("version"))
+                .and_then(|v| v.as_str()),
+            Some("1.0.0")
+        );
     }
 
     #[test]
