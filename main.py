@@ -78,6 +78,7 @@ from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
@@ -108,6 +109,11 @@ _reset_remote_confirm_event = threading.Event()
 _RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
 
 set_remote_sync(create_default_remote_sync())
+
+_settings_sync_debouncer = SettingsSyncDebouncer(
+    publish=lambda patch: get_remote_sync().publish_partial_state(patch),
+    debounce_seconds=SETTING_SYNC_DEBOUNCE_SECONDS,
+)
 
 _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     scan_builder=machine_api.build_remote_bluetooth_list,
@@ -207,6 +213,14 @@ def _set_brightness_hardware(brightness):
     dartsnut.set_brightness(brightness)
 
 
+def _schedule_setting_remote_sync(key: str, value: int) -> None:
+    """Apply local setting guard immediately; publish to remote after debounce."""
+    from runtime.remote_device_config import note_local_setting_change
+
+    note_local_setting_change(_remote_config_runtime, key, value)
+    _settings_sync_debouncer.schedule(key, value)
+
+
 def _current_device_int(key):
     try:
         return int((get_device_info() or {}).get(key))
@@ -231,7 +245,7 @@ def set_brightness(brightness):
                 service.set_brightness(brightness)
             dim_rt.brightness_before_dim = brightness
             if should_publish:
-                get_remote_sync().publish_partial_state({"brightness": v})
+                _schedule_setting_remote_sync("brightness", v)
         except Exception as e:
             _log.warning("Error updating device brightness while dimmed: %s", e)
         return
@@ -245,7 +259,7 @@ def set_brightness(brightness):
         else:
             _set_brightness_hardware(v)
         if should_publish:
-            get_remote_sync().publish_partial_state({"brightness": v})
+            _schedule_setting_remote_sync("brightness", v)
     except Exception as e:
         _log.warning("Error updating brightness: %s", e)
 
@@ -288,7 +302,7 @@ def set_volume(volume):
         should_publish = _current_device_int("volume") != v
         _set_volume_local_only(v)
         if should_publish:
-            get_remote_sync().publish_partial_state({"volume": v})
+            _schedule_setting_remote_sync("volume", v)
     except Exception as e:
         _log.warning("Error updating volume: %s", e)
 
