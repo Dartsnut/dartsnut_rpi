@@ -585,6 +585,68 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _json_equal(left: Any, right: Any) -> bool:
+    try:
+        return (
+            json.dumps(left, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            == json.dumps(right, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        )
+    except Exception:
+        return left == right
+
+
+def _diff_outbound_patch(local: Dict[str, Any], inbound: Dict[str, Any]) -> Dict[str, Any]:
+    """Return reconnect-only outbound fields where local is newer and differs."""
+    if not isinstance(local, dict) or not isinstance(inbound, dict):
+        return {}
+
+    diff: Dict[str, Any] = {}
+    local_device_ts = _parse_iso_ts(local.get("device_updated_at"))
+    remote_device_ts = _parse_iso_ts(
+        inbound.get("device_updated_at") or inbound.get("updated_at")
+    )
+    use_local_device = False
+    if local_device_ts and remote_device_ts:
+        use_local_device = local_device_ts > remote_device_ts
+    elif local_device_ts and not remote_device_ts:
+        use_local_device = True
+
+    if use_local_device:
+        device_diff: Dict[str, Any] = {}
+        for key in (
+            "time_zone",
+            "volume",
+            "ip_address",
+            "ssid",
+            "brightness",
+            "dim_window",
+            "device_info",
+            "firmware",
+        ):
+            if key in local and not _json_equal(local.get(key), inbound.get(key)):
+                device_diff[key] = local[key]
+        if device_diff:
+            diff.update(device_diff)
+            if not _json_equal(local.get("device_updated_at"), inbound.get("device_updated_at")):
+                diff["device_updated_at"] = local.get("device_updated_at", "")
+
+    local_pages_ts = _parse_iso_ts(local.get("pages_updated_at"))
+    remote_pages_ts = _parse_iso_ts(inbound.get("pages_updated_at"))
+    use_local_pages = False
+    if local_pages_ts and remote_pages_ts:
+        use_local_pages = local_pages_ts > remote_pages_ts
+    elif local_pages_ts and not remote_pages_ts:
+        use_local_pages = True
+    if use_local_pages:
+        pages_differ = not _json_equal(local.get("pages", []), inbound.get("pages", []))
+        ts_differ = not _json_equal(local.get("pages_updated_at"), inbound.get("pages_updated_at"))
+        if pages_differ or ts_differ:
+            diff["pages"] = local.get("pages", []) or []
+            diff["pages_updated_at"] = local.get("pages_updated_at", "") or ""
+
+    return _coerce_pages_games_lists(diff) if diff else {}
+
+
 class _SyncClient:
     def __init__(
         self,
@@ -604,6 +666,7 @@ class _SyncClient:
         self._conn: Optional[socket.socket] = None
         self._conn_lock = threading.Lock()
         self._first_remote_row = True
+        self._reconnect_settlement_pending = False
 
         def _outbox_send(
             ref: str, patch: Dict[str, Any], full: bool, source: Optional[str]
@@ -648,14 +711,22 @@ class _SyncClient:
                             kind = msg.get("kind")
                             payload = msg.get("payload")
                             if kind == "ready":
-                                self.send_state(self._initial_state, full=True)
+                                self._reconnect_settlement_pending = True
+                            elif kind == "remote_row_missing":
+                                self._handle_remote_row_missing()
                             elif kind in (
                                 "remote_row",
                                 "config",
                                 "config_initial",
                             ) and isinstance(payload, dict):
+                                is_rest_fetch = (
+                                    kind == "remote_row"
+                                    and str(payload.get("snapshot_origin") or "") == "rest_fetch"
+                                )
+                                should_settle = self._reconnect_settlement_pending or is_rest_fetch
                                 is_first = kind == "config_initial" or (
-                                    kind == "remote_row" and self._first_remote_row
+                                    kind == "remote_row"
+                                    and (self._first_remote_row or should_settle)
                                 )
                                 if kind == "remote_row":
                                     self._first_remote_row = False
@@ -673,6 +744,8 @@ class _SyncClient:
                                     self._reload_config()
                                 except Exception:
                                     pass
+                                if should_settle:
+                                    self._settle_reconnect_from_inbound(payload)
                             elif kind == "ack":
                                 ref = str(
                                     msg.get("ref")
@@ -713,6 +786,25 @@ class _SyncClient:
                 _set_connected(False)
 
         threading.Thread(target=_server, daemon=True).start()
+
+    def _handle_remote_row_missing(self) -> None:
+        if not self._reconnect_settlement_pending:
+            return
+        self._reconnect_settlement_pending = False
+        if self._sync_engine.reducer.cache.has_seen_remote_row:
+            return
+        self._sync_engine.publish_full(dict(self._initial_state))
+
+    def _settle_reconnect_from_inbound(self, inbound: Dict[str, Any]) -> None:
+        self._reconnect_settlement_pending = False
+        try:
+            local = _build_initial_state(_load_device_json())
+            diff = _diff_outbound_patch(local, _normalize_config_payload(dict(inbound)))
+        except Exception as e:
+            _log.warning("supabase sync: reconnect settlement diff failed: %s", e)
+            return
+        if diff:
+            self._sync_engine.publish_partial(diff)
 
     def send_state(
         self, payload: Dict[str, Any], *, full: bool = False, source: Optional[str] = None

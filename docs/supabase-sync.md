@@ -95,8 +95,9 @@ SUPABASE_KEY="<supabase-key>" ./scripts/run_local_supabase_e2e.sh
 
 | Direction | Kind | Purpose |
 |-----------|------|---------|
-| Rust → Python | `ready` | Bridge connected; Python sends initial state |
-| Rust → Python | `remote_row` | Raw remote device state + row metadata (`updated_at`, `last_update_source`) |
+| Rust → Python | `ready` | Bridge connected; Python waits for a fetched remote snapshot before publishing |
+| Rust → Python | `remote_row` | Raw remote device state + row metadata (`updated_at`, `last_update_source`); REST-fetched reconnect snapshots include `snapshot_origin = rest_fetch` |
+| Rust → Python | `remote_row_missing` | REST fetch found no `remote_devices` row; Python may seed full initial state once for a new device |
 | Rust → Python | `bridge_health` | WS connectivity (`state`) plus REST health (`rest_probe_ok`, `rest_latency_ms` from last successful outbound v2 RPC) |
 | Rust → Python | `ack` / `error` | Outbound RPC result (`ref` correlates to Python outbox entry) |
 | Python → Rust | `initial_state` / `rpc_patch` / `device_state` | Outbound state patch (with optional `ref`, `full`, `source`) |
@@ -109,6 +110,7 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 - Subscription is filtered to this device only: `device_id=eq.<BLE_MAC_UPPER>`.
 - Inbound rows where `last_update_source = 'supabase_bridge_heartbeat'` are always ignored. Other `supabase_bridge` rows are ignored unless they carry games or reset-confirmation state (Python reducer also dedupes bridge snapshots).
 - Bridge auto-reconnects with backoff and emits `bridge_health` state over the Unix socket.
+- On bridge startup and after every Realtime rejoin, Rust also REST-fetches the current `remote_devices` row and sends it to Python as `remote_row`. Python applies that inbound snapshot first, then publishes only a partial reconnect diff where local state is newer and different. Reconnect diffs never include `games` or `bluetooth`; those are preserved from the fetched remote row to avoid list wipes and status storms.
 
 ### REST health and idle `device_updated_at` heartbeat
 

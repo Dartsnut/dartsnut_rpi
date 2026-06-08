@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 _log = logging.getLogger(__name__)
 
 _DEFAULT_BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+_SETTING_COALESCE_KEYS = frozenset({"volume", "brightness"})
 
 
 @dataclass
@@ -36,6 +37,7 @@ class SyncOutbox:
         self._lock = threading.Lock()
         self._pending: Dict[str, OutboxEntry] = {}
         self._order: List[str] = []
+        self._last_acked_settings: Dict[str, Any] = {}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -57,8 +59,16 @@ class SyncOutbox:
         source: Optional[str] = None,
     ) -> str:
         ref = str(uuid.uuid4())
-        entry = OutboxEntry(ref=ref, patch=dict(patch), full=full, source=source)
+        next_patch = dict(patch)
         with self._lock:
+            if not full and self._is_settings_only(next_patch):
+                if all(
+                    self._last_acked_settings.get(key) == value
+                    for key, value in next_patch.items()
+                ):
+                    return ""
+                next_patch = self._coalesce_pending_settings(next_patch, source)
+            entry = OutboxEntry(ref=ref, patch=next_patch, full=full, source=source)
             self._pending[ref] = entry
             self._order.append(ref)
         self._flush_ready()
@@ -66,7 +76,10 @@ class SyncOutbox:
 
     def on_ack(self, ref: str) -> None:
         with self._lock:
-            self._pending.pop(ref, None)
+            entry = self._pending.pop(ref, None)
+            if entry is not None and not entry.full and self._is_settings_only(entry.patch):
+                for key, value in entry.patch.items():
+                    self._last_acked_settings[key] = value
             if ref in self._order:
                 self._order.remove(ref)
 
@@ -88,6 +101,31 @@ class SyncOutbox:
     def pending_count(self) -> int:
         with self._lock:
             return len(self._pending)
+
+    def _is_settings_only(self, patch: Dict[str, Any]) -> bool:
+        return bool(patch) and set(patch).issubset(_SETTING_COALESCE_KEYS)
+
+    def _coalesce_pending_settings(
+        self, patch: Dict[str, Any], source: Optional[str]
+    ) -> Dict[str, Any]:
+        merged = dict(patch)
+        removed: list[str] = []
+        for ref in list(self._order):
+            entry = self._pending.get(ref)
+            if (
+                entry is None
+                or entry.full
+                or entry.source != source
+                or not self._is_settings_only(entry.patch)
+            ):
+                continue
+            merged = {**entry.patch, **merged}
+            self._pending.pop(ref, None)
+            removed.append(ref)
+        for ref in removed:
+            if ref in self._order:
+                self._order.remove(ref)
+        return merged
 
     def _run(self) -> None:
         while not self._stop.wait(0.5):
