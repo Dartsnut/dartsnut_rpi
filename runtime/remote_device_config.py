@@ -365,6 +365,7 @@ class RemoteDeviceConfigDependencies:
     on_reset_confirmed: Callable[[], None]
     request_config_refresh: Callable[[], None] = lambda: None
     disconnect_and_unpair_device: Callable[[str], dict] = lambda _mac: {}
+    remove_local_game_folder: Callable[[str], bool] = lambda _gid: False
     try_soft_apply_remote_supabase_pages: Optional[
         Callable[[AppContext, List[Dict[str, Any]]], bool]
     ] = None
@@ -384,6 +385,64 @@ class RemoteDeviceConfigApplier:
     @property
     def runtime(self) -> RemoteConfigRuntimeState:
         return self._runtime
+
+    def _reconcile_local_game_folders(self, games_cfg: list[dict[str, Any]]) -> None:
+        """Make local installed game folders match remote game membership."""
+        try:
+            from game_lifecycle import local_game_index
+        except Exception:
+            return
+
+        remote_ids = {
+            str(g.get("id") or "").strip()
+            for g in games_cfg
+            if isinstance(g, dict) and str(g.get("id") or "").strip()
+        }
+        try:
+            local_ids = set(local_game_index())
+        except Exception as e:
+            _log.warning("remote config: failed to index local games for reconcile: %s", e)
+            return
+
+        deps = self._deps
+        ctx = deps.app_ctx
+        rt = self._runtime
+        removed_any = False
+        for game_id in sorted(local_ids - remote_ids):
+            if game_id in rt.remote_downloading_game_ids:
+                try:
+                    deps.cancel_game_download(game_id)
+                except Exception:
+                    pass
+                rt.remote_downloading_game_ids.discard(game_id)
+
+            if ctx.game and isinstance(ctx.game, dict):
+                running_id = str(ctx.game.get("game_id") or "")
+                if running_id == game_id:
+                    try:
+                        deps.term_game_process(ctx.game)
+                    except Exception as e:
+                        _log.warning(
+                            "remote config: failed to terminate removed game_id=%s: %s",
+                            game_id,
+                            e,
+                        )
+                    ctx.game = None
+                    ctx.reload_conf = True
+
+            try:
+                if deps.remove_local_game_folder(game_id):
+                    removed_any = True
+                    _log.info("remote config: removed local game folder game_id=%s", game_id)
+            except Exception as e:
+                _log.warning(
+                    "remote config: failed to remove local game folder game_id=%s: %s",
+                    game_id,
+                    e,
+                )
+
+        if removed_any:
+            ctx.reload_game_menu = True
 
     def _reconcile_downloading_games(self, games_cfg: list[dict[str, Any]]) -> None:
         """
@@ -482,7 +541,20 @@ class RemoteDeviceConfigApplier:
         """
         rt = self._runtime
         if rt.startup_missing_ready_games_recovery_done:
-            return
+            has_missing_ready_game = False
+            for g in games_cfg:
+                if not isinstance(g, dict):
+                    continue
+                game_id = str(g.get("id") or "").strip()
+                status = str(g.get("status") or "").strip().lower()
+                if not game_id or status != "ready":
+                    continue
+                if not os.path.isdir(os.path.join(os.getcwd(), "apps", game_id)):
+                    has_missing_ready_game = True
+                    break
+            if not has_missing_ready_game:
+                return
+            rt.startup_missing_ready_games_recovery_done = False
 
         deps = self._deps
         had_missing_ready_games = False
@@ -833,6 +905,7 @@ class RemoteDeviceConfigApplier:
                 games_cfg = []
             else:
                 games_cfg = normalize_games_list(config)
+                self._reconcile_local_game_folders(games_cfg)
                 if games_cfg and (skip_game_commands or skip_games_dedupe):
                     self._reconcile_downloading_games(games_cfg)
                 if not skip_game_commands:
@@ -853,8 +926,7 @@ class RemoteDeviceConfigApplier:
             if skip_game_commands or skip_games_dedupe:
                 pass
             else:
-                if not rt.startup_missing_ready_games_recovery_done:
-                    self._recover_missing_ready_games_on_startup(games_cfg)
+                self._recover_missing_ready_games_on_startup(games_cfg)
 
                 source = str(config.get("last_update_source", "") or "").strip().lower()
                 for g in games_cfg:
