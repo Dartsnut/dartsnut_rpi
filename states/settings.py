@@ -241,11 +241,26 @@ SETTINGS_NUM_ROWS = 6
 SETTINGS_ITEM_HEIGHT = SETTINGS_LIST_MAX_HEIGHT // SETTINGS_NUM_ROWS
 
 
+def _settings_version_label() -> str:
+    try:
+        from python_websocket import git_operations as gitops
+
+        result = gitops.get_version()
+        if isinstance(result, dict):
+            version = result.get("version")
+            if version:
+                return str(version)
+    except Exception:
+        pass
+    return "v100.0.0"
+
+
 class SettingsState(BaseState):
     """Settings menu: name, IP, version, brightness, volume, reset device; B/home back to menu."""
 
     def __init__(self):
         self._show_reset_confirm = False
+        self._version_label = _settings_version_label()
 
     def name(self) -> str:
         return "settings"
@@ -265,30 +280,7 @@ class SettingsState(BaseState):
             brightness = 50
             volume = 50
         ip_address = get_primary_ipv4()
-        try:
-            branch = (
-                subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                .stdout.strip()
-            )
-            if branch == "release":
-                version = (
-                    subprocess.run(
-                        ["git", "describe", "--tags", "--abbrev=0"],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    .stdout.strip()
-                )
-            else:
-                version = "v100.0.0"
-        except Exception:
-            version = "v100.0.0"
+        version = self._version_label
         try:
             device_path = os.path.join(os.getcwd(), "device.json")
             with open(device_path, "r", encoding="utf-8") as f:
