@@ -4,6 +4,7 @@ import json
 import os
 from unittest.mock import MagicMock, call
 
+import game_lifecycle as gl
 from domain.app_context import AppContext
 from runtime.remote_device_config import (
     RemoteConfigRuntimeState,
@@ -12,6 +13,7 @@ from runtime.remote_device_config import (
     is_remote_reset_confirmed,
     is_remote_reset_confirmation_source,
     note_local_game_transition,
+    note_local_setting_change,
     parse_iso_ts,
     should_accept_remote_playing_command,
 )
@@ -979,6 +981,25 @@ def _game_ctx():
     return ctx
 
 
+def _write_local_game(tmp_path, game_id, version="1.0.0"):
+    game_dir = tmp_path / "apps" / game_id
+    game_dir.mkdir(parents=True, exist_ok=True)
+    (game_dir / "conf.json").write_text(
+        json.dumps({"id": game_id, "type": "game", "version": version}),
+        encoding="utf-8",
+    )
+    return game_dir
+
+
+def _record_download_and_create_game(tmp_path, calls):
+    def _ensure(gid, ver):
+        calls.append((gid, ver))
+        _write_local_game(tmp_path, gid, ver or "1.0.0")
+        return True
+
+    return _ensure
+
+
 def test_apply_game_playing_requests_launch():
     game_ctx = _game_ctx()
     svc = MagicMock()
@@ -1114,6 +1135,184 @@ def test_apply_with_empty_games_list_sets_reload_game_menu():
     rt.awaiting_games_ready_confirmation = False
     applier = RemoteDeviceConfigApplier(deps, rt)
     applier.apply({"games": []})
+    assert game_ctx.reload_game_menu is True
+
+
+def test_apply_games_snapshot_deletes_local_games_missing_from_remote(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    keep_dir = _write_local_game(tmp_path, "keep")
+    remove_dir = _write_local_game(tmp_path, "remove")
+    game_ctx = _game_ctx()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: MagicMock(),
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        remove_local_game_folder=gl.remove_local_game_folder,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_settlement_completed = True
+    rt.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"games": [{"id": "keep", "status": "ready", "version": "1.0.0"}]})
+
+    assert keep_dir.exists()
+    assert not remove_dir.exists()
+    assert game_ctx.reload_game_menu is True
+
+
+def test_apply_empty_games_deletes_all_local_game_folders(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    first_dir = _write_local_game(tmp_path, "first")
+    second_dir = _write_local_game(tmp_path, "second")
+    game_ctx = _game_ctx()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: MagicMock(),
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        remove_local_game_folder=gl.remove_local_game_folder,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_settlement_completed = True
+    rt.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"games": []})
+
+    assert not first_dir.exists()
+    assert not second_dir.exists()
+
+
+def test_apply_removed_running_game_terminates_and_deletes_folder(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    running_dir = _write_local_game(tmp_path, "running")
+    game_ctx = _game_ctx()
+    game_ctx.game = {"game_id": "running"}
+    term_calls = []
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: MagicMock(),
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda g: term_calls.append(g),
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        remove_local_game_folder=gl.remove_local_game_folder,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_settlement_completed = True
+    rt.awaiting_games_ready_confirmation = False
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"games": []})
+
+    assert len(term_calls) == 1
+    assert game_ctx.game is None
+    assert game_ctx.reload_conf is True
+    assert not running_dir.exists()
+
+
+def test_apply_removed_downloading_game_cancels_and_deletes_folder(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    removed_dir = _write_local_game(tmp_path, "downloading")
+    cancel_calls = []
+    game_ctx = _game_ctx()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: MagicMock(),
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda gid: cancel_calls.append(gid),
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        remove_local_game_folder=gl.remove_local_game_folder,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.startup_settlement_completed = True
+    rt.awaiting_games_ready_confirmation = False
+    rt.remote_downloading_game_ids.add("downloading")
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"games": []})
+
+    assert cancel_calls == ["downloading"]
+    assert rt.remote_downloading_game_ids == set()
+    assert not removed_dir.exists()
+
+
+def test_gate_reconciles_local_folders_without_processing_game_commands(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    stale_dir = _write_local_game(tmp_path, "stale")
+    game_ctx = _game_ctx()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=game_ctx,
+        get_machine_state_service=lambda: MagicMock(),
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda _p: None,
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda _gid, _ver: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+        remove_local_game_folder=gl.remove_local_game_folder,
+    )
+    rt = RemoteConfigRuntimeState()
+    rt.awaiting_games_ready_confirmation = True
+    applier = RemoteDeviceConfigApplier(deps, rt)
+
+    applier.apply({"games": [{"id": "remote", "status": "playing", "version": "1"}]})
+
+    assert not stale_dir.exists()
+    assert game_ctx.start_game is False
     assert game_ctx.reload_game_menu is True
 
 
@@ -1316,7 +1515,7 @@ def test_startup_recovers_missing_ready_games_by_scheduling_download(tmp_path, m
         request_set_game_status=lambda *_a: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
+        ensure_game_downloaded=_record_download_and_create_game(tmp_path, download_calls),
         cancel_game_download=lambda _gid: None,
         local_game_version_matches=lambda *_a: False,
         perform_update=lambda: {},
@@ -1356,7 +1555,7 @@ def test_startup_missing_ready_recovery_runs_only_once(tmp_path, monkeypatch):
         request_set_game_status=lambda *_a: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
+        ensure_game_downloaded=_record_download_and_create_game(tmp_path, download_calls),
         cancel_game_download=lambda _gid: None,
         local_game_version_matches=lambda *_a: False,
         perform_update=lambda: {},
@@ -1447,7 +1646,7 @@ def test_startup_recovery_downloads_playing_game_missing_after_settlement(
             game_ctx,
             MagicMock(),
             MagicMock(),
-            ensure=lambda gid, ver: download_calls.append((gid, ver)) or True,
+            ensure=_record_download_and_create_game(tmp_path, download_calls),
             publish=lambda p: published.append(dict(p)),
         ),
         rt,
@@ -1483,7 +1682,7 @@ def test_startup_missing_ready_recovery_runs_on_settlement_snapshot(tmp_path, mo
             game_ctx,
             MagicMock(),
             MagicMock(),
-            ensure=lambda gid, ver: download_calls.append((gid, ver)) or True,
+            ensure=_record_download_and_create_game(tmp_path, download_calls),
         ),
         rt,
     )
@@ -1518,7 +1717,7 @@ def test_startup_missing_ready_recovery_runs_on_gate_confirmation_snapshot(
         request_set_game_status=lambda *_a: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
+        ensure_game_downloaded=_record_download_and_create_game(tmp_path, download_calls),
         cancel_game_download=lambda _gid: None,
         local_game_version_matches=lambda *_a: False,
         perform_update=lambda: {},
@@ -1569,7 +1768,7 @@ def test_startup_missing_ready_recovery_confirms_when_timestamps_missing(
         request_set_game_status=lambda *_a: None,
         set_time_zone=lambda _tz: None,
         term_game_process=lambda _g: None,
-        ensure_game_downloaded=lambda gid, ver: download_calls.append((gid, ver)) or True,
+        ensure_game_downloaded=_record_download_and_create_game(tmp_path, download_calls),
         cancel_game_download=lambda _gid: None,
         local_game_version_matches=lambda *_a: False,
         perform_update=lambda: {},

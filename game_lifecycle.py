@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import shutil
 from multiprocessing import shared_memory
 import subprocess
 import requests
@@ -295,23 +296,66 @@ def load_game_list() -> list:
     return game_list
 
 
+def local_game_index() -> dict[str, str]:
+    """Map locally installed game ids to their app folder paths."""
+    games: dict[str, str] = {}
+    apps_dir = os.path.abspath(os.path.join(os.getcwd(), "apps"))
+    try:
+        names = os.listdir(apps_dir)
+    except FileNotFoundError:
+        return games
+    for name in names:
+        path = os.path.join(apps_dir, name)
+        if not os.path.isdir(path):
+            continue
+        conf_path = os.path.join(path, "conf.json")
+        if not os.path.isfile(conf_path):
+            continue
+        try:
+            with open(conf_path, "r", encoding="utf-8") as f:
+                conf = json.load(f)
+            if conf.get("type") != "game":
+                continue
+            game_id = str(conf.get("id") or name).strip()
+            if game_id:
+                games[game_id] = os.path.abspath(path)
+        except Exception as e:
+            _log.warning("Error indexing game config for %s: %s", name, e)
+    return games
+
+
+def remove_local_game_folder(game_id: str) -> bool:
+    """Delete a locally installed game folder by game id."""
+    gid = str(game_id or "").strip()
+    if not gid:
+        return False
+    folder = local_game_index().get(gid)
+    if not folder:
+        return False
+    apps_dir = os.path.abspath(os.path.join(os.getcwd(), "apps"))
+    folder = os.path.abspath(folder)
+    try:
+        if os.path.commonpath([apps_dir, folder]) != apps_dir:
+            return False
+    except ValueError:
+        return False
+    if not os.path.isdir(folder):
+        return False
+    shutil.rmtree(folder)
+    return True
+
+
 def load_menu_game_list(ctx) -> list:
     """
-    Games for the on-device picker: intersect with remote-ready ids when known,
-    else local entries marked ready; sort by playtime descending then name.
+    Games for the on-device picker: local entries marked ready, sorted by
+    playtime descending then name.
     """
     all_games = load_game_list()
-    ready_ids = getattr(ctx, "remote_menu_ready_game_ids", None)
-    if ready_ids is None:
-        filtered = [
-            c
-            for c in all_games
-            if str(c.get("status", "ready")).strip().lower() == "ready"
-        ]
-    elif len(ready_ids) == 0:
-        filtered = []
-    else:
-        filtered = [c for c in all_games if str(c.get("id")) in ready_ids]
+    filtered = [
+        c
+        for c in all_games
+        if str(c.get("status", "ready")).strip().lower() == "ready"
+    ]
 
     playtimes = _load_user_data().get("game_playtimes", {})
 

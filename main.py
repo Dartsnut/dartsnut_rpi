@@ -56,6 +56,7 @@ from game_lifecycle import (
     term_game_process,
     ensure_game_downloaded,
     local_game_version_matches,
+    remove_local_game_folder,
 )
 import runtime.machine_api as machine_api
 from machine_state_service import (
@@ -436,6 +437,7 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         ensure_game_downloaded=ensure_game_downloaded,
         cancel_game_download=cancel_game_download,
         local_game_version_matches=local_game_version_matches,
+        remove_local_game_folder=remove_local_game_folder,
         perform_update=machine_api.perform_update,
         get_version=machine_api.get_version,
         is_reset_in_progress=_is_reset_in_progress,

@@ -31,14 +31,15 @@ def test_load_menu_game_list_empty_frozenset(monkeypatch):
     monkeypatch.setattr(gl, "_load_user_data", lambda: {"game_playtimes": {}})
     ctx = _Ctx()
     ctx.remote_menu_ready_game_ids = frozenset()
-    assert gl.load_menu_game_list(ctx) == []
+    assert [c["id"] for c in gl.load_menu_game_list(ctx)] == ["a"]
 
 
-def test_load_menu_game_list_remote_ready_only_and_sort(monkeypatch):
+def test_load_menu_game_list_ignores_remote_ready_filter_and_sort(monkeypatch):
     games = [
         {"id": "a", "name": "Zebra", "status": "ready"},
         {"id": "b", "name": "Apple", "status": "ready"},
         {"id": "c", "name": "Cut", "status": "ready"},
+        {"id": "d", "name": "Download", "status": "downloading"},
     ]
     monkeypatch.setattr(gl, "load_game_list", lambda: list(games))
     monkeypatch.setattr(
@@ -49,8 +50,8 @@ def test_load_menu_game_list_remote_ready_only_and_sort(monkeypatch):
     ctx = _Ctx()
     ctx.remote_menu_ready_game_ids = frozenset({"a", "b"})
     result = gl.load_menu_game_list(ctx)
-    # a and b tie at 100; sort by name: Apple before Zebra; c excluded (not in remote ready set)
-    assert [c["id"] for c in result] == ["b", "a"]
+    # a and b tie at 100; sort by name. c remains because menu is local-only.
+    assert [c["id"] for c in result] == ["b", "a", "c"]
 
 
 class _RefreshCtx:

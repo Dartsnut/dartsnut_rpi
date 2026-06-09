@@ -285,9 +285,16 @@ def remote_config_harness(
         "ensure_download_result": True,
         "all_ready_requests": 0,
         "reset_confirmed": False,
+        "remove_local_game_calls": [],
         "tz": None,
         "term_calls": 0,
     }
+
+    def _remove_local_game(gid: str) -> bool:
+        from game_lifecycle import remove_local_game_folder
+
+        events["remove_local_game_calls"].append(gid)
+        return remove_local_game_folder(gid)
 
     deps = RemoteDeviceConfigDependencies(
         app_ctx=app_ctx,
@@ -308,6 +315,7 @@ def remote_config_harness(
         or bool(events["ensure_download_result"]),
         cancel_game_download=lambda gid: events["cancel_download_calls"].append(gid),
         local_game_version_matches=lambda *_a: False,
+        remove_local_game_folder=_remove_local_game,
         perform_update=lambda: {"error": False},
         get_version=lambda: {"error": False, "version": "9.9.9"},
         is_reset_in_progress=lambda: False,

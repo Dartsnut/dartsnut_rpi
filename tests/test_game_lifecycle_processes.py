@@ -153,6 +153,50 @@ def test_load_game_list_bad_preview_still_includes_game_and_summary(monkeypatch,
     assert summary == [{"id": "dart_checker", "version": "2.0.0", "status": "ready"}]
 
 
+def test_local_game_index_maps_valid_game_ids_to_folders(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    for gid in ("local-a", "local-b"):
+        app_dir = tmp_path / "apps" / gid
+        app_dir.mkdir(parents=True)
+        (app_dir / "conf.json").write_text(
+            json.dumps({"id": gid, "name": gid, "type": "game", "version": "1.0.0"}),
+            encoding="utf-8",
+        )
+    widget_dir = tmp_path / "apps" / "widget"
+    widget_dir.mkdir()
+    (widget_dir / "conf.json").write_text(
+        json.dumps({"id": "widget", "type": "widget"}),
+        encoding="utf-8",
+    )
+
+    index = gl.local_game_index()
+
+    assert set(index) == {"local-a", "local-b"}
+    assert index["local-a"] == os.path.join(str(tmp_path), "apps", "local-a")
+
+
+def test_remove_local_game_folder_deletes_only_indexed_game(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    game_dir = tmp_path / "apps" / "remove-me"
+    game_dir.mkdir(parents=True)
+    (game_dir / "conf.json").write_text(
+        json.dumps({"id": "remove-me", "type": "game", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    other_dir = tmp_path / "apps" / "keep-me"
+    other_dir.mkdir()
+    (other_dir / "conf.json").write_text(
+        json.dumps({"id": "keep-me", "type": "game", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    assert gl.remove_local_game_folder("remove-me") is True
+    assert not game_dir.exists()
+    assert other_dir.exists()
+    assert gl.remove_local_game_folder("../keep-me") is False
+    assert other_dir.exists()
+
+
 def test_get_local_game_version_returns_empty_on_invalid_json(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "broken"

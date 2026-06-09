@@ -1115,6 +1115,65 @@ mod tests {
     }
 
     #[test]
+    fn rpc_games_patch_posts_to_v2_merge_rpc_as_partial() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                tx.send(request).expect("send request");
+                let body = b"[]";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let cfg = SupabaseConfig {
+            url: format!("http://127.0.0.1:{}", addr.port()),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let client = Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .expect("client");
+
+        rpc_apply_patch(
+            &client,
+            &cfg,
+            json!({"games": [{"id": "pico8", "status": "ready", "version": "1"}]}),
+            false,
+            None,
+        )
+        .expect("rpc patch");
+        let request = rx.recv_timeout(Duration::from_secs(3)).expect("request");
+        let _ = server.join();
+
+        let first_line = request.lines().next().unwrap_or("");
+        assert_eq!(
+            first_line,
+            "POST /rest/v1/rpc/apply_remote_device_patch_v2 HTTP/1.1"
+        );
+        let body = request
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("http body");
+        let body: Value = serde_json::from_str(body).expect("json body");
+        assert_eq!(body.get("p_full"), Some(&json!(false)));
+        assert_eq!(
+            body.get("p_patch").and_then(|p| p.get("games")),
+            Some(&json!([{"id": "pico8", "status": "ready", "version": "1"}]))
+        );
+    }
+
+    #[test]
     fn strip_runtime_overwrites_for_existing_device_initial_state_removes_runtime_and_settings_fields()
     {
         let patch = json!({

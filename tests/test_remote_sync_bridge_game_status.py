@@ -128,6 +128,53 @@ def test_request_set_all_games_ready_prefers_local_version_over_remote(monkeypat
     assert sent == [{"games": [{"id": "chess", "version": "2.0.0", "status": "ready"}]}]
 
 
+def test_request_set_all_games_ready_rebuilds_only_remembered_remote_ids(
+    monkeypatch,
+):
+    sent = []
+    monkeypatch.setattr(
+        "game_lifecycle.get_games_summary",
+        lambda: [
+            {"id": "flipdarts", "version": "1.0.0", "status": "ready"},
+            {"id": "01dartgame", "version": "1.0.1", "status": "ready"},
+            {"id": "pico8", "version": "1.0.2", "status": "ready"},
+            {"id": "cricket", "version": "2.0.0", "status": "ready"},
+            {"id": "splashgame", "version": "3.0.0", "status": "ready"},
+        ],
+    )
+    monkeypatch.setattr(
+        rsb._ssb,
+        "_remote_game_ids",
+        {"flipdarts", "01dartgame", "pico8"},
+    )
+    monkeypatch.setattr(
+        rsb._ssb,
+        "_remote_games_by_id",
+        {
+            "flipdarts": {"id": "flipdarts", "version": "1.0.0"},
+            "01dartgame": {"id": "01dartgame", "version": "1.0.1"},
+            "pico8": {"id": "pico8", "version": "1.0.2"},
+        },
+    )
+    monkeypatch.setattr(
+        rsb._ssb,
+        "publish_device_state_update",
+        lambda payload: sent.append(payload),
+    )
+
+    rsb.request_set_all_games_ready()
+
+    assert sent == [
+        {
+            "games": [
+                {"id": "01dartgame", "version": "1.0.1", "status": "ready"},
+                {"id": "flipdarts", "version": "1.0.0", "status": "ready"},
+                {"id": "pico8", "version": "1.0.2", "status": "ready"},
+            ]
+        }
+    ]
+
+
 def test_request_set_game_status_publishes_higher_local_version(monkeypatch):
     sent = []
 

@@ -50,6 +50,41 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
     assert state["firmware"] == {"version": "1.2.3", "update": False}
 
 
+def test_build_initial_state_games_match_sync_visible_local_catalog(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ssb, "resolve_pixeldarts_hardware_version", lambda: "")
+    expected_games = {
+        "flipdarts": "1.0.0",
+        "01dartgame": "1.0.1",
+        "pico8": "1.0.2",
+        "cricket": "2.0.0",
+        "splashgame": "3.0.0",
+    }
+    for game_id, version in expected_games.items():
+        game_dir = tmp_path / "apps" / game_id
+        game_dir.mkdir(parents=True)
+        (game_dir / "conf.json").write_text(
+            json.dumps(
+                {
+                    "id": game_id,
+                    "name": game_id,
+                    "type": "game",
+                    "version": version,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    state = ssb._build_initial_state({"id": "AA:BB:CC:DD:EE:FF"})
+
+    games_by_id = {g["id"]: g for g in state["games"]}
+    assert set(games_by_id) == set(expected_games)
+    assert {gid: g["version"] for gid, g in games_by_id.items()} == expected_games
+    assert all(g["status"] == "ready" for g in games_by_id.values())
+
+
 def test_build_initial_state_sets_device_info_id_from_ble_mac_when_missing(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
 
