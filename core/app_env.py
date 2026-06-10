@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from core.helpers import app_dir, uv_bin
-from core.retry import retry_with_backoff
+from core.retry import retry_with_backoff, FAST_BACKOFF_SECONDS
 
 _log = logging.getLogger(__name__)
 
@@ -141,6 +141,7 @@ def _uv_sync(app_id: str) -> None:
         succeeded=lambda _result: True,
         reraise=True,
         label=f"uv sync {app_id}",
+        backoff=FAST_BACKOFF_SECONDS,
     )
 
 

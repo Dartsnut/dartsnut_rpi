@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 from multiprocessing import shared_memory
 import subprocess
 import requests
@@ -23,11 +24,14 @@ from python_websocket.user_data_operations import (
     stop_game_tracking,
     _load_user_data,
 )
-from widget_lifecycle import download_app
 import assets
 from PIL import Image
 
 _log = logging.getLogger(__name__)
+
+# Track in-flight game downloads (by game_id) to prevent duplicate concurrent downloads
+_game_background_download_inflight = set()
+_game_download_lock = threading.Lock()
 
 
 def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
@@ -144,6 +148,104 @@ def local_game_version_matches(gameid: str, remote_version: str) -> bool:
     return compare_game_versions(local, expected) >= 0
 
 
+def _download_game_file(url: str, md5: str, game_id: str) -> bool:
+    """
+    Download and extract game .tar.gz file; verify MD5.
+    Returns True on success, False on failure.
+    """
+    if not url.endswith(".tar.gz"):
+        _log.error("game: invalid file type url=%s (expected .tar.gz)", url)
+        return False
+
+    try:
+        os.makedirs("downloads", exist_ok=True)
+        file_name = url.split("/")[-1]
+        download_path = os.path.join("downloads", file_name)
+
+        # Download with wget
+        try:
+            subprocess.run(
+                ["wget", "--read-timeout=10", "-O", download_path, url],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            _log.error("game: wget failed game_id=%s: %s", game_id, e)
+            return False
+
+        if not os.path.isfile(download_path):
+            _log.error("game: download file not found game_id=%s", game_id)
+            return False
+
+        # Verify MD5
+        try:
+            result = subprocess.run(
+                ["md5sum", download_path],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            downloaded_md5 = result.stdout.split()[0]
+            if downloaded_md5 != md5:
+                _log.error(
+                    "game: MD5 mismatch game_id=%s expected=%s got=%s",
+                    game_id,
+                    md5,
+                    downloaded_md5,
+                )
+                os.remove(download_path)
+                return False
+        except subprocess.CalledProcessError as e:
+            _log.error("game: MD5 check failed game_id=%s: %s", game_id, e)
+            if os.path.isfile(download_path):
+                os.remove(download_path)
+            return False
+
+        # Extract tarball
+        try:
+            subprocess.run(
+                ["tar", "-xzf", download_path, "-C", os.path.join(os.getcwd(), "apps")],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            _log.error("game: extraction failed game_id=%s: %s", game_id, e)
+            if os.path.isfile(download_path):
+                os.remove(download_path)
+            return False
+
+        # Clean up downloaded file
+        if os.path.isfile(download_path):
+            os.remove(download_path)
+
+        # Clean up macOS metadata files that may have been extracted
+        apps_dir = os.path.join(os.getcwd(), "apps")
+        try:
+            for item in os.listdir(apps_dir):
+                if item.startswith("._"):
+                    macos_file = os.path.join(apps_dir, item)
+                    if os.path.isfile(macos_file):
+                        os.remove(macos_file)
+                        _log.debug("game: removed macOS metadata file %s", item)
+                    elif os.path.isdir(macos_file):
+                        shutil.rmtree(macos_file)
+                        _log.debug("game: removed macOS metadata dir %s", item)
+        except Exception as e:
+            _log.warning("game: error cleaning macOS metadata for game_id=%s: %s", game_id, e)
+
+        # Set up venv
+        if not ensure_app_venv(game_id):
+            _log.error("game: venv setup failed game_id=%s", game_id)
+            return False
+
+        _log.info("game: download and setup complete game_id=%s", game_id)
+        return True
+
+    except Exception as e:
+        _log.error("game: download error game_id=%s: %s", game_id, e)
+        return False
+
+
 def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     """Ensure local game exists and is at least remote_version when provided."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
@@ -182,19 +284,103 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                 u = data.get("game_download_url")
                 m = data.get("game_download_md5")
                 if u and m:
-                    download_app(u, m)
+                    success = retry_with_backoff(
+                        lambda: _download_game_file(u, m, gameid),
+                        succeeded=bool,
+                        label=f"download-game {gameid}",
+                    )
+                    if not success:
+                        _log.error("game: download failed after retries game_id=%s", gameid)
+                        return False
+                else:
+                    _log.error("game: missing download URL or MD5 game_id=%s", gameid)
+                    return False
         else:
             _log.warning(
                 "Failed to get download info for game %s: HTTP %s",
                 gameid,
                 getattr(response, "status_code", "n/a"),
             )
+            return False
     except Exception as e:
-        _log.warning("Error fetching game download info: %s", e)
+        _log.error("Error fetching game download info for %s: %s", gameid, e)
+        return False
+
     if expected_version:
         local = get_local_game_version(gameid)
         return compare_game_versions(local, expected_version) >= 0
     return os.path.isdir(game_path)
+
+
+def download_game_async(
+    game_id: str,
+    expected_version: str = "",
+    on_success=None,
+    on_failure=None,
+) -> bool:
+    """
+    Download game in background thread; return True if download was started.
+
+    Args:
+        game_id: Game identifier
+        expected_version: Target version to download
+        on_success: Callback(game_id) called after successful download
+        on_failure: Callback(game_id, error_msg) called on failure
+
+    Returns:
+        True if background download was started, False if already in progress
+    """
+    if not game_id:
+        return False
+
+    with _game_download_lock:
+        if game_id in _game_background_download_inflight:
+            _log.debug(
+                "game: background download already in progress game_id=%s (skipped duplicate)",
+                game_id,
+            )
+            return False
+        _game_background_download_inflight.add(game_id)
+
+    def worker():
+        try:
+            _log.info("game: background download started game_id=%s", game_id)
+            success = ensure_game_downloaded(game_id, expected_version)
+            if success:
+                _log.info("game: background download finished game_id=%s", game_id)
+                if on_success is not None:
+                    try:
+                        on_success(game_id)
+                    except Exception as e:
+                        _log.warning(
+                            "game: on_success callback error game_id=%s: %s",
+                            game_id,
+                            e,
+                        )
+            else:
+                _log.warning("game: background download failed game_id=%s", game_id)
+                if on_failure is not None:
+                    try:
+                        on_failure(game_id, "Download failed")
+                    except Exception as e:
+                        _log.warning(
+                            "game: on_failure callback error game_id=%s: %s",
+                            game_id,
+                            e,
+                        )
+        except Exception as e:
+            _log.error("game: background download error game_id=%s: %s", game_id, e)
+            if on_failure is not None:
+                try:
+                    on_failure(game_id, str(e))
+                except Exception:
+                    pass
+        finally:
+            with _game_download_lock:
+                _game_background_download_inflight.discard(game_id)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
 
 
 def start_game_process(gameid: str) -> dict:

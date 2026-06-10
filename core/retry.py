@@ -12,6 +12,9 @@ _log = logging.getLogger(__name__)
 # runtime/sync/outbox.py's backoff schedule.
 DEFAULT_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 5.0, 15.0)
 
+# Reduced backoff for game/widget downloads to avoid long hangs (3 attempts, ~7s max)
+FAST_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 5.0)
+
 
 def retry_with_backoff(
     fn: Callable[[], Any],
