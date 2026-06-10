@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from core.helpers import app_dir, uv_bin
+from core.retry import retry_with_backoff
 
 _log = logging.getLogger(__name__)
 
@@ -130,11 +131,16 @@ def _write_stamp(app_id: str) -> None:
 
 def _uv_sync(app_id: str) -> None:
     directory = app_dir(app_id)
-    subprocess.run(
-        [uv_bin(), "sync", "--directory", directory],
-        check=True,
-        capture_output=True,
-        text=True,
+    retry_with_backoff(
+        lambda: subprocess.run(
+            [uv_bin(), "sync", "--directory", directory],
+            check=True,
+            capture_output=True,
+            text=True,
+        ),
+        succeeded=lambda _result: True,
+        reraise=True,
+        label=f"uv sync {app_id}",
     )
 
 
