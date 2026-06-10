@@ -434,6 +434,17 @@ class RemoteDeviceConfigApplier:
                 if deps.remove_local_game_folder(game_id):
                     removed_any = True
                     _log.info("remote config: removed local game folder game_id=%s", game_id)
+                    # Removal resets the game lifecycle: forget the last published
+                    # status so a later reinstall (even of the same version, via any
+                    # download path) is not suppressed by the dedup cache.
+                    try:
+                        from supabase_sync_bridge import (
+                            invalidate_published_game_status,
+                        )
+
+                        invalidate_published_game_status(game_id)
+                    except Exception:
+                        pass
             except Exception as e:
                 _log.warning(
                     "remote config: failed to remove local game folder game_id=%s: %s",

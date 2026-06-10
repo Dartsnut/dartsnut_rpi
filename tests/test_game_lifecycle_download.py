@@ -16,10 +16,10 @@ def test_ensure_game_downloaded_returns_true_when_game_already_exists(monkeypatc
 
     def _never_download(*args, **kwargs):
         called["download"] += 1
-        raise AssertionError("download_app should not be called")
+        raise AssertionError("_download_game_file should not be called")
 
     monkeypatch.setattr("game_lifecycle.requests.get", _never_requests)
-    monkeypatch.setattr("game_lifecycle.download_app", _never_download)
+    monkeypatch.setattr("game_lifecycle._download_game_file", _never_download)
 
     assert ensure_game_downloaded("chess") is True
     assert called["requests"] == 0
@@ -45,16 +45,17 @@ def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
                 }
             }
 
-    def _download_app(url, md5):
-        calls["download"].append((url, md5))
+    def _download_game_file(url, md5, game_id):
+        calls["download"].append((url, md5, game_id))
         state["exists"] = True
+        return True
 
     monkeypatch.setattr("game_lifecycle.os.path.isdir", _isdir)
     monkeypatch.setattr("game_lifecycle.requests.get", lambda url, **kwargs: _Resp())
-    monkeypatch.setattr("game_lifecycle.download_app", _download_app)
+    monkeypatch.setattr("game_lifecycle._download_game_file", _download_game_file)
 
     assert ensure_game_downloaded("chess") is True
-    assert calls["download"] == [("https://example.com/chess.zip", "abc123")]
+    assert calls["download"] == [("https://example.com/chess.zip", "abc123", "chess")]
 
 
 def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
@@ -76,15 +77,16 @@ def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
                 }
             }
 
-    def _download_app(url, md5):
-        calls["download"].append((url, md5))
+    def _download_game_file(url, md5, game_id):
+        calls["download"].append((url, md5, game_id))
         state["version"] = "2.0.0"
+        return True
 
     monkeypatch.setattr("game_lifecycle.requests.get", lambda url, **kwargs: _Resp())
-    monkeypatch.setattr("game_lifecycle.download_app", _download_app)
+    monkeypatch.setattr("game_lifecycle._download_game_file", _download_game_file)
 
     assert ensure_game_downloaded("chess", "2.0.0") is True
-    assert calls["download"] == [("https://example.com/chess.zip", "abc123")]
+    assert calls["download"] == [("https://example.com/chess.zip", "abc123", "chess")]
 
 
 def test_ensure_game_downloaded_retries_info_fetch(monkeypatch):
@@ -112,20 +114,21 @@ def test_ensure_game_downloaded_retries_info_fetch(monkeypatch):
             raise Exception("connection reset")
         return _Resp()
 
-    def _download_app(url, md5):
-        calls["download"].append((url, md5))
+    def _download_game_file(url, md5, game_id):
+        calls["download"].append((url, md5, game_id))
         state["exists"] = True
+        return True
 
     import core.retry as retry
 
     monkeypatch.setattr(retry.time, "sleep", lambda _s: None)
     monkeypatch.setattr("game_lifecycle.os.path.isdir", _isdir)
     monkeypatch.setattr("game_lifecycle.requests.get", _flaky_get)
-    monkeypatch.setattr("game_lifecycle.download_app", _download_app)
+    monkeypatch.setattr("game_lifecycle._download_game_file", _download_game_file)
 
     assert ensure_game_downloaded("chess") is True
     assert calls["requests"] == 2
-    assert calls["download"] == [("https://example.com/chess.tar.gz", "abc123")]
+    assert calls["download"] == [("https://example.com/chess.tar.gz", "abc123", "chess")]
 
 
 def test_local_game_version_matches_true_when_versions_equal(monkeypatch):
@@ -168,10 +171,10 @@ def test_ensure_game_downloaded_skips_download_when_local_is_newer(monkeypatch):
 
     def _never_download(*args, **kwargs):
         called["download"] += 1
-        raise AssertionError("download_app should not be called")
+        raise AssertionError("_download_game_file should not be called")
 
     monkeypatch.setattr("game_lifecycle.requests.get", _never_requests)
-    monkeypatch.setattr("game_lifecycle.download_app", _never_download)
+    monkeypatch.setattr("game_lifecycle._download_game_file", _never_download)
 
     assert ensure_game_downloaded("chess", "2.0.0") is True
     assert called["requests"] == 0
