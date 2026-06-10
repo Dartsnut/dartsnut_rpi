@@ -218,6 +218,21 @@ def _download_game_file(url: str, md5: str, game_id: str) -> bool:
         if os.path.isfile(download_path):
             os.remove(download_path)
 
+        # Clean up macOS metadata files that may have been extracted
+        apps_dir = os.path.join(os.getcwd(), "apps")
+        try:
+            for item in os.listdir(apps_dir):
+                if item.startswith("._"):
+                    macos_file = os.path.join(apps_dir, item)
+                    if os.path.isfile(macos_file):
+                        os.remove(macos_file)
+                        _log.debug("game: removed macOS metadata file %s", item)
+                    elif os.path.isdir(macos_file):
+                        shutil.rmtree(macos_file)
+                        _log.debug("game: removed macOS metadata dir %s", item)
+        except Exception as e:
+            _log.warning("game: error cleaning macOS metadata for game_id=%s: %s", game_id, e)
+
         # Set up venv
         if not ensure_app_venv(game_id):
             _log.error("game: venv setup failed game_id=%s", game_id)
