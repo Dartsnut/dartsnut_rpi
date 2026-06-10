@@ -39,6 +39,29 @@ _remote_game_ids_lock = threading.Lock()
 _sync_engine: Optional[SyncEngine] = None
 _on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None
 
+# Last (status, version) this device published per game_id, used to suppress
+# redundant re-publishes. Without this, every inbound snapshot that still shows
+# a game as "downloading" (because the row hasn't propagated yet) makes the
+# device re-send "ready", and each send broadcasts a new snapshot -> feedback
+# loop that floods the bridge and stalls status convergence.
+_published_game_status: Dict[str, tuple[str, str]] = {}
+_published_game_status_lock = threading.Lock()
+
+
+def invalidate_published_game_status(game_id: str) -> None:
+    """Forget the last published status for a game so the next write is sent.
+
+    Called when a genuinely new command for the game arrives (e.g. a fresh
+    "downloading" request), so a later "ready"/"error" is never suppressed by
+    a stale cache entry from a previous install cycle.
+    """
+    gid = str(game_id or "").strip()
+    if not gid:
+        return
+    with _published_game_status_lock:
+        _published_game_status.pop(gid, None)
+
+
 _log = logging.getLogger(__name__)
 
 
@@ -850,6 +873,24 @@ def request_set_game_status(game_id: str, status: str) -> None:
                     remote_version = str(g.get("version") or "").strip()
                 break
         game_payload["version"] = resolve_game_version_for_sync(game_id, remote_version)
+
+        # Suppress redundant re-publishes of the same status+version. The outbox
+        # already guarantees delivery+retry of an enqueued patch, so re-sending an
+        # identical status only feeds the inbound-snapshot -> re-affirm loop that
+        # floods the bridge. A fresh "downloading" command clears this cache via
+        # invalidate_published_game_status(), so ready/error always get through.
+        gid = str(game_id)
+        published_key = (str(status), str(game_payload["version"]))
+        with _published_game_status_lock:
+            if _published_game_status.get(gid) == published_key:
+                _log.debug(
+                    "supabase sync: request_set_game_status skipped game_id=%s status=%s reason=already_published",
+                    game_id,
+                    status,
+                )
+                return
+            _published_game_status[gid] = published_key
+
         _log.info(
             "supabase sync: request_set_game_status game_id=%s status=%s version=%s",
             game_id,

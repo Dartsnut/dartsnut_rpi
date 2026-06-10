@@ -964,7 +964,21 @@ class RemoteDeviceConfigApplier:
                         continue
                     game_id = str(game_id)
                     if status == "downloading":
+                        was_downloading = game_id in rt.remote_downloading_game_ids
                         rt.remote_downloading_game_ids.add(game_id)
+                        if not was_downloading:
+                            # Genuinely new install/update intent (not a repeat of the
+                            # same downloading snapshot): clear any cached published
+                            # status so the resulting ready/error is not suppressed by
+                            # a stale entry from a prior install cycle.
+                            try:
+                                from supabase_sync_bridge import (
+                                    invalidate_published_game_status,
+                                )
+
+                                invalidate_published_game_status(game_id)
+                            except Exception:
+                                pass
                     else:
                         rt.remote_downloading_game_ids.discard(game_id)
                     if (
