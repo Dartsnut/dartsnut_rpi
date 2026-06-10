@@ -507,6 +507,14 @@ class RemoteDeviceConfigApplier:
                     gid,
                     error,
                 )
+                try:
+                    deps.request_set_game_status(gid, "error")
+                except Exception as e:
+                    _log.warning(
+                        "remote config: reconcile error publish failed game_id=%s: %s",
+                        gid,
+                        e,
+                    )
                 rt.remote_downloading_game_ids.discard(gid)
 
             started = download_game_async(
@@ -1012,6 +1020,38 @@ class RemoteDeviceConfigApplier:
                         game_id, expected_version
                     ):
                         _set_status(game_id, "ready")
+                        continue
+
+                    if status == "downloading":
+                        # Install/update commands from the app arrive as "downloading".
+                        # Run them in a background thread so multiple inbound installs
+                        # never block the snapshot-apply thread (the firmware hang).
+                        from game_lifecycle import download_game_async
+
+                        def _on_download_ok(gid: str) -> None:
+                            _log.info(
+                                "remote config: inbound download->ready game_id=%s",
+                                gid,
+                            )
+                            _set_status(gid, "ready")
+                            rt.remote_downloading_game_ids.discard(gid)
+
+                        def _on_download_fail(gid: str, error: str) -> None:
+                            _log.warning(
+                                "remote config: inbound download failed game_id=%s error=%s",
+                                gid,
+                                error,
+                            )
+                            _set_status(gid, "error")
+                            rt.remote_downloading_game_ids.discard(gid)
+
+                        rt.remote_downloading_game_ids.add(game_id)
+                        download_game_async(
+                            game_id,
+                            expected_version,
+                            on_success=_on_download_ok,
+                            on_failure=_on_download_fail,
+                        )
                         continue
 
                     if status == "playing" and not should_accept_remote_playing_command(
