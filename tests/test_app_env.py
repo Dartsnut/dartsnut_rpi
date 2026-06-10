@@ -105,6 +105,59 @@ def test_ensure_app_venv_uv_failure(monkeypatch, tmp_path):
     assert app_env.ensure_app_venv("broken") is False
 
 
+def test_uv_sync_retries_then_gives_up(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "broken"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("pass\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "broken", "type": "widget", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    import core.retry as retry
+
+    monkeypatch.setattr(retry.time, "sleep", lambda _s: None)
+    attempts = {"n": 0}
+
+    def _always_fail(cmd, **kwargs):
+        attempts["n"] += 1
+        raise subprocess.CalledProcessError(1, "uv", stderr="boom")
+
+    monkeypatch.setattr(app_env.subprocess, "run", _always_fail)
+    assert app_env.ensure_app_venv("broken") is False
+    assert attempts["n"] == len(retry.DEFAULT_BACKOFF_SECONDS) + 1
+
+
+def test_uv_sync_retries_then_succeeds(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "flaky"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("pass\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "flaky", "type": "widget", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    import core.retry as retry
+
+    monkeypatch.setattr(retry.time, "sleep", lambda _s: None)
+    attempts = {"n": 0}
+
+    def _flaky(cmd, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise subprocess.CalledProcessError(1, "uv", stderr="boom")
+        venv = app_dir / ".venv" / "bin"
+        venv.mkdir(parents=True, exist_ok=True)
+        (venv / "python").write_text("", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(app_env.subprocess, "run", _flaky)
+    assert app_env.ensure_app_venv("flaky") is True
+    assert attempts["n"] == 3
+
+
 def test_infer_app_id_from_tarball(tmp_path):
     tar_path = tmp_path / "dart_checker.tar.gz"
     with tarfile.open(tar_path, "w:gz") as tar:

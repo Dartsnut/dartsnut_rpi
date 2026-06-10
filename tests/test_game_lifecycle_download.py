@@ -50,7 +50,7 @@ def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
         state["exists"] = True
 
     monkeypatch.setattr("game_lifecycle.os.path.isdir", _isdir)
-    monkeypatch.setattr("game_lifecycle.requests.get", lambda url: _Resp())
+    monkeypatch.setattr("game_lifecycle.requests.get", lambda url, **kwargs: _Resp())
     monkeypatch.setattr("game_lifecycle.download_app", _download_app)
 
     assert ensure_game_downloaded("chess") is True
@@ -80,11 +80,52 @@ def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
         calls["download"].append((url, md5))
         state["version"] = "2.0.0"
 
-    monkeypatch.setattr("game_lifecycle.requests.get", lambda url: _Resp())
+    monkeypatch.setattr("game_lifecycle.requests.get", lambda url, **kwargs: _Resp())
     monkeypatch.setattr("game_lifecycle.download_app", _download_app)
 
     assert ensure_game_downloaded("chess", "2.0.0") is True
     assert calls["download"] == [("https://example.com/chess.zip", "abc123")]
+
+
+def test_ensure_game_downloaded_retries_info_fetch(monkeypatch):
+    calls = {"download": [], "requests": 0}
+    state = {"exists": False}
+
+    def _isdir(path):
+        return state["exists"] and path.endswith("/apps/chess")
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_download_url": "https://example.com/chess.tar.gz",
+                    "game_download_md5": "abc123",
+                }
+            }
+
+    def _flaky_get(url, **kwargs):
+        calls["requests"] += 1
+        if calls["requests"] < 2:
+            raise Exception("connection reset")
+        return _Resp()
+
+    def _download_app(url, md5):
+        calls["download"].append((url, md5))
+        state["exists"] = True
+
+    import core.retry as retry
+
+    monkeypatch.setattr(retry.time, "sleep", lambda _s: None)
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", _isdir)
+    monkeypatch.setattr("game_lifecycle.requests.get", _flaky_get)
+    monkeypatch.setattr("game_lifecycle.download_app", _download_app)
+
+    assert ensure_game_downloaded("chess") is True
+    assert calls["requests"] == 2
+    assert calls["download"] == [("https://example.com/chess.tar.gz", "abc123")]
 
 
 def test_local_game_version_matches_true_when_versions_equal(monkeypatch):

@@ -17,6 +17,7 @@ from core.helpers import (
     terminate_process_group,
 )
 from core.app_env import ensure_app_venv
+from core.retry import retry_with_backoff
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -167,10 +168,15 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
             expected_version,
         )
     try:
-        response = requests.get(
-            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}"
+        response = retry_with_backoff(
+            lambda: requests.get(
+                f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}",
+                timeout=(5, 30),
+            ),
+            succeeded=lambda r: getattr(r, "status_code", None) == 200,
+            label=f"get-download-info {gameid}",
         )
-        if response.status_code == 200:
+        if response is not None and response.status_code == 200:
             data = response.json().get("data")
             if data:
                 u = data.get("game_download_url")
@@ -181,7 +187,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
             _log.warning(
                 "Failed to get download info for game %s: HTTP %s",
                 gameid,
-                response.status_code,
+                getattr(response, "status_code", "n/a"),
             )
     except Exception as e:
         _log.warning("Error fetching game download info: %s", e)

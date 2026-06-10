@@ -26,6 +26,7 @@ from core.helpers import (
     terminate_process_group,
 )
 from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
+from core.retry import retry_with_backoff
 from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
@@ -112,7 +113,8 @@ def check_and_update_widget_version(widget_id: str):
                 _log.warning("Error reading conf.json for widget %s: %s", widget_id, e)
         try:
             response = requests.get(
-                f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}"
+                f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}",
+                timeout=(5, 30),
             )
             if response.status_code != 200:
                 _log.warning(
@@ -140,11 +142,9 @@ def check_and_update_widget_version(widget_id: str):
         return (False, None)
 
 
-def download_app(url: str, md5: str) -> bool:
-    """Download and extract .tar.gz app; verify MD5. Return True on success."""
+def _download_app_once(url: str, md5: str) -> bool:
+    """Single attempt: download and extract .tar.gz app; verify MD5."""
     try:
-        if not url.endswith(".tar.gz"):
-            return False
         os.makedirs("downloads", exist_ok=True)
         file_name = url.split("/")[-1]
         download_path = os.path.join("downloads", file_name)
@@ -179,6 +179,19 @@ def download_app(url: str, md5: str) -> bool:
     except Exception as e:
         _log.error("Error downloading app: %s", e)
         return False
+
+
+def download_app(url: str, md5: str) -> bool:
+    """Download and extract .tar.gz app; verify MD5. Retries on transient failure."""
+    if not url.endswith(".tar.gz"):
+        return False
+    return bool(
+        retry_with_backoff(
+            lambda: _download_app_once(url, md5),
+            succeeded=bool,
+            label=f"download {url}",
+        )
+    )
 
 
 def _kill_widget_process(widget_entry: dict, widget_id: str, reason: str = "") -> None:
