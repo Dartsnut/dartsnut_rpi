@@ -347,6 +347,16 @@ def restart_widget_process(
     if not os.path.isdir(widget_path):
         _request_missing_widget_download(widget_id)
         return
+    # Don't block the main thread waiting for venv setup (can take 30-50s).
+    # If venv isn't ready, skip launch; the background download completion
+    # will trigger launch once ready.
+    from core.app_env import app_venv_ready
+    if not app_venv_ready(widget_id):
+        _log.debug(
+            "widget: skipping launch widget_id=%s reason=venv_not_ready",
+            widget_id,
+        )
+        return
     if not ensure_app_venv(widget_id):
         _log.error("Failed to set up virtualenv for widget %s", widget_id)
         return
@@ -567,6 +577,25 @@ def start_page_process(page: dict) -> dict:
         widget_path = os.path.join(os.getcwd(), "apps", widget["id"])
         if not os.path.isdir(widget_path):
             _request_missing_widget_download(widget["id"], force=True)
+            widgets.append(
+                {
+                    "process": None,
+                    "shm": None,
+                    "widget": widget,
+                    "launched": False,
+                    "has_small_widget": None,
+                }
+            )
+            continue
+        # Don't block the main thread waiting for venv setup (can take 30-50s).
+        # If venv isn't ready, skip launch; the background download completion
+        # will trigger launch once ready.
+        from core.app_env import app_venv_ready
+        if not app_venv_ready(widget["id"]):
+            _log.debug(
+                "widget: skipping launch widget_id=%s reason=venv_not_ready",
+                widget["id"],
+            )
             widgets.append(
                 {
                     "process": None,
