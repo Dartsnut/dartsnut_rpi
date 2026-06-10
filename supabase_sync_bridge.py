@@ -834,6 +834,11 @@ def request_set_game_status(game_id: str, status: str) -> None:
         games = get_games_summary()
         remote_ids = _current_remote_game_ids()
         if remote_ids is not None and str(game_id) not in remote_ids:
+            _log.warning(
+                "supabase sync: request_set_game_status skipped game_id=%s status=%s reason=not_in_remote_list",
+                game_id,
+                status,
+            )
             return
         remote_games = _current_remote_games_by_id() or {}
         remote_entry = remote_games.get(str(game_id), {})
@@ -845,9 +850,20 @@ def request_set_game_status(game_id: str, status: str) -> None:
                     remote_version = str(g.get("version") or "").strip()
                 break
         game_payload["version"] = resolve_game_version_for_sync(game_id, remote_version)
+        _log.info(
+            "supabase sync: request_set_game_status game_id=%s status=%s version=%s",
+            game_id,
+            status,
+            game_payload["version"],
+        )
         publish_device_state_update({"games": [game_payload]})
-    except Exception:
-        pass
+    except Exception as e:
+        _log.error(
+            "supabase sync: request_set_game_status failed game_id=%s status=%s: %s",
+            game_id,
+            status,
+            e,
+        )
 
 
 def request_set_all_games_ready() -> None:
