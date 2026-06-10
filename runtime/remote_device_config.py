@@ -450,9 +450,14 @@ class RemoteDeviceConfigApplier:
 
         Startup settlement intentionally leaves existing ``downloading`` rows
         untouched, and the first post-restart snapshot may skip game commands.
+
+        Uses async downloads to avoid blocking the main thread.
         """
+        from game_lifecycle import download_game_async
+
         deps = self._deps
         rt = self._runtime
+
         for g in games_cfg:
             if not isinstance(g, dict):
                 continue
@@ -480,28 +485,41 @@ class RemoteDeviceConfigApplier:
                 rt.remote_downloading_game_ids.discard(game_id)
                 continue
 
-            try:
-                ok = deps.ensure_game_downloaded(game_id, expected_version)
-            except Exception:
-                _log.exception(
-                    "remote config: reconcile download exception game_id=%s",
-                    game_id,
-                )
-                ok = False
-            if ok:
+            # Start async download instead of blocking
+            def on_success(gid: str) -> None:
                 _log.info(
                     "remote config: reconcile downloading->ready game_id=%s reason=download_complete",
-                    game_id,
+                    gid,
                 )
                 try:
-                    deps.request_set_game_status(game_id, "ready")
+                    deps.request_set_game_status(gid, "ready")
                 except Exception as e:
                     _log.warning(
                         "remote config: reconcile ready publish failed game_id=%s: %s",
-                        game_id,
+                        gid,
                         e,
                     )
-                rt.remote_downloading_game_ids.discard(game_id)
+                rt.remote_downloading_game_ids.discard(gid)
+
+            def on_failure(gid: str, error: str) -> None:
+                _log.warning(
+                    "remote config: reconcile download failed game_id=%s error=%s",
+                    gid,
+                    error,
+                )
+                rt.remote_downloading_game_ids.discard(gid)
+
+            started = download_game_async(
+                game_id,
+                expected_version,
+                on_success=on_success,
+                on_failure=on_failure,
+            )
+            if not started:
+                _log.debug(
+                    "remote config: reconcile download already in progress game_id=%s",
+                    game_id,
+                )
 
     def _publish_startup_recovery_game_status(
         self,

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 from multiprocessing import shared_memory
 import subprocess
 import requests
@@ -28,6 +29,10 @@ import assets
 from PIL import Image
 
 _log = logging.getLogger(__name__)
+
+# Track in-flight game downloads (by game_id) to prevent duplicate concurrent downloads
+_game_background_download_inflight = set()
+_game_download_lock = threading.Lock()
 
 
 def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
@@ -195,6 +200,77 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         local = get_local_game_version(gameid)
         return compare_game_versions(local, expected_version) >= 0
     return os.path.isdir(game_path)
+
+
+def download_game_async(
+    game_id: str,
+    expected_version: str = "",
+    on_success=None,
+    on_failure=None,
+) -> bool:
+    """
+    Download game in background thread; return True if download was started.
+
+    Args:
+        game_id: Game identifier
+        expected_version: Target version to download
+        on_success: Callback(game_id) called after successful download
+        on_failure: Callback(game_id, error_msg) called on failure
+
+    Returns:
+        True if background download was started, False if already in progress
+    """
+    if not game_id:
+        return False
+
+    with _game_download_lock:
+        if game_id in _game_background_download_inflight:
+            _log.debug(
+                "game: background download already in progress game_id=%s (skipped duplicate)",
+                game_id,
+            )
+            return False
+        _game_background_download_inflight.add(game_id)
+
+    def worker():
+        try:
+            _log.info("game: background download started game_id=%s", game_id)
+            success = ensure_game_downloaded(game_id, expected_version)
+            if success:
+                _log.info("game: background download finished game_id=%s", game_id)
+                if on_success is not None:
+                    try:
+                        on_success(game_id)
+                    except Exception as e:
+                        _log.warning(
+                            "game: on_success callback error game_id=%s: %s",
+                            game_id,
+                            e,
+                        )
+            else:
+                _log.warning("game: background download failed game_id=%s", game_id)
+                if on_failure is not None:
+                    try:
+                        on_failure(game_id, "Download failed")
+                    except Exception as e:
+                        _log.warning(
+                            "game: on_failure callback error game_id=%s: %s",
+                            game_id,
+                            e,
+                        )
+        except Exception as e:
+            _log.error("game: background download error game_id=%s: %s", game_id, e)
+            if on_failure is not None:
+                try:
+                    on_failure(game_id, str(e))
+                except Exception:
+                    pass
+        finally:
+            with _game_download_lock:
+                _game_background_download_inflight.discard(game_id)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
 
 
 def start_game_process(gameid: str) -> dict:
