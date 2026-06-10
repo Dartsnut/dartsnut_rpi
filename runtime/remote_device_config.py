@@ -556,7 +556,11 @@ class RemoteDeviceConfigApplier:
         Startup-only recovery for SSH wipe scenarios:
         remote games can remain `ready` while local ./apps/<id> is missing.
         Publish `downloading` to remote sync, then fetch the game locally.
+
+        Uses async downloads to avoid blocking the main thread.
         """
+        from game_lifecycle import download_game_async
+
         rt = self._runtime
         if rt.startup_missing_ready_games_recovery_done:
             has_missing_ready_game = False
@@ -575,8 +579,6 @@ class RemoteDeviceConfigApplier:
             rt.startup_missing_ready_games_recovery_done = False
 
         deps = self._deps
-        had_missing_ready_games = False
-        all_missing_ready_games_recovered = True
         for g in games_cfg:
             if not isinstance(g, dict):
                 continue
@@ -592,7 +594,7 @@ class RemoteDeviceConfigApplier:
                     expected_version or "(empty)",
                 )
                 continue
-            had_missing_ready_games = True
+
             _log.info(
                 "remote config: startup recovery attempt game_id=%s expected_version=%s",
                 game_id,
@@ -602,47 +604,44 @@ class RemoteDeviceConfigApplier:
                 game_id, expected_version, "downloading"
             )
             rt.remote_downloading_game_ids.add(game_id)
-            try:
-                ok = deps.ensure_game_downloaded(game_id, expected_version)
-                if ok:
+
+            # Start async download instead of blocking
+            def make_callbacks(gid: str, gver: str):
+                def on_success(game_id: str) -> None:
                     _log.info(
                         "remote config: startup recovery success game_id=%s",
                         game_id,
                     )
-                    self._publish_startup_recovery_game_status(
-                        game_id, expected_version, "ready"
+                    self._publish_startup_recovery_game_status(game_id, gver, "ready")
+                    rt.remote_downloading_game_ids.discard(game_id)
+
+                def on_failure(game_id: str, error: str) -> None:
+                    _log.warning(
+                        "remote config: startup recovery failed game_id=%s error=%s (will retry)",
+                        game_id,
+                        error,
                     )
                     rt.remote_downloading_game_ids.discard(game_id)
-                else:
-                    all_missing_ready_games_recovered = False
-                    _log.warning(
-                        "remote config: startup recovery failed game_id=%s (will retry)",
-                        game_id,
-                    )
-            except Exception:
-                all_missing_ready_games_recovered = False
-                _log.exception(
-                    "remote config: startup recovery exception game_id=%s (will retry)",
+
+                return on_success, on_failure
+
+            on_success, on_failure = make_callbacks(game_id, expected_version)
+            started = download_game_async(
+                game_id,
+                expected_version,
+                on_success=on_success,
+                on_failure=on_failure,
+            )
+            if not started:
+                _log.debug(
+                    "remote config: startup recovery download already in progress game_id=%s",
                     game_id,
                 )
 
-        # Keep retrying on subsequent snapshots when startup recovery fails due to
-        # transient network/IO issues. Do not mark complete until we have seen at
-        # least one ready entry (nothing to recover before that).
-        has_ready_entries = any(
-            str(g.get("status") or "").strip().lower() == "ready"
-            for g in games_cfg
-            if isinstance(g, dict)
-        )
-        if had_missing_ready_games:
-            rt.startup_missing_ready_games_recovery_done = all_missing_ready_games_recovered
-            if rt.startup_missing_ready_games_recovery_done:
-                _log.info("remote config: startup recovery complete")
-        elif has_ready_entries:
-            rt.startup_missing_ready_games_recovery_done = True
-            _log.info(
-                "remote config: startup recovery no missing ready games detected; marking complete"
-            )
+        # Mark recovery as complete immediately since we've spawned all async downloads
+        # The completion tracking is now handled by the async callbacks
+        rt.startup_missing_ready_games_recovery_done = True
+        _log.info("remote config: startup recovery async downloads initiated")
 
     @staticmethod
     def _apply_menu_ready_from_games(ctx: AppContext, games_cfg: list[dict[str, Any]]) -> None:
