@@ -293,9 +293,9 @@ class SettingsState(BaseState):
             device_path = os.path.join(os.getcwd(), "device.json")
             with open(device_path, "r", encoding="utf-8") as f:
                 device_data = json.load(f)
-            device_name = device_data.get("name", "—") or "—"
+            device_name = device_data.get("name", "-") or "-"
         except Exception:
-            device_name = "—"
+            device_name = "-"
 
         item_height = SETTINGS_ITEM_HEIGHT
         text_y_offset = (item_height - 8) // 2
