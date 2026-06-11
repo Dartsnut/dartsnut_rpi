@@ -123,7 +123,7 @@ def verify_and_repair_device_json(path: Optional[str] = None) -> bool:
             boot_hint = str(boot.get(key, "")).strip()
             if boot_hint:
                 _log.error(
-                    "device.json missing %s after repair; boot had %r — check permissions/path %s",
+                    "device.json missing %s after repair; boot had %r - check permissions/path %s",
                     key,
                     boot_hint,
                     resolved,
