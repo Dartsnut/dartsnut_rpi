@@ -305,9 +305,10 @@ class SettingsState(BaseState):
             y = idx * item_height
             ty = y + text_y_offset
             focused = idx == ctx.setting_select_index
+            text_color = (0, 0, 0) if focused else (255, 255, 255)
             if focused:
                 draw.rectangle(
-                    (0, y, 127, y + item_height - 1), fill=(40, 40, 40)
+                    (0, y, 127, y + item_height - 1), fill=(255, 255, 255)
                 )
             if item["name"] == "IP":
                 color = _settings_wifi_icon_color(ctx)
@@ -324,13 +325,13 @@ class SettingsState(BaseState):
                 label_x = 2
             if item["name"] == "Reset device":
                 # font8 doesn't support space; draw two words with a gap
-                draw.text((label_x, ty), "RESET", fill="white", font=font8)
+                draw.text((label_x, ty), "RESET", fill=text_color, font=font8)
                 reset_w = 5 * 6  # 5 chars @ 6px
                 gap = 4
-                draw.text((label_x + reset_w + gap, ty), "DEVICE", fill="white", font=font8)
+                draw.text((label_x + reset_w + gap, ty), "DEVICE", fill=text_color, font=font8)
             else:
                 draw.text(
-                    (label_x, ty), item["name"].upper(), fill="white", font=font8
+                    (label_x, ty), item["name"].upper(), fill=text_color, font=font8
                 )
             if item["name"] == "Name":
                 font_6x8 = ctx.assets.font_6x8
@@ -346,7 +347,7 @@ class SettingsState(BaseState):
                 draw.text(
                     (value_x, ty),
                     display_name,
-                    fill="white",
+                    fill=text_color,
                     font=font_6x8,
                 )
             elif item["name"] == "Brightness":
@@ -367,13 +368,7 @@ class SettingsState(BaseState):
                     if lit:
                         draw.rectangle(
                             (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill="white",
-                        )
-                    else:
-                        draw.rectangle(
-                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=None,
-                            outline="white",
+                            fill=(255, 101, 140),
                         )
             elif item["name"] == "Volume":
                 volume_level = _volume_raw_to_level(volume)
@@ -391,13 +386,7 @@ class SettingsState(BaseState):
                     if lit:
                         draw.rectangle(
                             (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill="white",
-                        )
-                    else:
-                        draw.rectangle(
-                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=None,
-                            outline="white",
+                            fill=(255, 101, 140),
                         )
             elif item["name"] == "IP":
                 text_width = len(ip_address) * 6
@@ -405,7 +394,7 @@ class SettingsState(BaseState):
                 draw.text(
                     (value_x, ty),
                     ip_address,
-                    fill="white",
+                    fill=text_color,
                     font=font8,
                 )
             elif item["name"] == "Version":
@@ -414,7 +403,7 @@ class SettingsState(BaseState):
                 draw.text(
                     (value_x, ty),
                     version,
-                    fill="white",
+                    fill=text_color,
                     font=font8,
                 )
             elif item["name"] == "Reset device":
