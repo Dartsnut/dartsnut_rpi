@@ -368,7 +368,7 @@ class SettingsState(BaseState):
                     if lit:
                         draw.rectangle(
                             (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=text_color,
+                            fill=(255, 255, 255),
                         )
                     else:
                         draw.rectangle(
@@ -392,7 +392,7 @@ class SettingsState(BaseState):
                     if lit:
                         draw.rectangle(
                             (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=text_color,
+                            fill=(255, 255, 255),
                         )
                     else:
                         draw.rectangle(
