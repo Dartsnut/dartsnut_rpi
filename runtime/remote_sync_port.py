@@ -57,6 +57,8 @@ class RemoteSyncPort(Protocol):
 
     def is_bridge_active(self) -> bool: ...
 
+    def is_bridge_stale(self) -> bool: ...
+
 
 class NoOpRemoteSync:
     """Used when the Supabase bridge module is missing or intentionally disabled."""
@@ -100,6 +102,9 @@ class NoOpRemoteSync:
         return None
 
     def is_bridge_active(self) -> bool:
+        return False
+
+    def is_bridge_stale(self) -> bool:
         return False
 
 
@@ -150,6 +155,9 @@ class SupabaseRemoteSync:
 
     def is_bridge_active(self) -> bool:
         return _ssb.is_supabase_bridge_active()
+
+    def is_bridge_stale(self) -> bool:
+        return _ssb.is_supabase_bridge_stale()
 
 
 _sync_impl: Optional[RemoteSyncPort] = None

@@ -458,3 +458,89 @@ def test_build_initial_state_strips_oversized_pages_from_conf(tmp_path, monkeypa
     assert {p["uuid"] for p in on_disk["pages"]} == uuids
     assert state["pages_updated_at"] == on_disk["pages_updated_at"]
     assert state["pages_updated_at"] != ""
+
+
+# Staleness watchdog: detect a bridge that is alive + flagged connected but silent.
+class _FakeProc:
+    def __init__(self, alive=True):
+        self._alive = alive
+
+    def poll(self):
+        return None if self._alive else 0
+
+
+def test_bridge_not_stale_when_no_process(monkeypatch):
+    with ssb._bridge_lock:
+        ssb._bridge_proc = None
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    assert ssb.is_supabase_bridge_stale() is False
+
+
+def test_bridge_not_stale_with_recent_activity(monkeypatch):
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    with ssb._bridge_lock:
+        ssb._bridge_proc = _FakeProc(alive=True)
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = time.monotonic()
+    try:
+        assert ssb.is_supabase_bridge_stale() is False
+    finally:
+        with ssb._bridge_lock:
+            ssb._bridge_proc = None
+
+
+def test_bridge_stale_when_silent_past_window(monkeypatch):
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    with ssb._bridge_lock:
+        ssb._bridge_proc = _FakeProc(alive=True)
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = (
+            time.monotonic() - ssb._BRIDGE_STALE_SECONDS - 10.0
+        )
+    try:
+        assert ssb.is_supabase_bridge_stale() is True
+    finally:
+        with ssb._bridge_lock:
+            ssb._bridge_proc = None
+
+
+def test_bridge_stale_when_process_exited(monkeypatch):
+    # A dead process while the client still considers the bridge active must be
+    # recycled: nothing else periodically respawns it (the writer thread can force
+    # exit on a stuck write).
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    with ssb._bridge_lock:
+        ssb._bridge_proc = _FakeProc(alive=False)
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = time.monotonic()
+    try:
+        assert ssb.is_supabase_bridge_stale() is True
+    finally:
+        with ssb._bridge_lock:
+            ssb._bridge_proc = None
+
+
+def test_record_bridge_activity_updates_clock():
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = None
+    ssb._record_bridge_activity()
+    assert ssb._seconds_since_bridge_activity() is not None
+    assert ssb._seconds_since_bridge_activity() < 5.0
+
+
+def test_restart_supabase_sync_recycles_stale_bridge(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    monkeypatch.setattr(ssb, "is_supabase_connected", lambda: True)
+    monkeypatch.setattr(ssb, "is_supabase_bridge_stale", lambda: True)
+    monkeypatch.setattr(ssb, "stop_supabase_sync", lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        ssb,
+        "ensure_supabase_sync_running",
+        lambda *_args, **_kwargs: calls.append("ensure"),
+    )
+
+    ssb.restart_supabase_sync({}, lambda: None, lambda _cfg: None)
+
+    # Stale bridge must be torn down and relaunched even though it reports connected.
+    assert calls == ["stop", "ensure"]
