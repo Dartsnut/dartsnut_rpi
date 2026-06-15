@@ -368,13 +368,7 @@ class SettingsState(BaseState):
                     if lit:
                         draw.rectangle(
                             (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=(255, 192, 203),
-                        )
-                    else:
-                        draw.rectangle(
-                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=None,
-                            outline=text_color,
+                            fill=(255, 101, 140),
                         )
             elif item["name"] == "Volume":
                 volume_level = _volume_raw_to_level(volume)
@@ -392,13 +386,7 @@ class SettingsState(BaseState):
                     if lit:
                         draw.rectangle(
                             (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=(255, 192, 203),
-                        )
-                    else:
-                        draw.rectangle(
-                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=None,
-                            outline=text_color,
+                            fill=(255, 101, 140),
                         )
             elif item["name"] == "IP":
                 text_width = len(ip_address) * 6
