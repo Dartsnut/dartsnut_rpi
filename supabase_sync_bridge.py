@@ -29,6 +29,12 @@ _bridge_proc: Optional[subprocess.Popen] = None
 _bridge_lock = threading.Lock()
 _connected = False
 _connected_lock = threading.Lock()
+# Monotonic timestamp of the last frame received from the bridge over the unix
+# socket (any kind: remote_row, bridge_health, ack, ...). Used by the watchdog to
+# detect a bridge that looks "connected" but has gone silent (the realtime-wedge
+# failure mode), since the bridge emits health updates at least every PROBE_INTERVAL.
+_last_bridge_activity_at: Optional[float] = None
+_bridge_activity_lock = threading.Lock()
 _last_rest_latency_ms: Optional[int] = None
 _last_rest_probe_ok = False
 _rest_probe_lock = threading.Lock()
@@ -88,6 +94,48 @@ def _set_connected(connected: bool) -> None:
 def is_supabase_connected() -> bool:
     with _connected_lock:
         return _connected
+
+
+def _record_bridge_activity() -> None:
+    """Mark that a frame was just received from the bridge over the unix socket."""
+    global _last_bridge_activity_at
+    with _bridge_activity_lock:
+        _last_bridge_activity_at = time.monotonic()
+
+
+def _seconds_since_bridge_activity() -> Optional[float]:
+    with _bridge_activity_lock:
+        last = _last_bridge_activity_at
+    if last is None:
+        return None
+    return max(0.0, time.monotonic() - last)
+
+
+# The bridge emits a bridge_health frame at least every PROBE_INTERVAL_SECS (60s).
+# If we've seen nothing for well over that window while the bridge process is still
+# alive, the unix socket / realtime path is wedged: treat it as stale and recycle.
+_BRIDGE_STALE_SECONDS = 150.0
+
+
+def is_supabase_bridge_stale() -> bool:
+    """True when the active bridge needs recycling: process died, or it is alive but
+    has gone silent past the health window (the realtime-wedge failure mode)."""
+    if not is_supabase_bridge_active():
+        return False
+    with _bridge_lock:
+        proc = _bridge_proc
+    if proc is None:
+        # Launch in progress (the _launch thread hasn't set _bridge_proc yet) or a
+        # stop is mid-flight: let it settle rather than racing a restart.
+        return False
+    if proc.poll() is not None:
+        # Process exited (e.g. the writer thread forced exit on a stuck write) while
+        # the client still considers the bridge active -> nothing else respawns it.
+        return True
+    idle = _seconds_since_bridge_activity()
+    if idle is None:
+        return False
+    return idle > _BRIDGE_STALE_SECONDS
 
 
 def _update_rest_probe_cache(payload: Dict[str, Any]) -> None:
@@ -668,6 +716,9 @@ class _SyncClient:
                                 msg = json.loads(line.decode("utf-8"))
                             except Exception:
                                 continue
+                            # Any well-formed frame proves the bridge -> Python pipe
+                            # is alive; feeds the staleness watchdog.
+                            _record_bridge_activity()
                             kind = msg.get("kind")
                             payload = msg.get("payload")
                             if kind == "ready":
@@ -1017,7 +1068,7 @@ def ensure_supabase_sync_running(
         _log.info("supabase sync: unix socket server started path=%s", socket_path)
 
         def _launch() -> None:
-            global _bridge_proc
+            global _bridge_proc, _last_bridge_activity_at
             try:
                 proc = subprocess.Popen(
                     [executable_path, f"--socket-path={socket_path}"],
@@ -1025,6 +1076,11 @@ def ensure_supabase_sync_running(
                     stderr=None,
                     env=launch_env,
                 )
+                # Seed the liveness clock so a freshly launched bridge that never
+                # produces a frame still becomes eligible for the staleness watchdog
+                # after the normal window (instead of looking "never active").
+                with _bridge_activity_lock:
+                    _last_bridge_activity_at = time.monotonic()
                 with _bridge_lock:
                     _bridge_proc = proc
             except Exception as e:
@@ -1039,9 +1095,16 @@ def restart_supabase_sync(
     on_config_updated: Callable[[Dict[str, Any]], None],
     on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None,
 ) -> None:
-    # Avoid churn when callers request a restart while the bridge is already
-    # active and healthy (common during startup connectivity polling).
-    if is_supabase_bridge_active() and is_supabase_connected():
+    # Avoid churn when callers request a restart while the bridge is already active
+    # and healthy (common during startup connectivity polling). A stale bridge --
+    # alive and flagged connected but silent past the health window -- must NOT be
+    # treated as healthy: that is exactly the realtime-wedge case the watchdog exists
+    # to recover, so fall through to a hard restart.
+    if (
+        is_supabase_bridge_active()
+        and is_supabase_connected()
+        and not is_supabase_bridge_stale()
+    ):
         return
     stop_supabase_sync()
     time.sleep(0.05)
@@ -1051,7 +1114,7 @@ def restart_supabase_sync(
 
 
 def stop_supabase_sync() -> None:
-    global _client, _bridge_proc, _remote_game_ids
+    global _client, _bridge_proc, _remote_game_ids, _last_bridge_activity_at
     with _bridge_lock:
         proc = _bridge_proc
         _bridge_proc = None
@@ -1063,4 +1126,6 @@ def stop_supabase_sync() -> None:
     _client = None
     with _remote_game_ids_lock:
         _remote_game_ids = None
+    with _bridge_activity_lock:
+        _last_bridge_activity_at = None
     _set_connected(False)

@@ -753,6 +753,26 @@ def check_connection_loop():
                     _log.warning(
                         "Error restarting remote sync after connectivity established: %s", e
                     )
+
+            # Recover a wedged bridge: alive and flagged connected but silent past the
+            # health window (the realtime CLOSE-WAIT failure mode). restart_sync only
+            # acts when the bridge is genuinely stale, so this is a no-op when healthy.
+            if _app_ctx.internet_connected:
+                try:
+                    if get_remote_sync().is_bridge_stale():
+                        _log.warning(
+                            "remote sync: bridge stale (silent past health window); restarting"
+                        )
+                        di = get_device_info()
+                        get_remote_sync().restart_sync(
+                            di or {},
+                            reload_config,
+                            _apply_remote_config,
+                            _on_sync_game_ready,
+                        )
+                        request_network_state_refresh()
+                except Exception as e:
+                    _log.warning("Error checking/restarting stale remote sync: %s", e)
         except Exception as e:
             _log.warning("Error checking connection: %s", e)
             _app_ctx.wifi_connected = False

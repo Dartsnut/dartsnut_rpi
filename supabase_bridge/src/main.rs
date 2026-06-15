@@ -60,6 +60,14 @@ struct ProbeState {
 
 const PROBE_INTERVAL_SECS: u64 = 60;
 
+/// Max time a single write to the Python unix socket may block before the writer
+/// thread gives up and exits for respawn. Bounds the head-of-line stall.
+const WRITE_TIMEOUT_SECS: u64 = 15;
+
+/// Bounded outbound queue depth. Snapshots are latest-wins on the Python side, so a
+/// small buffer is enough; when full, `send_msg` drops rather than blocks the reader.
+const OUT_CHANNEL_CAPACITY: usize = 256;
+
 fn record_outbound_success(state: &mut ProbeState, latency_ms: u64) {
     state.snapshot = RestProbeSnapshot {
         latency_ms: Some(latency_ms),
@@ -183,13 +191,28 @@ fn resolve_device_id() -> Result<String> {
     Err(anyhow::anyhow!("no BLE adapter MAC found"))
 }
 
-fn send_msg(writer: &Arc<Mutex<UnixStream>>, kind: &str, payload: Value) -> Result<()> {
+/// Outbound messages to the Python side are funneled through a bounded channel and
+/// written by a single dedicated thread (see `main`). This decouples the realtime
+/// reader from the blocking unix-socket write: if Python stalls and the pipe fills,
+/// the reader keeps draining the websocket (so it still observes disconnects and
+/// reconnects) instead of blocking inside `write_all` and wedging the connection.
+type OutSender = mpsc::SyncSender<String>;
+
+fn send_msg(out: &OutSender, kind: &str, payload: Value) -> Result<()> {
     let msg = OutMessage { kind, payload };
     let line = serde_json::to_string(&msg)? + "\n";
-    let mut lock = writer.lock().expect("socket writer lock poisoned");
-    lock.write_all(line.as_bytes())?;
-    lock.flush()?;
-    Ok(())
+    match out.try_send(line) {
+        Ok(()) => Ok(()),
+        // Channel full: the writer thread can't keep up because Python isn't draining.
+        // Drop this message rather than block; the reader must stay responsive. The
+        // writer thread's own write timeout is what ultimately forces a respawn.
+        Err(mpsc::TrySendError::Full(_)) => {
+            Err(anyhow::anyhow!("unix writer channel full; dropped {kind} message"))
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(anyhow::anyhow!("unix writer channel disconnected"))
+        }
+    }
 }
 
 const SOURCE_SUPABASE_BRIDGE: &str = "supabase_bridge";
@@ -386,7 +409,7 @@ fn run_probe_tick(
 }
 
 fn send_bridge_health(
-    writer: &Arc<Mutex<UnixStream>>,
+    writer: &OutSender,
     state: &str,
     probe: &RestProbeSnapshot,
 ) {
@@ -412,7 +435,7 @@ fn remote_device_exists(client: &Client, cfg: &SupabaseConfig) -> Result<bool> {
 }
 
 fn run_rest_probe_loop(
-    writer: Arc<Mutex<UnixStream>>,
+    writer: OutSender,
     cfg: SupabaseConfig,
     wake_rx: mpsc::Receiver<()>,
     realtime_connected: Arc<AtomicBool>,
@@ -662,7 +685,7 @@ fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
 }
 
 fn run_realtime_loop(
-    writer: Arc<Mutex<UnixStream>>,
+    writer: OutSender,
     cfg: SupabaseConfig,
     probe_wake_tx: mpsc::Sender<()>,
     realtime_connected: Arc<AtomicBool>,
@@ -743,11 +766,18 @@ fn run_realtime_loop(
         signal_probe();
         let mut heartbeat_ref: u64 = 2;
         let mut ticks_since_heartbeat = 0u64;
+        // Heartbeats sent since the last inbound message. Any frame from the server
+        // (postgres_changes, phx_reply, etc.) proves the connection is alive and
+        // resets this. If two consecutive heartbeats go unanswered (~60s of total
+        // silence) the socket is half-open: force a reconnect instead of trusting it.
+        let mut heartbeats_unanswered = 0u64;
 
         loop {
             match socket.read() {
                 Ok(msg) => {
                     if let Message::Text(text) = msg {
+                        // Any inbound text frame is proof of liveness.
+                        heartbeats_unanswered = 0;
                         let parsed: Value = match serde_json::from_str(&text) {
                             Ok(v) => v,
                             Err(_) => continue,
@@ -789,6 +819,17 @@ fn run_realtime_loop(
                             ticks_since_heartbeat += 1;
                             if ticks_since_heartbeat >= 3 {
                                 ticks_since_heartbeat = 0;
+                                // A prior heartbeat is still unanswered after a full
+                                // interval: the connection is half-open. Drop it.
+                                if heartbeats_unanswered >= 2 {
+                                    eprintln!(
+                                        "bridge: realtime heartbeat unanswered; reconnecting"
+                                    );
+                                    realtime_connected.store(false, Ordering::Relaxed);
+                                    emit_health("disconnected");
+                                    signal_probe();
+                                    break;
+                                }
                                 let hb_payload = json!({
                                     "topic": "phoenix",
                                     "event": "heartbeat",
@@ -805,6 +846,7 @@ fn run_realtime_loop(
                                     signal_probe();
                                     break;
                                 }
+                                heartbeats_unanswered += 1;
                             }
                             continue;
                         }
@@ -864,8 +906,34 @@ fn main() -> Result<()> {
     stream
         .set_read_timeout(Some(Duration::from_secs(1)))
         .context("failed to set read timeout")?;
-    let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    // Bound how long a single write to Python may block. Without this a stalled
+    // consumer would let `write_all` block forever, freezing whichever thread holds
+    // the writer and (previously) wedging the realtime reader so it never reconnected.
+    stream
+        .set_write_timeout(Some(Duration::from_secs(WRITE_TIMEOUT_SECS)))
+        .context("failed to set write timeout")?;
+    let write_stream = stream.try_clone()?;
     let reader = BufReader::new(stream);
+
+    // All outbound messages funnel through this bounded channel and are written by a
+    // single dedicated thread. Producers (`send_msg`) never block on the socket: if
+    // the channel fills (Python not draining) they drop the message and keep going.
+    let (out_tx, out_rx) = mpsc::sync_channel::<String>(OUT_CHANNEL_CAPACITY);
+    thread::spawn(move || {
+        let mut write_stream = write_stream;
+        for line in out_rx {
+            if write_stream.write_all(line.as_bytes()).is_err()
+                || write_stream.flush().is_err()
+            {
+                // Python side is gone or unresponsive past the write timeout. The
+                // bridge can't recover this unix socket on its own (Python owns the
+                // listener); exit so the supervisor respawns us with a fresh pipe.
+                eprintln!("bridge: unix writer failed; exiting for respawn");
+                std::process::exit(1);
+            }
+        }
+    });
+    let writer = out_tx;
 
     send_msg(&writer, "ready", json!({}))?;
 
@@ -875,7 +943,7 @@ fn main() -> Result<()> {
     let probe_in_flight = Arc::new(AtomicBool::new(false));
     let (probe_wake_tx, probe_wake_rx) = mpsc::channel();
 
-    let writer_probe = Arc::clone(&writer);
+    let writer_probe = writer.clone();
     let cfg_probe = cfg.clone();
     let probe_state_probe = Arc::clone(&probe_state);
     let rpc_apply_lock_probe = Arc::clone(&rpc_apply_lock);
@@ -894,7 +962,7 @@ fn main() -> Result<()> {
     });
     let _ = probe_wake_tx.send(());
 
-    let writer_clone = Arc::clone(&writer);
+    let writer_clone = writer.clone();
     let cfg_clone = cfg.clone();
     let probe_state_rt = Arc::clone(&probe_state);
     let probe_wake_tx_rt = probe_wake_tx.clone();
