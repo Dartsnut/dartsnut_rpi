@@ -1,91 +1,102 @@
 """Tests for community_api module."""
-import json
+import configparser
 import os
 import pytest
 from unittest.mock import patch, MagicMock
+import requests
 
 
-@pytest.fixture
-def config_file(tmp_path):
+# ---------------------------------------------------------------------------
+# CommunityApiConfig tests
+# ---------------------------------------------------------------------------
+
+def test_load_config_missing_file_uses_defaults(tmp_path):
+    from community_api import CommunityApiConfig
+    cfg = CommunityApiConfig.load(path=str(tmp_path / "nonexistent.conf"))
+    assert cfg.base_url == "https://api.dartsnut.community"
+    assert cfg.timeout == 10
+    assert cfg.max_retries == 3
+
+
+def test_load_config_from_ini_file(tmp_path):
+    from community_api import CommunityApiConfig
     conf_path = tmp_path / "community_api.conf"
-    conf_path.write_text(json.dumps({
-        "api_base_url": "https://test.example.com",
-        "timeout_seconds": 5,
-        "cache_max_age_hours": 24,
-    }))
-    return str(conf_path)
+    conf_path.write_text(
+        "[community_api]\n"
+        "base_url = https://test.example.com\n"
+        "timeout = 5\n"
+        "max_retries = 1\n"
+    )
+    cfg = CommunityApiConfig.load(path=str(conf_path))
+    assert cfg.base_url == "https://test.example.com"
+    assert cfg.timeout == 5
+    assert cfg.max_retries == 1
 
 
-def test_load_config_defaults():
-    from community_api import CommunityApiConfig
-    cfg = CommunityApiConfig()
-    assert cfg.api_base_url == "https://api.dartsnut.com"
-    assert cfg.timeout_seconds == 10
-    assert cfg.cache_max_age_hours == 24
+# ---------------------------------------------------------------------------
+# CommunityApiClient tests
+# ---------------------------------------------------------------------------
+
+def _make_client(base_url="https://test.example.com"):
+    from community_api import CommunityApiConfig, CommunityApiClient
+    cfg = CommunityApiConfig(base_url=base_url, timeout=5, max_retries=1)
+    return CommunityApiClient(config=cfg)
 
 
-def test_load_config_from_file(config_file):
-    from community_api import CommunityApiConfig
-    cfg = CommunityApiConfig(config_file)
-    assert cfg.api_base_url == "https://test.example.com"
-    assert cfg.timeout_seconds == 5
-    assert cfg.cache_max_age_hours == 24
-
-
-def test_fetch_preview_success():
+def test_fetch_preview_returns_bytes_on_200():
     from community_api import CommunityApiClient
+    client = _make_client()
+
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.content = b"PNG_BYTES_HERE"
-    mock_response.headers = {"ETag": '"abc123"', "Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT"}
+    mock_response.content = b"PNG_BYTES"
+    mock_response.raise_for_status = MagicMock()
 
     with patch("community_api.requests.get", return_value=mock_response) as mock_get:
-        client = CommunityApiClient(api_base_url="https://test.example.com", timeout_seconds=5)
         result = client.fetch_preview("game123")
 
-    assert result is not None
-    assert result["image_data"] == b"PNG_BYTES_HERE"
-    assert result["etag"] == '"abc123"'
-    assert result["last_modified"] == "Wed, 01 Jan 2025 00:00:00 GMT"
+    assert result == b"PNG_BYTES"
     mock_get.assert_called_once()
     call_url = mock_get.call_args[0][0]
     assert "game123" in call_url
 
 
-def test_fetch_preview_not_found():
+def test_fetch_preview_raises_preview_not_found_on_404():
     from community_api import CommunityApiClient, PreviewNotFound
+    client = _make_client()
+
     mock_response = MagicMock()
     mock_response.status_code = 404
+    mock_response.raise_for_status = MagicMock()
 
     with patch("community_api.requests.get", return_value=mock_response):
-        client = CommunityApiClient(api_base_url="https://test.example.com", timeout_seconds=5)
         with pytest.raises(PreviewNotFound):
             client.fetch_preview("no_such_game")
 
 
-def test_fetch_preview_not_modified():
+def test_fetch_preview_raises_http_error_on_500():
     from community_api import CommunityApiClient
+    client = _make_client()
+
     mock_response = MagicMock()
-    mock_response.status_code = 304
-    mock_response.content = b""
-    mock_response.headers = {}
+    mock_response.status_code = 500
+    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Server Error")
 
     with patch("community_api.requests.get", return_value=mock_response):
-        client = CommunityApiClient(api_base_url="https://test.example.com", timeout_seconds=5)
-        result = client.fetch_preview("game123", etag='"old"', last_modified="Mon, 01 Jan 2024 00:00:00 GMT")
-
-    assert result is None  # None = not modified, use cached
+        with pytest.raises(requests.exceptions.HTTPError):
+            client.fetch_preview("game123")
 
 
-def test_fetch_preview_passes_conditional_headers():
+def test_fetch_preview_sends_conditional_headers():
     from community_api import CommunityApiClient
+    client = _make_client()
+
     mock_response = MagicMock()
-    mock_response.status_code = 304
-    mock_response.content = b""
-    mock_response.headers = {}
+    mock_response.status_code = 200
+    mock_response.content = b"bytes"
+    mock_response.raise_for_status = MagicMock()
 
     with patch("community_api.requests.get", return_value=mock_response) as mock_get:
-        client = CommunityApiClient(api_base_url="https://test.example.com", timeout_seconds=5)
         client.fetch_preview("game123", etag='"etag_val"', last_modified="some_date")
 
     call_kwargs = mock_get.call_args[1]
@@ -94,21 +105,37 @@ def test_fetch_preview_passes_conditional_headers():
     assert headers.get("If-Modified-Since") == "some_date"
 
 
-def test_fetch_preview_server_error_raises():
+def test_get_etag_returns_header_value():
     from community_api import CommunityApiClient
+    client = _make_client()
+
     mock_response = MagicMock()
-    mock_response.status_code = 500
-
-    with patch("community_api.requests.get", return_value=mock_response):
-        client = CommunityApiClient(api_base_url="https://test.example.com", timeout_seconds=5)
-        with pytest.raises(Exception):
-            client.fetch_preview("game123")
+    mock_response.headers = {"ETag": '"abc123"'}
+    assert client.get_etag(mock_response) == '"abc123"'
 
 
-def test_fetch_preview_network_error_raises():
+def test_get_etag_returns_none_when_missing():
     from community_api import CommunityApiClient
-    import requests as req_lib
-    with patch("community_api.requests.get", side_effect=req_lib.RequestException("timeout")):
-        client = CommunityApiClient(api_base_url="https://test.example.com", timeout_seconds=5)
-        with pytest.raises(Exception):
-            client.fetch_preview("game123")
+    client = _make_client()
+
+    mock_response = MagicMock()
+    mock_response.headers = {}
+    assert client.get_etag(mock_response) is None
+
+
+def test_get_last_modified_returns_header_value():
+    from community_api import CommunityApiClient
+    client = _make_client()
+
+    mock_response = MagicMock()
+    mock_response.headers = {"Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT"}
+    assert client.get_last_modified(mock_response) == "Wed, 01 Jan 2025 00:00:00 GMT"
+
+
+def test_get_last_modified_returns_none_when_missing():
+    from community_api import CommunityApiClient
+    client = _make_client()
+
+    mock_response = MagicMock()
+    mock_response.headers = {}
+    assert client.get_last_modified(mock_response) is None

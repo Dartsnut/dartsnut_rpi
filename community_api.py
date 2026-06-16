@@ -1,17 +1,14 @@
 """HTTP client for fetching game preview images from the community API."""
-import json
+import configparser
 import logging
 import os
-from typing import Dict, Optional
+from typing import Optional
 
 import requests
 
 _log = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dartsnut/community_api.conf")
-_DEFAULT_API_BASE_URL = "https://api.dartsnut.com"
-_DEFAULT_TIMEOUT_SECONDS = 10
-_DEFAULT_CACHE_MAX_AGE_HOURS = 24
 
 
 class PreviewNotFound(Exception):
@@ -19,57 +16,61 @@ class PreviewNotFound(Exception):
 
 
 class CommunityApiConfig:
-    """Loads configuration from ~/.dartsnut/community_api.conf with sensible defaults."""
+    """Loads configuration from ~/.dartsnut/community_api.conf (INI format) with sensible defaults."""
 
-    def __init__(self, config_path: str = _DEFAULT_CONFIG_PATH):
-        self.api_base_url = _DEFAULT_API_BASE_URL
-        self.timeout_seconds = _DEFAULT_TIMEOUT_SECONDS
-        self.cache_max_age_hours = _DEFAULT_CACHE_MAX_AGE_HOURS
-        self._load(config_path)
+    def __init__(self, base_url: str = "https://api.dartsnut.community", timeout: int = 10, max_retries: int = 3):
+        self.base_url = base_url
+        self.timeout = timeout
+        self.max_retries = max_retries
 
-    def _load(self, config_path: str) -> None:
+    @classmethod
+    def load(cls, path: str = None) -> "CommunityApiConfig":
+        """Load config from INI file. Uses defaults if file is missing."""
+        config_path = path or _DEFAULT_CONFIG_PATH
+        instance = cls()
         if not os.path.isfile(config_path):
-            return
+            return instance
         try:
-            with open(config_path) as f:
-                data = json.load(f)
-            self.api_base_url = data.get("api_base_url", self.api_base_url)
-            self.timeout_seconds = data.get("timeout_seconds", self.timeout_seconds)
-            self.cache_max_age_hours = data.get("cache_max_age_hours", self.cache_max_age_hours)
+            parser = configparser.ConfigParser()
+            parser.read(config_path)
+            section = "community_api"
+            if parser.has_section(section):
+                if parser.has_option(section, "base_url"):
+                    instance.base_url = parser.get(section, "base_url")
+                if parser.has_option(section, "timeout"):
+                    instance.timeout = parser.getint(section, "timeout")
+                if parser.has_option(section, "max_retries"):
+                    instance.max_retries = parser.getint(section, "max_retries")
         except Exception as e:
             _log.warning("[CommunityAPI] Failed to load config from %s: %s", config_path, e)
+        return instance
 
 
 class CommunityApiClient:
     """Fetches preview images from the dartsnut community API."""
 
-    def __init__(
-        self,
-        api_base_url: str = _DEFAULT_API_BASE_URL,
-        timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
-    ):
-        self._base_url = api_base_url.rstrip("/")
-        self._timeout = timeout_seconds
+    def __init__(self, config: CommunityApiConfig = None):
+        if config is None:
+            config = CommunityApiConfig.load()
+        self._config = config
 
     def fetch_preview(
         self,
         game_id: str,
         etag: Optional[str] = None,
         last_modified: Optional[str] = None,
-    ) -> Optional[Dict]:
+    ) -> bytes:
         """
         Fetch preview image for game_id from community API.
 
         Returns:
-            dict with keys: image_data (bytes), etag (str), last_modified (str)
-            None if server returns 304 Not Modified (use cached version)
+            Raw image bytes on 200.
 
         Raises:
             PreviewNotFound: if server returns 404
-            requests.RequestException: on network errors
-            Exception: on other HTTP errors (5xx, etc.)
+            requests.exceptions.HTTPError: on 4xx/5xx errors
         """
-        url = f"{self._base_url}/games/{game_id}/preview"
+        url = f"{self._config.base_url.rstrip('/')}/games/{game_id}/preview"
         headers = {}
         if etag:
             headers["If-None-Match"] = etag
@@ -77,22 +78,19 @@ class CommunityApiClient:
             headers["If-Modified-Since"] = last_modified
 
         _log.debug("[CommunityAPI] Fetching preview for game %s from %s", game_id, url)
-        response = requests.get(url, headers=headers, timeout=self._timeout)
-
-        if response.status_code == 304:
-            _log.debug("[CommunityAPI] Cache still valid for game %s (304)", game_id)
-            return None
+        response = requests.get(url, headers=headers, timeout=self._config.timeout)
 
         if response.status_code == 404:
             raise PreviewNotFound(f"No preview found for game {game_id!r}")
 
-        if response.status_code != 200:
-            raise Exception(
-                f"Community API returned {response.status_code} for game {game_id!r}"
-            )
+        response.raise_for_status()
 
-        return {
-            "image_data": response.content,
-            "etag": response.headers.get("ETag", ""),
-            "last_modified": response.headers.get("Last-Modified", ""),
-        }
+        return response.content
+
+    def get_etag(self, response) -> Optional[str]:
+        """Return the ETag header value from a response, or None."""
+        return response.headers.get("ETag")
+
+    def get_last_modified(self, response) -> Optional[str]:
+        """Return the Last-Modified header value from a response, or None."""
+        return response.headers.get("Last-Modified")
