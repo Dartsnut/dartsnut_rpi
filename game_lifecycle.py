@@ -71,6 +71,32 @@ def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
     return images
 
 
+def generate_placeholder_preview(game_name: str, status_hint: str) -> list:
+    """
+    Generate a 128x160 black placeholder frame with game name and status text.
+
+    Returns a single-frame list matching the format of _decode_game_preview_frames().
+    """
+    from PIL import ImageDraw, ImageFont
+    canvas = Image.new("RGB", (128, 160), (0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    # Try to load a small font; fall back to PIL default if unavailable
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except Exception:
+        font = ImageFont.load_default()
+    # Truncate long names to fit 128px width
+    name = game_name[:18] if len(game_name) > 18 else game_name
+    draw.text((4, 60), name, fill=(200, 200, 200), font=font)
+    draw.text((4, 80), status_hint, fill=(120, 120, 120), font=font)
+    return [bytearray(canvas.tobytes())]
+
+
+def _is_blank_frame(frame: bytearray) -> bool:
+    """Return True if the frame contains only black pixels (all zeros)."""
+    return all(b == 0 for b in frame)
+
+
 def get_local_game_version(gameid: str) -> str:
     """Read local game version from ./apps/<gameid>/conf.json."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
