@@ -29,6 +29,43 @@ from PIL import Image
 
 _log = logging.getLogger(__name__)
 
+from preview_cache import PreviewCache
+from validation_worker import ValidationWorker, FETCH_MISSING, VALIDATE_EXPIRED
+
+_preview_cache: "PreviewCache | None" = None
+_validation_worker: "ValidationWorker | None" = None
+_worker_init_lock = threading.Lock()
+
+
+def _ensure_worker_started() -> None:
+    global _preview_cache, _validation_worker
+    with _worker_init_lock:
+        if _preview_cache is None:
+            _preview_cache = PreviewCache()
+        if _validation_worker is None:
+            _validation_worker = ValidationWorker(max_workers=2)
+            _validation_worker.start()
+
+
+def shutdown_preview_worker() -> None:
+    if _validation_worker is not None:
+        _validation_worker.shutdown(wait=True, timeout=5)
+
+
+_game_list_cache: list = []
+_game_list_cache_lock = threading.Lock()
+
+
+def _on_preview_updated(game_id: str, preview_data: list) -> None:
+    with _game_list_cache_lock:
+        for game in _game_list_cache:
+            if game.get("id") == game_id or game.get("community_id") == game_id:
+                game["preview"] = preview_data
+                _log.info("[Preview] Updated in-memory preview for game %s", game_id)
+                return
+    _log.debug("[Preview] Received preview update for %s but game not in cache", game_id)
+
+
 # Track in-flight game downloads (by game_id) to prevent duplicate concurrent downloads
 _game_background_download_inflight = set()
 _game_download_lock = threading.Lock()
@@ -499,6 +536,7 @@ def load_game_list() -> list:
             if conf.get("type") != "game":
                 continue
             # Ensure core fields exist for downstream consumers.
+            conf_has_explicit_id = "id" in conf
             conf_id = conf.get("id", name)
             conf_version = conf.get("version", "")
             conf["id"] = conf_id
@@ -507,10 +545,34 @@ def load_game_list() -> list:
             # downloading) can be layered on top where appropriate.
             conf.setdefault("status", "ready")
             if "preview" in conf:
-                conf["preview"] = _decode_game_preview_frames(conf.get("preview"), name)
+                preview = _decode_game_preview_frames(conf.get("preview"), name)
+            else:
+                preview = []
+
+            # Fall back to cache/API if preview is missing or blank
+            if not preview or (len(preview) == 1 and _is_blank_frame(preview[0])):
+                _ensure_worker_started()
+                game_id = conf.get("community_id") or (conf_id if conf_has_explicit_id else None)
+                if not game_id:
+                    _log.warning("[Preview] Game '%s' has no community_id or id, skipping API fetch", conf.get("name", name))
+                    preview = generate_placeholder_preview(conf.get("name", name), "Preview unavailable")
+                else:
+                    cached = _preview_cache.get_cached_preview(game_id)
+                    if cached:
+                        preview = cached
+                        if _preview_cache.is_cache_expired(game_id):
+                            _validation_worker.submit(game_id, priority=VALIDATE_EXPIRED, callback=_on_preview_updated)
+                    else:
+                        preview = generate_placeholder_preview(conf.get("name", name), "Loading...")
+                        _validation_worker.submit(game_id, priority=FETCH_MISSING, callback=_on_preview_updated)
+
+            conf["preview"] = preview
             game_list.append(conf)
         except Exception as e:
             _log.warning("Error loading game config for %s: %s", name, e)
+    with _game_list_cache_lock:
+        _game_list_cache.clear()
+        _game_list_cache.extend(game_list)
     return game_list
 
 
