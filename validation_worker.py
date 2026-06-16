@@ -2,6 +2,7 @@
 import logging
 import queue
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
@@ -86,6 +87,9 @@ class ValidationWorker:
         self._dispatcher.start()
 
     def submit(self, game_id: str, priority: int, callback: Optional[Callable] = None) -> None:
+        if self._executor is None:
+            _log.error("[Preview] submit() called before start(); ignoring task for %s", game_id)
+            return
         with self._inflight_lock:
             if game_id in self._inflight:
                 _log.debug("[Preview] Task for %s already in-flight, skipping", game_id)
@@ -95,7 +99,7 @@ class ValidationWorker:
 
     def shutdown(self, wait: bool = True, timeout: float = 5) -> None:
         self._shutdown_event.set()
-        self._queue.put((0, None))
+        self._queue.put((float('inf'), None))
         if self._dispatcher and wait:
             self._dispatcher.join(timeout=timeout)
         if self._executor:
@@ -107,7 +111,8 @@ class ValidationWorker:
                 _, task = self._queue.get(timeout=1)
                 if task is None:
                     break
-                self._executor.submit(self._run_task, task)
+                if not self._shutdown_event.is_set():
+                    self._executor.submit(self._run_task, task)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -156,7 +161,6 @@ class ValidationWorker:
 
         for attempt, delay in enumerate([0] + list(retry_intervals)):
             if attempt > 0:
-                import time
                 _log.warning("[Preview] Retrying fetch for game %s (attempt %d/%d)", game_id, attempt + 1, len(retry_intervals) + 1)
                 time.sleep(delay)
 
