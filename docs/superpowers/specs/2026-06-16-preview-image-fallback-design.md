@@ -44,10 +44,10 @@ Handles reading/writing cached images and metadata.
 ```
 
 **Key functions:**
-- `get_cached_preview(game_id) -> Optional[bytearray]` - Returns cached image if valid
-- `save_cached_preview(game_id, image_data, etag, last_modified)` - Saves image + metadata
-- `get_cache_metadata(game_id) -> Optional[dict]` - Returns validation headers
-- `is_cache_expired(game_id, max_age_hours=24) -> bool` - Checks cache freshness
+- `get_cached_preview(game_id) -> Optional[List[bytearray]]` - Returns cached image as list of frames (matching existing preview format), or None if cache miss
+- `save_cached_preview(game_id, image_data: bytes, etag: str, last_modified: str)` - Saves raw image bytes + metadata to disk
+- `get_cache_metadata(game_id) -> Optional[dict]` - Returns `{"etag": str, "last_modified": str, "fetch_time": float}`
+- `is_cache_expired(game_id, max_age_hours=24) -> bool` - Returns True if fetch_time older than max_age_hours
 
 ### 2. Community API Client (`community_api.py`)
 
@@ -203,10 +203,11 @@ UI refreshes if game visible
 Create a simple 128x160 black frame with white text using PIL:
 - Top: Game name (truncated if needed, centered)
 - Bottom: Status hint ("Loading preview..." or "Preview unavailable")
-- Convert to same RGB bytearray format as normal previews
+- Convert to same RGB bytearray format as normal previews (128x160 RGB bytes)
+- Returned as single-frame list: `[bytearray]` to match existing preview format
 - Generated on-demand, not cached
 
-Function: `generate_placeholder_preview(game_name, status_hint) -> bytearray`
+Function: `generate_placeholder_preview(game_name, status_hint) -> List[bytearray]`
 
 ## Configuration
 
@@ -225,6 +226,11 @@ Function: `generate_placeholder_preview(game_name, status_hint) -> bytearray`
 ### Game identification
 
 Games must have a `community_id` or `id` field in `conf.json` to map to community API.
+
+**ID resolution priority:**
+1. Try `conf.get("community_id")` first (explicit community mapping)
+2. Fall back to `conf.get("id")` if community_id missing
+3. If both missing, attempt fallback strategy below
 
 **Fallback strategy if ID missing:**
 1. Try to match by exact name via API search endpoint: `GET /api/v1/games/search?name={name}`
@@ -249,20 +255,29 @@ validation_worker.register_callback(on_preview_updated)
 for conf in game_configs:
     preview = _decode_game_preview_frames(conf.get("preview"), conf["name"])
     
-    if not preview or preview == [blank_frame]:
+    # Check if preview is valid (not empty and not just a blank frame)
+    if not preview or (len(preview) == 1 and _is_blank_frame(preview[0])):
         # Fallback to cache/API
         game_id = conf.get("community_id") or conf.get("id")
-        cached = preview_cache.get_cached_preview(game_id)
         
-        if cached and not preview_cache.is_cache_expired(game_id):
-            preview = cached
+        if not game_id:
+            # No ID available, skip API fetch
+            logger.warning(f"[Preview] Game '{conf['name']}' has no community_id or id, skipping API fetch")
+            preview = generate_placeholder_preview(conf["name"], "Preview unavailable")
         else:
-            preview = generate_placeholder_preview(conf["name"], "Loading...")
-            priority = FETCH_MISSING if not cached else VALIDATE_EXPIRED
-            validation_worker.submit(game_id, priority=priority)
+            cached = preview_cache.get_cached_preview(game_id)
+            
+            if cached and not preview_cache.is_cache_expired(game_id):
+                preview = cached
+            else:
+                preview = generate_placeholder_preview(conf["name"], "Loading...")
+                priority = FETCH_MISSING if not cached else VALIDATE_EXPIRED
+                validation_worker.submit(game_id, priority=priority)
     
     conf["preview"] = preview
 ```
+
+Helper function: `_is_blank_frame(frame: bytearray) -> bool` - Returns True if frame is all black pixels
 
 ### Shutdown
 ```python
