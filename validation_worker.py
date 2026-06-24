@@ -3,7 +3,6 @@ import logging
 import queue
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from community_api import CommunityApiClient, CommunityApiConfig
@@ -26,29 +25,25 @@ class _RealApiAdapter:
         self.config = {"retry_intervals_seconds": _RETRY_INTERVALS}
 
     def fetch_game_metadata(self, game_id: str) -> Optional[dict]:
-        # Real API doesn't have metadata endpoint yet; return minimal stub so preview fetch proceeds.
-        return {"id": game_id, "name": game_id, "main_cover": "", "preview_urls": [game_id]}
+        from community_api import PreviewNotFound
+        try:
+            return self._client.fetch_game_metadata(game_id)
+        except PreviewNotFound:
+            return None
 
     def build_preview_url(self, path: str) -> str:
-        # path is used as game_id for fetch_preview
-        return path
+        return self._client.build_preview_url(path)
 
-    def fetch_preview_image(self, game_id: str, etag: Optional[str] = None, last_modified: Optional[str] = None):
+    def fetch_preview_image(self, image_url: str, etag: Optional[str] = None, last_modified: Optional[str] = None):
         """Returns (status, bytes_or_none, headers_or_none)."""
-        from community_api import PreviewNotFound
         import requests
         try:
-            data = self._client.fetch_preview(game_id, etag=etag, last_modified=last_modified)
-            if data is None:
-                return (304, None, None)
-            return (200, data, {})
-        except PreviewNotFound:
-            return (404, None, None)
+            return self._client.fetch_preview_image(image_url, etag=etag, last_modified=last_modified)
         except requests.exceptions.HTTPError as e:
             code = e.response.status_code if e.response is not None else 0
             return (code, None, None)
         except Exception as e:
-            _log.error("[Preview] Unexpected error fetching %s: %s", game_id, e)
+            _log.error("[Preview] Unexpected error fetching %s: %s", image_url, e)
             return (0, None, None)
 
 
@@ -77,17 +72,24 @@ class ValidationWorker:
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._inflight: set = set()
         self._inflight_lock = threading.Lock()
-        self._executor: Optional[ThreadPoolExecutor] = None
         self._shutdown_event = threading.Event()
-        self._dispatcher: Optional[threading.Thread] = None
+        self._workers: list[threading.Thread] = []
 
     def start(self) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
-        self._dispatcher = threading.Thread(target=self._dispatch_loop, daemon=True, name="preview-dispatcher")
-        self._dispatcher.start()
+        if self._workers:
+            return
+        self._shutdown_event.clear()
+        for index in range(self._max_workers):
+            worker = threading.Thread(
+                target=self._worker_loop,
+                daemon=True,
+                name=f"preview-worker-{index + 1}",
+            )
+            worker.start()
+            self._workers.append(worker)
 
     def submit(self, game_id: str, priority: int, callback: Optional[Callable] = None) -> None:
-        if self._executor is None:
+        if not self._workers:
             _log.error("[Preview] submit() called before start(); ignoring task for %s", game_id)
             return
         with self._inflight_lock:
@@ -99,24 +101,31 @@ class ValidationWorker:
 
     def shutdown(self, wait: bool = True, timeout: float = 5) -> None:
         self._shutdown_event.set()
-        self._queue.put((float('inf'), None))
-        if self._dispatcher and wait:
-            self._dispatcher.join(timeout=timeout)
-        if self._executor:
-            self._executor.shutdown(wait=wait, cancel_futures=True)
+        for _ in self._workers:
+            self._queue.put((float('inf'), None))
+        if wait:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            for worker in self._workers:
+                if deadline is None:
+                    worker.join()
+                else:
+                    worker.join(timeout=max(0, deadline - time.monotonic()))
+        self._workers.clear()
+        with self._inflight_lock:
+            self._inflight.clear()
 
-    def _dispatch_loop(self) -> None:
+    def _worker_loop(self) -> None:
         while not self._shutdown_event.is_set():
             try:
                 _, task = self._queue.get(timeout=1)
                 if task is None:
                     break
                 if not self._shutdown_event.is_set():
-                    self._executor.submit(self._run_task, task)
+                    self._run_task(task)
             except queue.Empty:
                 continue
             except Exception as e:
-                _log.error("[Preview] Dispatcher error: %s", e)
+                _log.error("[Preview] Worker error: %s", e)
 
     def _run_task(self, task: _Task) -> None:
         game_id = task.game_id
@@ -162,7 +171,10 @@ class ValidationWorker:
         for attempt, delay in enumerate([0] + list(retry_intervals)):
             if attempt > 0:
                 _log.warning("[Preview] Retrying fetch for game %s (attempt %d/%d)", game_id, attempt + 1, len(retry_intervals) + 1)
-                time.sleep(delay)
+                if self._shutdown_event.wait(delay):
+                    return
+            if self._shutdown_event.is_set():
+                return
 
             status, image_data, response_headers = self._api.fetch_preview_image(
                 image_url, etag=etag, last_modified=last_modified

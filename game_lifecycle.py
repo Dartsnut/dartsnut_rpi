@@ -1,4 +1,5 @@
 """Game lifecycle: start/term game process, load game list."""
+import atexit
 import base64
 import io
 import json
@@ -48,8 +49,13 @@ def _ensure_worker_started() -> None:
 
 
 def shutdown_preview_worker() -> None:
+    global _validation_worker
     if _validation_worker is not None:
         _validation_worker.shutdown(wait=True, timeout=5)
+        _validation_worker = None
+
+
+atexit.register(shutdown_preview_worker)
 
 
 _game_list_cache: list = []
@@ -124,8 +130,15 @@ def generate_placeholder_preview(game_name: str, status_hint: str) -> list:
         font = ImageFont.load_default()
     # Truncate long names to fit 128px width
     name = game_name[:18] if len(game_name) > 18 else game_name
-    draw.text((4, 60), name, fill=(200, 200, 200), font=font)
-    draw.text((4, 80), status_hint, fill=(120, 120, 120), font=font)
+    name_bbox = draw.textbbox((0, 0), name, font=font)
+    status_bbox = draw.textbbox((0, 0), status_hint, font=font)
+    line_gap = 4
+    name_height = name_bbox[3] - name_bbox[1]
+    status_height = status_bbox[3] - status_bbox[1]
+    block_height = name_height + line_gap + status_height
+    y = max(0, (128 - block_height) // 2)
+    draw.text((4, y - name_bbox[1]), name, fill=(200, 200, 200), font=font)
+    draw.text((4, y + name_height + line_gap - status_bbox[1]), status_hint, fill=(120, 120, 120), font=font)
     return [bytearray(canvas.tobytes())]
 
 
@@ -563,7 +576,7 @@ def load_game_list() -> list:
                         if _preview_cache.is_cache_expired(game_id):
                             _validation_worker.submit(game_id, priority=VALIDATE_EXPIRED, callback=_on_preview_updated)
                     else:
-                        preview = generate_placeholder_preview(conf.get("name", name), "Loading...")
+                        preview = generate_placeholder_preview(conf.get("name", name), "Loading Preview")
                         _validation_worker.submit(game_id, priority=FETCH_MISSING, callback=_on_preview_updated)
 
             conf["preview"] = preview

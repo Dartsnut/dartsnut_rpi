@@ -28,6 +28,8 @@ def test_worker_starts_and_shuts_down(cache_dir, config_path):
     w = ValidationWorker(cache_dir=cache_dir, config_path=config_path)
     w.start()
     w.shutdown(wait=True, timeout=2)
+    w.start()
+    w.shutdown(wait=True, timeout=2)
 
 
 def test_submit_fetch_missing_calls_callback(cache_dir, config_path, tmp_path):
@@ -140,3 +142,33 @@ def test_no_duplicate_tasks(cache_dir, config_path):
 
     w.shutdown(wait=True, timeout=2)
     # Just verify no exceptions; can't easily assert queue size after drain
+
+
+def test_shutdown_interrupts_retry_sleep(cache_dir, config_path):
+    """Long retry backoff should not keep process shutdown waiting."""
+    from validation_worker import ValidationWorker, FETCH_MISSING
+
+    mock_api = MagicMock()
+    mock_api.fetch_game_metadata.return_value = {
+        "id": "g4",
+        "name": "Game Four",
+        "main_cover": "",
+        "preview_urls": ["images/g4/preview.png"],
+    }
+    mock_api.fetch_preview_image.return_value = (0, None, None)
+    mock_api.build_preview_url.return_value = "https://cdn.example.com/images/g4/preview.png"
+    mock_api.config = {"retry_intervals_seconds": [60]}
+
+    w = ValidationWorker(cache_dir=cache_dir, config_path=config_path)
+    w._api = mock_api
+    w.start()
+    w.submit("g4", priority=FETCH_MISSING, callback=lambda *a: None)
+
+    deadline = time.time() + 2
+    while mock_api.fetch_preview_image.call_count == 0 and time.time() < deadline:
+        time.sleep(0.01)
+
+    start = time.time()
+    w.shutdown(wait=True, timeout=2)
+
+    assert time.time() - start < 1

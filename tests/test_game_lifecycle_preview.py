@@ -139,12 +139,13 @@ def test_missing_preview_no_game_id(tmp_path):
 
 
 def test_shutdown_preview_worker_calls_shutdown():
-    """shutdown_preview_worker() calls _validation_worker.shutdown(wait=True, timeout=5)."""
+    """shutdown_preview_worker() shuts down and clears the global worker."""
     import game_lifecycle
     mock_worker = MagicMock()
 
     with patch.object(game_lifecycle, "_validation_worker", mock_worker):
         game_lifecycle.shutdown_preview_worker()
+        assert game_lifecycle._validation_worker is None
 
     mock_worker.shutdown.assert_called_once_with(wait=True, timeout=5)
 
