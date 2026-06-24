@@ -18,14 +18,11 @@ def test_load_config_missing_file_uses_defaults(tmp_path):
     assert cfg.timeout == 10
 
 
-def test_load_config_creates_file_with_defaults_when_missing(tmp_path):
+def test_load_config_does_not_create_file_when_missing(tmp_path):
     conf_path = tmp_path / "new_subdir" / "community_api.conf"
     cfg = CommunityApiConfig.load(path=str(conf_path))
-    assert conf_path.exists(), "Config file should be created when missing"
-    parser = configparser.ConfigParser()
-    parser.read(str(conf_path))
-    assert parser.has_section("community_api")
-    assert parser.has_option("community_api", "image_base_url")
+    assert not conf_path.exists()
+    assert cfg.base_url == "https://api.dartsnut.com"
     assert cfg.image_base_url == ""
 
 
@@ -149,6 +146,53 @@ def test_fetch_preview_sends_conditional_headers():
     headers = call_kwargs.get("headers", {})
     assert headers.get("If-None-Match") == '"etag_val"'
     assert headers.get("If-Modified-Since") == "some_date"
+
+
+def test_fetch_game_metadata_sends_token_header(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    client = _make_client()
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "game_id": "01dartgame",
+            "game_name": "01 Darts Game",
+            "main_cover": "cover.png",
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client._session, "get", return_value=mock_response) as mock_get:
+        client.fetch_game_metadata("01dartgame")
+
+    assert mock_get.call_args[1]["headers"] == {"Token": "abc"}
+
+
+def test_fetch_preview_image_does_not_send_token_to_cdn(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    client = _make_client()
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"bytes"
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client._session, "get", return_value=mock_response) as mock_get:
+        client.fetch_preview_image("https://cdn.example.com/game123.png")
+
+    assert mock_get.call_args[1]["headers"] == {}
 
 
 def test_fetch_game_metadata_uses_main_cover_for_preview_url():

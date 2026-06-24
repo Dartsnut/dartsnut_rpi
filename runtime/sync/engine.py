@@ -6,6 +6,7 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 from domain.app_context import AppContext
+from runtime.api_token_store import preserve_remote_user_token
 from runtime.sync.event_applier import apply_events
 from runtime.sync.outbox import SyncOutbox
 from runtime.sync.reducer import ReducedGameReady, SyncReducer
@@ -42,6 +43,7 @@ class SyncEngine:
         if not isinstance(payload, dict):
             return False
 
+        preserve_remote_user_token(payload.get("user"))
         cfg = self._normalize_config(dict(payload))
         if is_first_after_connect:
             try:

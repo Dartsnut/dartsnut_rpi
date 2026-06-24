@@ -7,6 +7,8 @@ from typing import Optional
 
 import requests
 
+from runtime.api_token_store import build_api_headers
+
 _log = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dartsnut/community_api.conf")
@@ -19,7 +21,7 @@ class PreviewNotFound(Exception):
 
 
 class CommunityApiConfig:
-    """Loads configuration from ~/.dartsnut/community_api.conf (INI format) with sensible defaults."""
+    """Loads optional community API overrides from INI, otherwise uses defaults."""
 
     def __init__(
         self,
@@ -33,24 +35,10 @@ class CommunityApiConfig:
 
     @classmethod
     def load(cls, path: str = None) -> "CommunityApiConfig":
-        """Load config from INI file. Creates file with defaults if missing."""
+        """Load config from INI file when present."""
         config_path = path or _DEFAULT_CONFIG_PATH
         instance = cls()
         if not os.path.isfile(config_path):
-            # Create the file with defaults
-            try:
-                os.makedirs(os.path.dirname(config_path), exist_ok=True)
-                parser = configparser.ConfigParser()
-                section = "community_api"
-                parser[section] = {
-                    "base_url": instance.base_url,
-                    "image_base_url": instance.image_base_url,
-                    "timeout": str(instance.timeout),
-                }
-                with open(config_path, "w") as f:
-                    parser.write(f)
-            except (configparser.Error, ValueError, OSError) as e:
-                _log.warning("[CommunityAPI] Failed to create config at %s: %s", config_path, e)
             return instance
         try:
             parser = configparser.ConfigParser()
@@ -124,6 +112,7 @@ class CommunityApiClient:
         response = self._session.get(
             url,
             params={"game_id": game_id},
+            headers=build_api_headers(),
             timeout=self._config.timeout,
         )
         if response.status_code == 404:

@@ -58,6 +58,22 @@ def test_reset_device_to_factory_fields_keeps_only_required_keys(tmp_path, monke
     assert payload["updated_at"] != ""
 
 
+def test_reset_device_to_factory_fields_deletes_api_token(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with open("device.json", "w", encoding="utf-8") as f:
+        json.dump({"brightness": 42, "volume": 7}, f)
+
+    from runtime.api_token_store import get_api_token, preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+
+    service = _service_for_tests()
+    service.reset_device_to_factory_fields()
+
+    assert get_api_token() == ""
+
+
 def test_clear_apps_directory_contents_removes_all_items(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     os.makedirs("apps/game_a", exist_ok=True)
