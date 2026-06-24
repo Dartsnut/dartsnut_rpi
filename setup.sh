@@ -162,6 +162,7 @@ install_boot_assets_if_present
 
 install_or_update_service_unit "dartsnut_matrix.service"
 install_or_update_service_unit "dartsnut_python.service"
+install_or_update_service_unit "dartsnut_mcp.service"
 
 if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
     sudo systemctl daemon-reload
@@ -171,6 +172,7 @@ cleanup_legacy_splash_service
 sudo systemctl daemon-reload
 sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
+sudo systemctl enable dartsnut_mcp.service
 
 echo "Service setup steps complete."
 
