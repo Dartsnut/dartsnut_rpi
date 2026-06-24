@@ -63,6 +63,10 @@ def _venv_python(app_id: str) -> str:
     return os.path.join(app_dir(app_id), ".venv", "bin", "python")
 
 
+def _venv_dir(app_id: str) -> str:
+    return os.path.join(app_dir(app_id), ".venv")
+
+
 def _stamp_path(app_id: str) -> str:
     return os.path.join(app_dir(app_id), ".venv", STAMP_FILENAME)
 
@@ -145,6 +149,18 @@ def _uv_sync(app_id: str) -> None:
     )
 
 
+def _remove_invalid_venv(app_id: str) -> None:
+    """Remove a partial app venv that uv refuses to repair in place."""
+    venv_path = _venv_dir(app_id)
+    if not os.path.exists(venv_path) or os.path.isfile(_venv_python(app_id)):
+        return
+    if os.path.isdir(venv_path) and not os.path.islink(venv_path):
+        shutil.rmtree(venv_path)
+    else:
+        os.remove(venv_path)
+    _log.warning("Removed invalid app virtualenv for %s: %s", app_id, venv_path)
+
+
 def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
     """Create or refresh apps/<id>/.venv. Returns False on failure."""
     if not app_id:
@@ -161,6 +177,7 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
     started = time.monotonic()
     try:
         _materialize_pyproject(app_id, app_type)
+        _remove_invalid_venv(app_id)
         _uv_sync(app_id)
         _write_stamp(app_id)
         _log.info(

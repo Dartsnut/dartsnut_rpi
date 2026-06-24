@@ -105,6 +105,36 @@ def test_ensure_app_venv_uv_failure(monkeypatch, tmp_path):
     assert app_env.ensure_app_venv("broken") is False
 
 
+def test_ensure_app_venv_removes_partial_venv_before_sync(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "factory_tool"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("pass\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "factory_tool", "type": "widget", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (app_dir / "pyproject.toml").write_text(
+        '[project]\nname = "factory-tool"\nversion = "1.0.0"\n',
+        encoding="utf-8",
+    )
+    partial_venv = app_dir / ".venv"
+    partial_venv.mkdir()
+    (partial_venv / "pyvenv.cfg").write_text("broken\n", encoding="utf-8")
+
+    def _fake_sync(app_id):
+        assert app_id == "factory_tool"
+        assert not partial_venv.exists()
+        venv = app_dir / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(app_env, "_uv_sync", _fake_sync)
+
+    assert app_env.ensure_app_venv("factory_tool") is True
+    assert app_env.app_venv_ready("factory_tool") is True
+
+
 def test_uv_sync_retries_then_gives_up(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "broken"
@@ -126,7 +156,7 @@ def test_uv_sync_retries_then_gives_up(monkeypatch, tmp_path):
 
     monkeypatch.setattr(app_env.subprocess, "run", _always_fail)
     assert app_env.ensure_app_venv("broken") is False
-    assert attempts["n"] == len(retry.DEFAULT_BACKOFF_SECONDS) + 1
+    assert attempts["n"] == len(app_env.FAST_BACKOFF_SECONDS) + 1
 
 
 def test_uv_sync_retries_then_succeeds(monkeypatch, tmp_path):
