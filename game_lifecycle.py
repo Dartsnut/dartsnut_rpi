@@ -20,6 +20,7 @@ from core.helpers import (
 )
 from core.app_env import ensure_app_venv
 from core.retry import retry_with_backoff
+from runtime.api_token_store import build_api_headers
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -349,6 +350,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         response = retry_with_backoff(
             lambda: requests.get(
                 f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}",
+                headers=build_api_headers(),
                 timeout=(5, 30),
             ),
             succeeded=lambda r: getattr(r, "status_code", None) == 200,

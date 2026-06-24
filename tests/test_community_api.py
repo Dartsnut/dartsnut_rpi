@@ -151,6 +151,51 @@ def test_fetch_preview_sends_conditional_headers():
     assert headers.get("If-Modified-Since") == "some_date"
 
 
+def test_fetch_game_metadata_sends_token_header(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client = _make_client()
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "game_id": "01dartgame",
+            "game_name": "01 Darts Game",
+            "main_cover": "cover.png",
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client._session, "get", return_value=mock_response) as mock_get:
+        client.fetch_game_metadata("01dartgame")
+
+    assert mock_get.call_args[1]["headers"] == {"Token": "abc"}
+
+
+def test_fetch_preview_image_does_not_send_token_to_cdn(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client = _make_client()
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"bytes"
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client._session, "get", return_value=mock_response) as mock_get:
+        client.fetch_preview_image("https://cdn.example.com/game123.png")
+
+    assert mock_get.call_args[1]["headers"] == {}
+
+
 def test_fetch_game_metadata_uses_main_cover_for_preview_url():
     client = _make_client()
 

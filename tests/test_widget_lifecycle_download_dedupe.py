@@ -33,3 +33,27 @@ def test_download_widget_async_second_call_skipped_while_inflight(monkeypatch):
     assert len(threads_started) == 1
     release.set()
     threads_started[0].join(timeout=5.0)
+
+
+def test_check_and_update_widget_version_sends_token_header(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = {"headers": None}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {"version": "1.0.0"}}
+
+    def _get(_url, **kwargs):
+        calls["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+    monkeypatch.setattr(wl.requests, "get", _get)
+
+    assert wl.check_and_update_widget_version("clock") == (True, {"version": "1.0.0"})
+    assert calls["headers"] == {"Token": "abc"}

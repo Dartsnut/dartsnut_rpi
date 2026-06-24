@@ -20,6 +20,7 @@ downloads/
 # Ignore device.json file
 device.json
 .hardware_version.json
+.dartsnut/api_token.json
 
 .DS_Store
 .cursor/

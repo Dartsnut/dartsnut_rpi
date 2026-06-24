@@ -7,6 +7,8 @@ from typing import Optional
 
 import requests
 
+from runtime.api_token_store import build_api_headers
+
 _log = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dartsnut/community_api.conf")
@@ -124,6 +126,7 @@ class CommunityApiClient:
         response = self._session.get(
             url,
             params={"game_id": game_id},
+            headers=build_api_headers(),
             timeout=self._config.timeout,
         )
         if response.status_code == 404:

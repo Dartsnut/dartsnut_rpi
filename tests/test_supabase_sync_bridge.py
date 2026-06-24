@@ -325,6 +325,30 @@ def test_sync_client_send_state_includes_source_when_present():
     assert sent["source"] == "supabase_bridge_init"
 
 
+def test_sync_engine_preserves_remote_user_token(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    engine = __import__(
+        "runtime.sync.engine", fromlist=["SyncEngine"]
+    ).SyncEngine(
+        on_apply_config=lambda _cfg: None,
+        merge_on_first_connect=lambda cfg: cfg,
+        normalize_config=ssb._normalize_config_payload,
+        remember_remote_game_ids=lambda _cfg: None,
+    )
+
+    engine.ingest_remote_row({"user": {"token": "abc"}, "updated_at": "2026-06-01T00:00:00Z"})
+
+    from runtime.api_token_store import get_api_token
+
+    assert get_api_token() == "abc"
+
+    engine.ingest_remote_row({"brightness": 50, "updated_at": "2026-06-01T00:00:01Z"})
+    assert get_api_token() == "abc"
+
+    engine.ingest_remote_row({"user": {"token": ""}, "updated_at": "2026-06-01T00:00:02Z"})
+    assert get_api_token() == ""
+
+
 def test_sync_client_ready_still_sends_initial_state(tmp_path):
     socket_path = f"/tmp/dn-sync-{time.monotonic_ns()}.sock"
     engine = __import__(

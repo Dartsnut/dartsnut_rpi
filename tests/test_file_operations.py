@@ -59,3 +59,38 @@ def test_get_file_md5_and_remove_directory_missing(tmp_path, monkeypatch):
     missing = fops.remove_directory(None, "missing")
     assert md5["action"] == "get_file_md5"
     assert missing["error_code"] == "1002"
+
+
+def test_download_game_worker_sends_token_header(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = {"headers": None}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_download_url": "https://example.com/game.zip",
+                    "game_download_md5": "abc123",
+                }
+            }
+
+    def _get(url, **kwargs):
+        if "api.dartsnut.com" in url:
+            calls["headers"] = kwargs.get("headers")
+            return _Resp()
+        raise AssertionError("download URL should be stubbed before requests.get")
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+    monkeypatch.setattr(fops.requests, "get", _get)
+
+    fops.DOWNLOAD_PROGRESS.clear()
+    fops._DOWNLOAD_CANCEL_REQUESTED.discard("g1")
+    fops._DOWNLOAD_KEYS_IN_FLIGHT.clear()
+    fops._download_game_worker("g1")
+
+    assert calls["headers"] == {"Token": "abc"}
