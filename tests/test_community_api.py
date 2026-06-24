@@ -102,7 +102,7 @@ def test_fetch_preview_returns_bytes_on_200():
     assert result == b"PNG_BYTES"
     assert mock_get.call_args_list[0][0][0] == "https://test.example.com/mobile/game/get-detail"
     assert mock_get.call_args_list[0][1]["params"]["game_id"] == "game123"
-    assert mock_get.call_args_list[1][0][0] == "https://cdn.example.com/game123.png"
+    assert mock_get.call_args_list[1][0][0] == "https://cdn.example.com/cover.png"
 
 
 def test_fetch_preview_raises_preview_not_found_on_404():
@@ -151,7 +151,7 @@ def test_fetch_preview_sends_conditional_headers():
     assert headers.get("If-Modified-Since") == "some_date"
 
 
-def test_fetch_game_metadata_selects_exact_game_id():
+def test_fetch_game_metadata_uses_main_cover_for_preview_url():
     client = _make_client()
 
     mock_response = MagicMock()
@@ -172,10 +172,10 @@ def test_fetch_game_metadata_selects_exact_game_id():
     assert meta["id"] == "01dartgame"
     assert meta["name"] == "01 Darts Game"
     assert meta["main_cover"] == "cover.png"
-    assert meta["preview_urls"] == ["preview-1.png", "preview-2.png"]
+    assert meta["preview_urls"] == ["cover.png"]
 
 
-def test_fetch_game_metadata_handles_missing_preview_list():
+def test_fetch_game_metadata_handles_missing_main_cover():
     client = _make_client()
 
     mock_response = MagicMock()
@@ -184,7 +184,7 @@ def test_fetch_game_metadata_handles_missing_preview_list():
         "data": {
             "game_id": "01dartgame",
             "game_name": "01 Darts Game",
-            "main_cover": "cover.png",
+            "preview": ["preview-1.png"],
         }
     }
     mock_response.raise_for_status = MagicMock()
@@ -192,7 +192,7 @@ def test_fetch_game_metadata_handles_missing_preview_list():
     with patch.object(client._session, "get", return_value=mock_response):
         meta = client.fetch_game_metadata("01dartgame")
 
-    assert meta["main_cover"] == "cover.png"
+    assert meta["main_cover"] == ""
     assert meta["preview_urls"] == []
 
 

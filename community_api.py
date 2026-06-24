@@ -101,8 +101,7 @@ class CommunityApiClient:
             requests.exceptions.HTTPError: on 4xx/5xx errors
         """
         meta = self.fetch_game_metadata(game_id)
-        preview_urls = meta.get("preview_urls") or []
-        image_url = preview_urls[0] if preview_urls else meta.get("main_cover")
+        image_url = meta.get("main_cover")
         if not image_url:
             raise PreviewNotFound(f"No preview found for game {game_id!r}")
         status, data, _headers = self.fetch_preview_image(
@@ -135,24 +134,13 @@ class CommunityApiClient:
         if not isinstance(data, dict):
             raise PreviewNotFound(f"No game found for {game_id!r}")
 
-        preview_urls = self._normalize_preview_urls(data.get("preview"))
+        cover = str(data.get("main_cover") or "").strip()
         return {
             "id": str(data.get("game_id") or game_id),
             "name": data.get("game_name") or game_id,
-            "main_cover": str(data.get("main_cover") or "").strip(),
-            "preview_urls": preview_urls,
+            "main_cover": cover,
+            "preview_urls": [cover] if cover else [],
         }
-
-    @staticmethod
-    def _normalize_preview_urls(preview_raw) -> list[str]:
-        if preview_raw is None:
-            return []
-        if isinstance(preview_raw, list):
-            return [str(item).strip() for item in preview_raw if str(item or "").strip()]
-        if isinstance(preview_raw, str):
-            value = preview_raw.strip()
-            return [value] if value else []
-        return []
 
     def build_preview_url(self, path: str) -> str:
         """Build an absolute preview image URL from API image fields."""
