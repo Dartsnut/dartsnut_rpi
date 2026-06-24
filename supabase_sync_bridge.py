@@ -53,6 +53,26 @@ _on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None
 _published_game_status: Dict[str, tuple[str, str]] = {}
 _published_game_status_lock = threading.Lock()
 
+_FIRMWARE_WRITABLE_TOP_LEVEL = frozenset(
+    {
+        "ssid",
+        "ip_address",
+        "device_updated_at",
+        "pages",
+        "pages_updated_at",
+        "device_info",
+        "firmware",
+        "volume",
+        "brightness",
+        "games",
+        "bluetooth",
+    }
+)
+_FIRMWARE_WRITABLE_DEVICE_INFO = frozenset(
+    {"id", "sn", "model", "hardware_version"}
+)
+_FIRMWARE_WRITABLE_FIRMWARE = frozenset({"version", "update"})
+
 
 def invalidate_published_game_status(game_id: str) -> None:
     """Forget the last published status for a game so the next write is sent.
@@ -211,6 +231,77 @@ def _coerce_pages_games_lists(payload: Dict[str, Any]) -> Dict[str, Any]:
         if v is None or not isinstance(v, list):
             out[key] = []
     out = _coerce_bluetooth_schema(out)
+    return out
+
+
+def _sanitize_device_info_patch(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    out = {k: value[k] for k in _FIRMWARE_WRITABLE_DEVICE_INFO if k in value}
+    return out or None
+
+
+def _sanitize_firmware_patch(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    out = {k: value[k] for k in _FIRMWARE_WRITABLE_FIRMWARE if k in value}
+    return out or None
+
+
+def _sanitize_games_patch(value: Any) -> Optional[list[Dict[str, Any]]]:
+    if not isinstance(value, list):
+        return None
+    out: list[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        gid = str(item.get("id") or "").strip()
+        if not gid or gid in seen_ids:
+            continue
+        game: Dict[str, Any] = {"id": gid}
+        if "status" in item:
+            game["status"] = str(item.get("status") or "").strip().lower()
+        if "version" in item:
+            game["version"] = str(item.get("version") or "").strip()
+        if len(game) > 1:
+            out.append(game)
+            seen_ids.add(gid)
+    return out or None
+
+
+def _sanitize_firmware_partial_patch(
+    payload: Dict[str, Any], *, source: Optional[str] = None
+) -> Dict[str, Any]:
+    """Keep only fields firmware is allowed to publish in partial remote patches."""
+    if not isinstance(payload, dict):
+        return {}
+    source_value = str(source or "").strip()
+    out: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "dim_window" and source_value == "supabase_bridge_init":
+            out[key] = value
+            continue
+        if key not in _FIRMWARE_WRITABLE_TOP_LEVEL:
+            continue
+        if key == "device_info":
+            cleaned = _sanitize_device_info_patch(value)
+            if cleaned:
+                out[key] = cleaned
+        elif key == "firmware":
+            cleaned = _sanitize_firmware_patch(value)
+            if cleaned:
+                out[key] = cleaned
+        elif key == "games":
+            cleaned = _sanitize_games_patch(value)
+            if cleaned:
+                out[key] = cleaned
+        elif key == "bluetooth":
+            cleaned_payload = _coerce_bluetooth_schema({"bluetooth": value})
+            if "bluetooth" in cleaned_payload:
+                out[key] = cleaned_payload["bluetooth"]
+        else:
+            out[key] = value
     return out
 
 
@@ -543,7 +634,6 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         games = []
 
     state: Dict[str, Any] = {
-        "time_zone": device_info.get("time_zone", ""),
         "volume": volume,
         "brightness": brightness,
         "games": games,
@@ -615,16 +705,22 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
 
     if use_local_device:
         for key in (
-            "time_zone",
             "volume",
             "ip_address",
             "brightness",
-            "dim_window",
             "device_info",
             "firmware",
         ):
             if key in local_initial:
-                merged[key] = local_initial[key]
+                if key == "device_info":
+                    local_info = _sanitize_device_info_patch(local_initial.get(key))
+                    if local_info:
+                        existing_info = merged.get("device_info")
+                        if not isinstance(existing_info, dict):
+                            existing_info = {}
+                        merged[key] = {**existing_info, **local_info}
+                else:
+                    merged[key] = local_initial[key]
         merged["device_updated_at"] = local_device.get("updated_at", "") or ""
 
     use_local_pages = False
@@ -886,13 +982,17 @@ def publish_device_state_update(
         return
     global _sync_engine, _client
     if _sync_engine is not None:
-        _sync_engine.publish_partial(partial_state, source=source)
+        sanitized = _sanitize_firmware_partial_patch(partial_state, source=source)
+        if sanitized:
+            _sync_engine.publish_partial(sanitized, source=source)
         return
     with _bridge_lock:
         client = _client
     if client is None:
         return
-    client.send_state(partial_state, full=False, source=source)
+    sanitized = _sanitize_firmware_partial_patch(partial_state, source=source)
+    if sanitized:
+        client.send_state(sanitized, full=False, source=source)
 
 
 def is_supabase_bridge_active() -> bool:

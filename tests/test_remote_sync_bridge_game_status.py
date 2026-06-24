@@ -68,6 +68,7 @@ def test_request_set_game_status_does_not_readd_remote_removed_game(monkeypatch)
 def test_request_set_game_status_only_publishes_target_game(monkeypatch):
     sent = []
     monkeypatch.setattr(rsb._ssb, "_remote_game_ids", None)
+    rsb._ssb.invalidate_published_game_status("chess")
 
     monkeypatch.setattr(
         "game_lifecycle.get_games_summary",

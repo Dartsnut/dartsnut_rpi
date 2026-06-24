@@ -288,74 +288,6 @@ fn rpc_apply_patch_recorded(
     result
 }
 
-#[allow(dead_code)]
-fn merge_games_patch_with_remote_state(
-    client: &Client,
-    cfg: &SupabaseConfig,
-    patch_obj: &mut serde_json::Map<String, Value>,
-) {
-    let incoming_games = match patch_obj.get("games").and_then(|v| v.as_array()) {
-        Some(v) if !v.is_empty() => v.clone(),
-        _ => return,
-    };
-
-    let mut url = match Url::parse(&format!(
-        "{}/rest/v1/remote_devices",
-        cfg.url.trim_end_matches('/')
-    )) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    url.query_pairs_mut()
-        .append_pair("select", "state")
-        .append_pair("device_id", &format!("eq.{}", cfg.device_id))
-        .append_pair("limit", "1");
-
-    let rows: Vec<Value> = match client
-        .get(url)
-        .header("apikey", &cfg.key)
-        .header("Authorization", format!("Bearer {}", cfg.key))
-        .send()
-    {
-        Ok(resp) => match resp.error_for_status() {
-            Ok(ok) => match ok.json() {
-                Ok(parsed) => parsed,
-                Err(_) => return,
-            },
-            Err(_) => return,
-        },
-        Err(_) => return,
-    };
-    let existing_games = rows
-        .first()
-        .and_then(|row| row.get("state"))
-        .and_then(|state| state.get("games"))
-        .and_then(|games| games.as_array());
-    let Some(existing_games) = existing_games else {
-        return;
-    };
-
-    let mut merged_games = existing_games.clone();
-    for incoming in &incoming_games {
-        let incoming_id = match incoming.get("id").and_then(|v| v.as_str()) {
-            Some(v) if !v.trim().is_empty() => v.to_string(),
-            _ => continue,
-        };
-        let mut replaced = false;
-        for existing in &mut merged_games {
-            if existing.get("id").and_then(|v| v.as_str()) == Some(incoming_id.as_str()) {
-                *existing = incoming.clone();
-                replaced = true;
-                break;
-            }
-        }
-        if !replaced {
-            merged_games.push(incoming.clone());
-        }
-    }
-    patch_obj.insert("games".to_string(), Value::Array(merged_games));
-}
-
 fn remote_devices_query_url(cfg: &SupabaseConfig, select: &str) -> Result<Url> {
     let mut url = Url::parse(&format!(
         "{}/rest/v1/remote_devices",
@@ -503,25 +435,7 @@ fn apply_initial_state_with_retry(
                 }
             }
             Ok(true) => {
-                let delta_patch =
-                    strip_runtime_overwrites_for_existing_device_initial_state(patch.clone());
-                match rpc_apply_patch_recorded(
-                    client,
-                    cfg,
-                    delta_patch,
-                    false,
-                    None,
-                    rpc_lock,
-                    probe_state,
-                ) {
-                    Ok(()) => return Ok(()),
-                    Err(e) => {
-                        eprintln!(
-                            "bridge: initial delta state write failed (attempt {attempt}/{max_attempts}): {e}"
-                        );
-                        last_err = Some(e);
-                    }
-                }
+                return Ok(());
             }
             Err(e) => {
                 eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
@@ -557,21 +471,6 @@ fn apply_initial_state_with_retry(
             "failed to apply initial state for unknown reason after retries"
         )),
     }
-}
-
-/// Initial handshake sends device-derived defaults from `_build_initial_state`. For an
-/// existing remote row, shallow JSON merge (`state || patch`) replaces whole top-level
-/// keys; sending empty `games` or default empty `bluetooth` would wipe hosted runtime
-/// state (installed games, paired controllers, scan metadata). Strip those keys so the
-/// merge preserves what is already in Supabase.
-fn strip_runtime_overwrites_for_existing_device_initial_state(mut patch: Value) -> Value {
-    if let Some(obj) = patch.as_object_mut() {
-        obj.remove("games");
-        obj.remove("bluetooth");
-        obj.remove("volume");
-        obj.remove("brightness");
-    }
-    patch
 }
 
 fn build_realtime_ws_url(cfg: &SupabaseConfig) -> Result<Url> {
@@ -1242,26 +1141,63 @@ mod tests {
     }
 
     #[test]
-    fn strip_runtime_overwrites_for_existing_device_initial_state_removes_runtime_and_settings_fields()
-    {
-        let patch = json!({
-            "games": [{"id": "chess", "status": "ready"}],
-            "bluetooth": {"is_scan": false, "controllers": [], "scan_results": []},
-            "volume": 50,
-            "brightness": 60,
-            "firmware": {"version": "1.0.0", "update": false}
+    fn initial_state_existing_device_only_checks_row_existence() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let (tx, rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0u8; 8192];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                        tx.send(request).expect("send request");
+                        let body = br#"[{"device_id":"AA:BB:CC:DD:EE:FF"}]"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.write_all(body);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
         });
-        let out = strip_runtime_overwrites_for_existing_device_initial_state(patch);
-        assert!(out.get("games").is_none());
-        assert!(out.get("bluetooth").is_none());
-        assert!(out.get("volume").is_none());
-        assert!(out.get("brightness").is_none());
-        assert_eq!(
-            out.get("firmware")
-                .and_then(|v| v.get("version"))
-                .and_then(|v| v.as_str()),
-            Some("1.0.0")
-        );
+
+        let cfg = SupabaseConfig {
+            url: format!("http://127.0.0.1:{}", addr.port()),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let client = Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .expect("client");
+        let rpc_lock = Arc::new(Mutex::new(()));
+        let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+
+        apply_initial_state_with_retry(
+            &client,
+            &cfg,
+            json!({"time_zone": "", "firmware": {"version": "1.0.0", "update": false}}),
+            &rpc_lock,
+            &probe_state,
+        )
+        .expect("initial state should be skipped for existing row");
+
+        let request = rx.recv_timeout(Duration::from_secs(3)).expect("request");
+        let _ = server.join();
+        assert!(request.starts_with("GET /rest/v1/remote_devices?"));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -1384,54 +1320,4 @@ mod tests {
         assert!(snapshot.latency_ms.is_none());
     }
 
-    #[test]
-    fn merge_games_patch_replaces_matching_game_and_preserves_others() {
-        let mut patch_obj = serde_json::Map::new();
-        patch_obj.insert(
-            "games".to_string(),
-            json!([{"id": "chess", "status": "downloading", "version": "2.0.0"}]),
-        );
-        let existing_games = json!([
-            {"id": "chess", "status": "ready", "version": "1.0.0"},
-            {"id": "pong", "status": "ready", "version": "1.1.0"}
-        ])
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-
-        let mut merged_games = existing_games.clone();
-        for incoming in patch_obj
-            .get("games")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default()
-        {
-            let incoming_id = incoming
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let mut replaced = false;
-            for existing in &mut merged_games {
-                if existing.get("id").and_then(|v| v.as_str()) == Some(incoming_id.as_str()) {
-                    *existing = incoming.clone();
-                    replaced = true;
-                    break;
-                }
-            }
-            if !replaced {
-                merged_games.push(incoming.clone());
-            }
-        }
-        patch_obj.insert("games".to_string(), Value::Array(merged_games));
-
-        let games = patch_obj.get("games").and_then(|v| v.as_array()).cloned();
-        assert_eq!(
-            games,
-            Some(vec![
-                json!({"id": "chess", "status": "downloading", "version": "2.0.0"}),
-                json!({"id": "pong", "status": "ready", "version": "1.1.0"})
-            ])
-        );
-    }
 }

@@ -41,6 +41,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
         "last_scan_at": "",
     }
     assert state["dim_window"]["dim_window_enabled"] is True
+    assert "time_zone" not in state
     assert state["device_info"] == {
         "id": "AA:BB:CC:DD:EE:FF",
         "sn": "SN123",
@@ -121,6 +122,86 @@ def test_coerce_pages_games_lists_does_not_invent_bluetooth():
     assert "bluetooth" not in out
 
 
+def test_sanitize_firmware_partial_patch_drops_read_only_fields():
+    out = ssb._sanitize_firmware_partial_patch(
+        {
+            "brightness": 70,
+            "time_zone": "Asia/Taipei",
+            "dim_window": {"dim_window_enabled": True},
+            "pages": [{"uuid": "p1"}],
+            "pages_updated_at": "2026-01-01T00:00:00Z",
+            "device_info": {
+                "id": "AA:BB:CC:DD:EE:FF",
+                "sn": "S1",
+                "model": "PixelDart",
+                "hardware_version": "2a",
+                "name": "Kitchen",
+            },
+            "firmware": {"version": "1.2.3", "update": False, "channel": "beta"},
+        }
+    )
+
+    assert out == {
+        "brightness": 70,
+        "pages": [{"uuid": "p1"}],
+        "pages_updated_at": "2026-01-01T00:00:00Z",
+        "device_info": {
+            "id": "AA:BB:CC:DD:EE:FF",
+            "sn": "S1",
+            "model": "PixelDart",
+            "hardware_version": "2a",
+        },
+        "firmware": {"version": "1.2.3", "update": False},
+    }
+
+
+def test_sanitize_firmware_partial_patch_keeps_game_identity_only_for_lookup():
+    out = ssb._sanitize_firmware_partial_patch(
+        {
+            "games": [
+                {
+                    "id": "chess",
+                    "name": "Chess",
+                    "status": "PLAYING",
+                    "version": "1.0.0",
+                    "url": "https://example.test/game.zip",
+                },
+                {"id": "empty-status"},
+                {"status": "ready"},
+            ]
+        }
+    )
+
+    assert out == {
+        "games": [{"id": "chess", "status": "playing", "version": "1.0.0"}]
+    }
+
+
+def test_publish_device_state_update_sanitizes_partial_payload(monkeypatch):
+    captured = []
+
+    class _Engine:
+        def publish_partial(self, payload, source=None):
+            captured.append((payload, source))
+
+    monkeypatch.setattr(ssb, "_sync_engine", _Engine())
+    ssb.publish_device_state_update(
+        {
+            "volume": 22,
+            "device_info": {"id": "AA:BB:CC:DD:EE:FF", "name": "Kitchen"},
+            "dim_window": {"dim_window_enabled": True},
+        },
+        source="test",
+    )
+
+    assert captured == [
+        (
+            {"volume": 22, "device_info": {"id": "AA:BB:CC:DD:EE:FF"}},
+            "test",
+        )
+    ]
+
+
 def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
     monkeypatch.setattr(ssb, "_build_initial_state", lambda _d: {"device_info": {"id": "AA:BB:CC:DD:EE:FF"}})
@@ -139,12 +220,11 @@ def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_d
         ssb,
         "_build_initial_state",
         lambda _d: {
-            "time_zone": "UTC",
             "volume": 10,
             "brightness": 20,
             "games": [{"id": "local-only", "version": "1.0.0", "status": "ready"}],
             "dim_window": {"dim_window_enabled": False},
-            "device_info": {"id": "AA:BB:CC:DD:EE:FF"},
+            "device_info": {"id": "AA:BB:CC:DD:EE:FF", "name": "Local"},
             "firmware": {"version": "local-fw", "update": False},
         },
     )
@@ -153,6 +233,9 @@ def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_d
 
     remote = {
         "device_updated_at": "2026-04-23T11:00:00",
+        "time_zone": "Asia/Taipei",
+        "dim_window": {"dim_window_enabled": True},
+        "device_info": {"id": "AA:BB:CC:DD:EE:FF", "name": "Remote"},
         "games": [
             {"id": "01dartgame", "version": "1.0.6", "status": "ready"},
             {"id": "cricket", "version": "1.2.0", "status": "ready"},
@@ -165,6 +248,9 @@ def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_d
         "cricket",
         "splashgame",
     ]
+    assert merged["time_zone"] == "Asia/Taipei"
+    assert merged["dim_window"] == {"dim_window_enabled": True}
+    assert merged["device_info"]["name"] == "Remote"
 
 
 def test_load_device_json_reads_device_json(tmp_path, monkeypatch):
