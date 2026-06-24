@@ -126,7 +126,16 @@ def test_service_install_scripts_reference_mcp_service():
     setup = open("setup.sh", encoding="utf-8").read()
     update = open("update.sh", encoding="utf-8").read()
     service = open("services/dartsnut_mcp.service", encoding="utf-8").read()
+    mcp_definition = json.load(open("mcp/dartsnut-firmware.mcp.json", encoding="utf-8"))
 
     assert "dartsnut_mcp.service" in setup
     assert "dartsnut_mcp.service" in update
     assert "--port 9252" in service
+    assert mcp_definition == {
+        "mcpServers": {
+            "dartsnut-firmware": {
+                "type": "http",
+                "url": "${DARTSNUT_MACHINE_URL:-http://127.0.0.1:9252}/mcp",
+            }
+        }
+    }
