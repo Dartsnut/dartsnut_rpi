@@ -117,45 +117,42 @@ class CommunityApiClient:
         return data
 
     def fetch_game_metadata(self, game_id: str) -> dict:
-        """Return public community metadata for a game id using the community list API."""
+        """Return public game metadata from the mobile game detail API."""
         if not game_id or "/" in game_id:
             raise ValueError(f"Invalid game_id: {game_id!r}")
 
-        url = f"{self._config.base_url}/community/game/list"
+        url = f"{self._config.base_url}/mobile/game/get-detail"
         response = self._session.get(
             url,
-            params={"page": 1, "size": 20, "game_name": game_id},
+            params={"game_id": game_id},
             timeout=self._config.timeout,
         )
         if response.status_code == 404:
             raise PreviewNotFound(f"No game found for {game_id!r}")
         response.raise_for_status()
         payload = response.json()
-        rows = ((payload.get("data") or {}).get("list") or []) if isinstance(payload, dict) else []
-        normalized = str(game_id).strip().lower()
-        match = None
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            row_game_id = str(row.get("game_id") or "").strip().lower()
-            if row_game_id == normalized:
-                match = row
-                break
-        if match is None and len(rows) == 1 and isinstance(rows[0], dict):
-            match = rows[0]
-        if match is None:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
             raise PreviewNotFound(f"No game found for {game_id!r}")
 
-        preview_urls = []
-        cover = str(match.get("main_cover") or "").strip()
-        if cover:
-            preview_urls.append(cover)
+        preview_urls = self._normalize_preview_urls(data.get("preview"))
         return {
-            "id": str(match.get("game_id") or game_id),
-            "name": match.get("game_name") or game_id,
-            "main_cover": cover,
+            "id": str(data.get("game_id") or game_id),
+            "name": data.get("game_name") or game_id,
+            "main_cover": str(data.get("main_cover") or "").strip(),
             "preview_urls": preview_urls,
         }
+
+    @staticmethod
+    def _normalize_preview_urls(preview_raw) -> list[str]:
+        if preview_raw is None:
+            return []
+        if isinstance(preview_raw, list):
+            return [str(item).strip() for item in preview_raw if str(item or "").strip()]
+        if isinstance(preview_raw, str):
+            value = preview_raw.strip()
+            return [value] if value else []
+        return []
 
     def build_preview_url(self, path: str) -> str:
         """Build an absolute preview image URL from API image fields."""

@@ -82,13 +82,10 @@ def test_fetch_preview_returns_bytes_on_200():
     metadata_response.status_code = 200
     metadata_response.json.return_value = {
         "data": {
-            "list": [
-                {
-                    "game_id": "game123",
-                    "game_name": "Game 123",
-                    "main_cover": "https://cdn.example.com/game123.png",
-                }
-            ]
+            "game_id": "game123",
+            "game_name": "Game 123",
+            "main_cover": "https://cdn.example.com/cover.png",
+            "preview": ["https://cdn.example.com/game123.png"],
         }
     }
     metadata_response.raise_for_status = MagicMock()
@@ -103,8 +100,8 @@ def test_fetch_preview_returns_bytes_on_200():
         result = client.fetch_preview("game123")
 
     assert result == b"PNG_BYTES"
-    assert mock_get.call_args_list[0][0][0] == "https://test.example.com/community/game/list"
-    assert mock_get.call_args_list[0][1]["params"]["game_name"] == "game123"
+    assert mock_get.call_args_list[0][0][0] == "https://test.example.com/mobile/game/get-detail"
+    assert mock_get.call_args_list[0][1]["params"]["game_id"] == "game123"
     assert mock_get.call_args_list[1][0][0] == "https://cdn.example.com/game123.png"
 
 
@@ -161,10 +158,10 @@ def test_fetch_game_metadata_selects_exact_game_id():
     mock_response.status_code = 200
     mock_response.json.return_value = {
         "data": {
-            "list": [
-                {"game_id": "other", "game_name": "Other", "main_cover": "other.png"},
-                {"game_id": "01dartgame", "game_name": "01 Darts Game", "main_cover": "cover.png"},
-            ]
+            "game_id": "01dartgame",
+            "game_name": "01 Darts Game",
+            "main_cover": "cover.png",
+            "preview": ["preview-1.png", "preview-2.png"],
         }
     }
     mock_response.raise_for_status = MagicMock()
@@ -174,7 +171,29 @@ def test_fetch_game_metadata_selects_exact_game_id():
 
     assert meta["id"] == "01dartgame"
     assert meta["name"] == "01 Darts Game"
-    assert meta["preview_urls"] == ["cover.png"]
+    assert meta["main_cover"] == "cover.png"
+    assert meta["preview_urls"] == ["preview-1.png", "preview-2.png"]
+
+
+def test_fetch_game_metadata_handles_missing_preview_list():
+    client = _make_client()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "game_id": "01dartgame",
+            "game_name": "01 Darts Game",
+            "main_cover": "cover.png",
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client._session, "get", return_value=mock_response):
+        meta = client.fetch_game_metadata("01dartgame")
+
+    assert meta["main_cover"] == "cover.png"
+    assert meta["preview_urls"] == []
 
 
 def test_build_preview_url_uses_image_base_for_relative_paths():
