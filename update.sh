@@ -124,9 +124,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     sudo systemctl daemon-reload
     sudo systemctl enable dartsnut_matrix.service
     sudo systemctl enable dartsnut_mcp.service
-    if ! sudo systemctl is-active --quiet dartsnut_mcp.service; then
-        sudo systemctl start dartsnut_mcp.service
-    fi
+    sudo systemctl restart dartsnut_mcp.service
 else
     echo "Warning: services directory not found at ${SERVICES_DIR}; skipping boot asset update."
 fi
