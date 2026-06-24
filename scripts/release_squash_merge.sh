@@ -46,6 +46,9 @@ ALLOWLIST=(
   game_lifecycle.py
   machine_state_service.py
   network_utils.py
+  community_api.py
+  preview_cache.py
+  validation_worker.py
   remote_sync_bridge.py
   supabase_sync_bridge.py
   setup.sh
@@ -302,6 +305,28 @@ assert_index_excludes_legacy_requirements() {
   fi
 }
 
+assert_release_imports_resolve() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "${tmpdir}"; rmdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null || true' EXIT INT TERM
+  git checkout-index --prefix="${tmpdir}/" -a
+  log "verifying release import graph from staged allowlist"
+  PYTHONPATH="${tmpdir}" python3 - <<'PY'
+import importlib
+
+for module in (
+    "community_api",
+    "preview_cache",
+    "validation_worker",
+    "game_lifecycle",
+    "widget_lifecycle",
+    "machine_state_service",
+):
+    importlib.import_module(module)
+PY
+  rm -rf "${tmpdir}"
+}
+
 tag_release_commit() {
   local version="$1"
   local tag_name="v${version}"
@@ -467,6 +492,7 @@ main() {
   assert_index_excludes_supabase_trees
   assert_scripts_allowlist_only
   assert_index_excludes_legacy_requirements
+  assert_release_imports_resolve
 
   if git diff --cached --quiet; then
     fail "no changes staged after allowlist; nothing to commit"
