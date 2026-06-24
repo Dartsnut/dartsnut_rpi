@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 ExecStart=/home/rpi/dartsnut_rpi/uv run uvicorn mcp_server.app:app --host 0.0.0.0 --port 9252
 Restart=always
+SuccessExitStatus=143
 
 [Install]
 WantedBy=multi-user.target
-

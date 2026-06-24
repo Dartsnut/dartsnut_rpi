@@ -131,6 +131,8 @@ def test_service_install_scripts_reference_mcp_service():
     assert "dartsnut_mcp.service" in setup
     assert "dartsnut_mcp.service" in update
     assert "--port 9252" in service
+    assert "SuccessExitStatus=143" in service
+    assert update.index("refresh_uv_project") < update.index("restart dartsnut_mcp.service")
     assert mcp_definition == {
         "mcpServers": {
             "dartsnut-firmware": {
