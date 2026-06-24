@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
+from runtime.api_token_store import delete_api_token_file
 from runtime import device_json_identity
 
 _log = logging.getLogger(__name__)
@@ -325,6 +326,7 @@ class MachineStateService:
         Reset mutable factory fields while preserving device identity metadata.
         """
         _log.info("machine state: resetting device.json to factory fields")
+        delete_api_token_file()
         try:
             existing = self._read_device_info() or {}
             payload = dict(existing)
@@ -362,4 +364,3 @@ def init_machine_state_service(
 
 def get_machine_state_service() -> Optional[MachineStateService]:
     return _service
-

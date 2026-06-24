@@ -28,6 +28,7 @@ from core.helpers import (
 from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
 from core.retry import retry_with_backoff
 from domain.app_context import AppContext
+from runtime.api_token_store import build_api_headers
 
 _log = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ def check_and_update_widget_version(widget_id: str):
         try:
             response = requests.get(
                 f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}",
+                headers=build_api_headers(),
                 timeout=(5, 30),
             )
             if response.status_code != 200:

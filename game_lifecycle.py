@@ -1,4 +1,5 @@
 """Game lifecycle: start/term game process, load game list."""
+import atexit
 import base64
 import io
 import json
@@ -19,6 +20,7 @@ from core.helpers import (
 )
 from core.app_env import ensure_app_venv
 from core.retry import retry_with_backoff
+from runtime.api_token_store import build_api_headers
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -28,6 +30,48 @@ import assets
 from PIL import Image
 
 _log = logging.getLogger(__name__)
+
+from preview_cache import PreviewCache
+from validation_worker import ValidationWorker, FETCH_MISSING, VALIDATE_EXPIRED
+
+_preview_cache: "PreviewCache | None" = None
+_validation_worker: "ValidationWorker | None" = None
+_worker_init_lock = threading.Lock()
+
+
+def _ensure_worker_started() -> None:
+    global _preview_cache, _validation_worker
+    with _worker_init_lock:
+        if _preview_cache is None:
+            _preview_cache = PreviewCache()
+        if _validation_worker is None:
+            _validation_worker = ValidationWorker(max_workers=2)
+            _validation_worker.start()
+
+
+def shutdown_preview_worker() -> None:
+    global _validation_worker
+    if _validation_worker is not None:
+        _validation_worker.shutdown(wait=True, timeout=5)
+        _validation_worker = None
+
+
+atexit.register(shutdown_preview_worker)
+
+
+_game_list_cache: list = []
+_game_list_cache_lock = threading.Lock()
+
+
+def _on_preview_updated(game_id: str, preview_data: list) -> None:
+    with _game_list_cache_lock:
+        for game in _game_list_cache:
+            if game.get("id") == game_id or game.get("community_id") == game_id:
+                game["preview"] = preview_data
+                _log.info("[Preview] Updated in-memory preview for game %s", game_id)
+                return
+    _log.debug("[Preview] Received preview update for %s but game not in cache", game_id)
+
 
 # Track in-flight game downloads (by game_id) to prevent duplicate concurrent downloads
 _game_background_download_inflight = set()
@@ -69,6 +113,39 @@ def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
         blank = Image.new("RGB", (128, 160), (0, 0, 0))
         return [bytearray(blank.tobytes())]
     return images
+
+
+def generate_placeholder_preview(game_name: str, status_hint: str) -> list:
+    """
+    Generate a 128x160 black placeholder frame with game name and status text.
+
+    Returns a single-frame list matching the format of _decode_game_preview_frames().
+    """
+    from PIL import ImageDraw, ImageFont
+    canvas = Image.new("RGB", (128, 160), (0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    # Try to load a small font; fall back to PIL default if unavailable
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except Exception:
+        font = ImageFont.load_default()
+    # Truncate long names to fit 128px width
+    name = game_name[:18] if len(game_name) > 18 else game_name
+    name_bbox = draw.textbbox((0, 0), name, font=font)
+    status_bbox = draw.textbbox((0, 0), status_hint, font=font)
+    line_gap = 4
+    name_height = name_bbox[3] - name_bbox[1]
+    status_height = status_bbox[3] - status_bbox[1]
+    block_height = name_height + line_gap + status_height
+    y = max(0, (128 - block_height) // 2)
+    draw.text((4, y - name_bbox[1]), name, fill=(200, 200, 200), font=font)
+    draw.text((4, y + name_height + line_gap - status_bbox[1]), status_hint, fill=(120, 120, 120), font=font)
+    return [bytearray(canvas.tobytes())]
+
+
+def _is_blank_frame(frame: bytearray) -> bool:
+    """Return True if the frame contains only black pixels (all zeros)."""
+    return all(b == 0 for b in frame)
 
 
 def get_local_game_version(gameid: str) -> str:
@@ -273,6 +350,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         response = retry_with_backoff(
             lambda: requests.get(
                 f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}",
+                headers=build_api_headers(),
                 timeout=(5, 30),
             ),
             succeeded=lambda r: getattr(r, "status_code", None) == 200,
@@ -473,6 +551,7 @@ def load_game_list() -> list:
             if conf.get("type") != "game":
                 continue
             # Ensure core fields exist for downstream consumers.
+            conf_has_explicit_id = "id" in conf
             conf_id = conf.get("id", name)
             conf_version = conf.get("version", "")
             conf["id"] = conf_id
@@ -481,10 +560,34 @@ def load_game_list() -> list:
             # downloading) can be layered on top where appropriate.
             conf.setdefault("status", "ready")
             if "preview" in conf:
-                conf["preview"] = _decode_game_preview_frames(conf.get("preview"), name)
+                preview = _decode_game_preview_frames(conf.get("preview"), name)
+            else:
+                preview = []
+
+            # Fall back to cache/API if preview is missing or blank
+            if not preview or (len(preview) == 1 and _is_blank_frame(preview[0])):
+                _ensure_worker_started()
+                game_id = conf.get("community_id") or (conf_id if conf_has_explicit_id else None)
+                if not game_id:
+                    _log.warning("[Preview] Game '%s' has no community_id or id, skipping API fetch", conf.get("name", name))
+                    preview = generate_placeholder_preview(conf.get("name", name), "Preview unavailable")
+                else:
+                    cached = _preview_cache.get_cached_preview(game_id)
+                    if cached:
+                        preview = cached
+                        if _preview_cache.is_cache_expired(game_id):
+                            _validation_worker.submit(game_id, priority=VALIDATE_EXPIRED, callback=_on_preview_updated)
+                    else:
+                        preview = generate_placeholder_preview(conf.get("name", name), "Loading Preview")
+                        _validation_worker.submit(game_id, priority=FETCH_MISSING, callback=_on_preview_updated)
+
+            conf["preview"] = preview
             game_list.append(conf)
         except Exception as e:
             _log.warning("Error loading game config for %s: %s", name, e)
+    with _game_list_cache_lock:
+        _game_list_cache.clear()
+        _game_list_cache.extend(game_list)
     return game_list
 
 

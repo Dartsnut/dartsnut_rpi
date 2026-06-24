@@ -52,6 +52,7 @@ from widget_lifecycle import (
 from game_lifecycle import (
     load_menu_game_list,
     refresh_menu_game_list_if_requested,
+    shutdown_preview_worker,
     start_game_process,
     term_game_process,
     ensure_game_downloaded,
@@ -885,22 +886,25 @@ init_machine_state_service(
 init_widgets(ctx)
 
 
-run_main_loop(
-    dim_rt=dim_rt,
-    dartsnut=dartsnut,
-    ctx=ctx,
-    assets=assets,
-    get_device_info=get_device_info,
-    parse_hhmm=machine_api.parse_hhmm,
-    update_brightness_transition=_update_brightness_transition,
-    start_brightness_transition=_start_brightness_transition,
-    init_widgets=init_widgets,
-    reload_pages_from_conf=reload_pages_from_conf,
-    term_game_process=term_game_process,
-    start_game_process=start_game_process,
-    term_widget_processes=term_widget_processes,
-    get_buttons_pressed=get_buttons_pressed,
-    check_widget_ready=check_widget_ready,
-    in_game_state_cls=InGameState,
-    get_remote_sync=get_remote_sync,
-)
+try:
+    run_main_loop(
+        dim_rt=dim_rt,
+        dartsnut=dartsnut,
+        ctx=ctx,
+        assets=assets,
+        get_device_info=get_device_info,
+        parse_hhmm=machine_api.parse_hhmm,
+        update_brightness_transition=_update_brightness_transition,
+        start_brightness_transition=_start_brightness_transition,
+        init_widgets=init_widgets,
+        reload_pages_from_conf=reload_pages_from_conf,
+        term_game_process=term_game_process,
+        start_game_process=start_game_process,
+        term_widget_processes=term_widget_processes,
+        get_buttons_pressed=get_buttons_pressed,
+        check_widget_ready=check_widget_ready,
+        in_game_state_cls=InGameState,
+        get_remote_sync=get_remote_sync,
+    )
+finally:
+    shutdown_preview_worker()

@@ -7,9 +7,11 @@ Dim-window runtime lives in DimWindowRuntime so set_brightness can share state.
 from __future__ import annotations
 
 import logging
+import json
+import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time
+from datetime import datetime, timezone, time as dt_time
 from typing import Any, Callable, Type
 
 from PIL import Image
@@ -17,6 +19,9 @@ from PIL import Image
 from domain.app_context import AppContext
 
 _log = logging.getLogger(__name__)
+_UI_STATE_SNAPSHOT_PATH = "/tmp/dartsnut_ui_state.json"
+_ui_snapshot_last_write_at = 0.0
+_ui_snapshot_last_payload = ""
 
 
 @dataclass
@@ -26,6 +31,60 @@ class DimWindowRuntime:
     last_dim_check_time: float = 0.0
     dim_force_normal_brightness: bool = False
     dim_force_normal_start_time: float | None = None
+
+
+def _build_ui_state_snapshot(ctx: AppContext) -> dict[str, Any]:
+    page = None
+    pages = ctx.pages or []
+    if isinstance(ctx.page_index, int) and 0 <= ctx.page_index < len(pages):
+        candidate = pages[ctx.page_index]
+        if isinstance(candidate, dict):
+            page = candidate
+
+    widget_ids = []
+    if isinstance(page, dict):
+        for widget in page.get("widgets") or []:
+            if not isinstance(widget, dict):
+                continue
+            widget_data = widget.get("widget") or widget
+            if isinstance(widget_data, dict):
+                widget_id = str(widget_data.get("id") or "").strip()
+                if widget_id:
+                    widget_ids.append(widget_id)
+
+    running_game_id = ""
+    if isinstance(ctx.game, dict):
+        running_game_id = str(ctx.game.get("game_id") or "")
+
+    return {
+        "state": str(ctx.state_str or ""),
+        "game_id": str(ctx.game_id or ""),
+        "running_game_id": running_game_id,
+        "page_index": ctx.page_index,
+        "page_uuid": str((page or {}).get("uuid") or "") if isinstance(page, dict) else "",
+        "page_title": str((page or {}).get("title") or "") if isinstance(page, dict) else "",
+        "widget_ids": widget_ids,
+        "wifi_connected": bool(ctx.wifi_connected),
+        "internet_connected": bool(ctx.internet_connected),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def write_ui_state_snapshot(ctx: AppContext) -> None:
+    global _ui_snapshot_last_payload, _ui_snapshot_last_write_at
+    now = time.monotonic()
+    if now - _ui_snapshot_last_write_at < 1.0:
+        return
+    payload = json.dumps(_build_ui_state_snapshot(ctx), sort_keys=True)
+    if payload == _ui_snapshot_last_payload:
+        _ui_snapshot_last_write_at = now
+        return
+    tmp_path = f"{_UI_STATE_SNAPSHOT_PATH}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as file:
+        file.write(payload)
+    os.replace(tmp_path, _UI_STATE_SNAPSHOT_PATH)
+    _ui_snapshot_last_payload = payload
+    _ui_snapshot_last_write_at = now
 
 
 def run_main_loop(
@@ -134,6 +193,10 @@ def run_main_loop(
                     )
 
             ctx.state_str = ctx.current_state.name()
+            try:
+                write_ui_state_snapshot(ctx)
+            except Exception as e:
+                _log.debug("Error writing UI state snapshot: %s", e)
 
             if ctx.locate_device_intv:
                 dartsnut.update_frame_buffer(assets.identify_image)
