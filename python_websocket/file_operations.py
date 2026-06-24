@@ -17,6 +17,7 @@ from python_websocket.error_handler import (
 
 from machine_state_service import get_machine_state_service
 from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
+from runtime.api_token_store import build_api_headers
 
 _log = logging.getLogger(__name__)
 
@@ -458,7 +459,8 @@ def _download_game_worker(game_id):
 
         # Get download info from remote API (same as in main.start_game_process)
         response = requests.get(
-            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}"
+            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}",
+            headers=build_api_headers(),
         )
         if response.status_code != 200:
             _set_download_progress(

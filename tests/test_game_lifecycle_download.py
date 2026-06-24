@@ -58,6 +58,43 @@ def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
     assert calls["download"] == [("https://example.com/chess.zip", "abc123", "chess")]
 
 
+def test_ensure_game_downloaded_sends_token_header(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = {"headers": None}
+    state = {"exists": False}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_download_url": "https://example.com/chess.zip",
+                    "game_download_md5": "abc123",
+                }
+            }
+
+    def _get(_url, **kwargs):
+        calls["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda _p: state["exists"])
+    monkeypatch.setattr("game_lifecycle.requests.get", _get)
+    monkeypatch.setattr(
+        "game_lifecycle._download_game_file",
+        lambda *_a: state.__setitem__("exists", True) or True,
+    )
+
+    from runtime.api_token_store import preserve_remote_user_token
+
+    preserve_remote_user_token({"token": "abc"})
+
+    assert ensure_game_downloaded("chess") is True
+    assert calls["headers"] == {"Token": "abc"}
+
+
 def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
     calls = {"download": []}
     state = {"version": "1.0.0"}
