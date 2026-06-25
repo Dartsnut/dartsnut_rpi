@@ -59,10 +59,13 @@ ALLOWLIST=(
   python_websocket
   runtime
   states
+  mcp
+  mcp_server
   assets_media
   DartsnutRGBMatrix
   services/dartsnut_matrix.service
   services/dartsnut_python.service
+  services/dartsnut_mcp.service
   services/99-dartsnut-tcp.conf
   services/logo.ppm
   bridge
@@ -321,6 +324,10 @@ for module in (
     "game_lifecycle",
     "widget_lifecycle",
     "machine_state_service",
+    "mcp_server.framebuffer",
+    "mcp_server.git_ops",
+    "mcp_server.state_snapshot",
+    "mcp_server.tools",
 ):
     importlib.import_module(module)
 PY
