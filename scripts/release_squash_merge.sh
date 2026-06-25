@@ -36,6 +36,7 @@ RELEASE_SCRIPT_LOCK="${REPO_ROOT}/.git/dartsnut-release-squash.lock"
 ALLOWLIST=(
   .gitattributes
   .gitignore
+  README.md
   uv
   uv.sha256
   main.py
