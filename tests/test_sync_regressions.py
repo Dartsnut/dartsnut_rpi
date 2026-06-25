@@ -179,3 +179,70 @@ def test_outbox_skips_settings_patch_matching_last_ack():
     assert duplicate_ref == ""
     assert outbox.pending_count() == 0
     assert sent == [(ref, {"brightness": 40})]
+
+
+def test_outbox_coalesces_pending_game_status_so_latest_ready_wins():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {
+        "games": [{"id": "g1", "status": "ready", "version": "1"}]
+    }
+
+
+def test_outbox_coalesces_pending_game_status_so_latest_playing_wins():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {
+        "games": [{"id": "g1", "status": "playing", "version": "1"}]
+    }
+
+
+def test_outbox_keeps_different_game_status_ids_separate():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g2", "status": "playing", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 2
+
+
+def test_outbox_keeps_different_source_game_status_entries_separate():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="remote")
+
+    assert outbox.pending_count() == 2
+
+
+def test_outbox_does_not_coalesce_full_patch_with_game_status():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue(
+        {"games": [{"id": "g1", "status": "ready", "version": "1"}]},
+        full=True,
+        source="local",
+    )
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 2

@@ -68,6 +68,8 @@ class SyncOutbox:
                 ):
                     return ""
                 next_patch = self._coalesce_pending_settings(next_patch, source)
+            elif not full and self._is_single_game_status_patch(next_patch):
+                next_patch = self._coalesce_pending_game_status(next_patch, source)
             entry = OutboxEntry(ref=ref, patch=next_patch, full=full, source=source)
             self._pending[ref] = entry
             self._order.append(ref)
@@ -105,6 +107,25 @@ class SyncOutbox:
     def _is_settings_only(self, patch: Dict[str, Any]) -> bool:
         return bool(patch) and set(patch).issubset(_SETTING_COALESCE_KEYS)
 
+    def _is_single_game_status_patch(self, patch: Dict[str, Any]) -> bool:
+        if set(patch) != {"games"}:
+            return False
+        games = patch.get("games")
+        if not isinstance(games, list) or len(games) != 1:
+            return False
+        game = games[0]
+        return (
+            isinstance(game, dict)
+            and bool(str(game.get("id") or "").strip())
+            and bool(str(game.get("status") or "").strip())
+        )
+
+    def _single_game_patch_id(self, patch: Dict[str, Any]) -> str:
+        games = patch.get("games")
+        if not isinstance(games, list) or not games or not isinstance(games[0], dict):
+            return ""
+        return str(games[0].get("id") or "").strip()
+
     def _coalesce_pending_settings(
         self, patch: Dict[str, Any], source: Optional[str]
     ) -> Dict[str, Any]:
@@ -125,6 +146,29 @@ class SyncOutbox:
         for ref in removed:
             self._order.remove(ref)
         return merged
+
+    def _coalesce_pending_game_status(
+        self, patch: Dict[str, Any], source: Optional[str]
+    ) -> Dict[str, Any]:
+        game_id = self._single_game_patch_id(patch)
+        if not game_id:
+            return patch
+        removed: list[str] = []
+        for ref in list(self._order):
+            entry = self._pending.get(ref)
+            if (
+                entry is None
+                or entry.full
+                or entry.source != source
+                or not self._is_single_game_status_patch(entry.patch)
+                or self._single_game_patch_id(entry.patch) != game_id
+            ):
+                continue
+            self._pending.pop(ref, None)
+            removed.append(ref)
+        for ref in removed:
+            self._order.remove(ref)
+        return patch
 
     def _run(self) -> None:
         while not self._stop.wait(0.5):
