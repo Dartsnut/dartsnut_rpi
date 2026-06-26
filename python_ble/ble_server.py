@@ -24,6 +24,62 @@ UART_SERVICE = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
 RX_CHARACTERISTIC = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'
 TX_CHARACTERISTIC = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
 
+_WIFI_PASSWORD_ERROR_PATTERNS = (
+    "invalid 802.11i/wpa passphrase",
+    "invalid password",
+    "bad password",
+    "wrong password",
+    "no valid secrets",
+    "secrets were required",
+)
+
+_WIFI_TIMEOUT_ERROR_PATTERNS = (
+    "timed out",
+    "timeout",
+    "activation took too long",
+)
+
+
+def _command_output_text(exc: subprocess.CalledProcessError) -> str:
+    return " ".join(
+        str(value or "")
+        for value in (getattr(exc, "stdout", ""), getattr(exc, "stderr", ""))
+    ).lower()
+
+
+def _ble_error_response(command: str, error_code: ErrorCode, message: str, **kwargs):
+    response = create_error_response(command, error_code, message, **kwargs)
+    response["command"] = command
+    return response
+
+
+def _connect_wifi_error_response(exc: subprocess.CalledProcessError):
+    output = _command_output_text(exc)
+    if exc.returncode == 255:
+        return _ble_error_response(
+            "connect_wifi",
+            ErrorCode.WIFI_ALREADY_CONNECTED,
+            "Already connected to the given network",
+        )
+    if any(pattern in output for pattern in _WIFI_TIMEOUT_ERROR_PATTERNS):
+        return _ble_error_response(
+            "connect_wifi",
+            ErrorCode.NETWORK_ERROR,
+            "Unable to connect to the network",
+        )
+    if exc.returncode == 4 and any(
+        pattern in output for pattern in _WIFI_PASSWORD_ERROR_PATTERNS
+    ):
+        return _ble_error_response(
+            "connect_wifi",
+            ErrorCode.WIFI_PASSWORD_WRONG,
+            "The WiFi password is incorrect",
+        )
+
+    response = handle_exception("connect_wifi", exc, "Failed to connect to WiFi")
+    response["command"] = "connect_wifi"
+    return response
+
 
 def _ble_mac_last_two_octets(adapter_address: str) -> str:
     """Return the last two octets of a BLE MAC address as 4 hex chars (e.g. eeff)."""
@@ -112,16 +168,12 @@ class UARTDevice:
                 cls.send_data({"command": "connect_wifi", "status": "success", "ip_address": ip_address})
             except subprocess.CalledProcessError as inner_e:
                 # Check for specific error codes that shouldn't trigger fallback
-                if inner_e.returncode == 255:
-                    # Already connected - don't try fallback
-                    error_response = create_error_response("connect_wifi", ErrorCode.WIFI_ALREADY_CONNECTED, "Already connected to the given network")
-                    error_response["command"] = "connect_wifi"
-                    cls.send_data(error_response)
-                    return
-                elif inner_e.returncode == 4:
-                    # Wrong password - don't try fallback
-                    error_response = create_error_response("connect_wifi", ErrorCode.WIFI_PASSWORD_WRONG, "The WiFi password is incorrect")
-                    error_response["command"] = "connect_wifi"
+                error_response = _connect_wifi_error_response(inner_e)
+                if error_response.get("error_code") in {
+                    ErrorCode.WIFI_ALREADY_CONNECTED.value,
+                    ErrorCode.WIFI_PASSWORD_WRONG.value,
+                    ErrorCode.NETWORK_ERROR.value,
+                }:
                     cls.send_data(error_response)
                     return
                 # If that fails with other error, try specifying WPA-PSK explicitly (sometimes needed for nmcli)
@@ -140,15 +192,7 @@ class UARTDevice:
                 cls.send_data({"command": "connect_wifi", "ip_address": ip_address, "status": "success"})
         except subprocess.CalledProcessError as e:
             _log.warning("Failed to connect to WiFi: %s", e)
-            # Check nmcli return code for specific error conditions
-            if e.returncode == 255:
-                error_response = create_error_response("connect_wifi", ErrorCode.WIFI_ALREADY_CONNECTED, "Already connected to the given network")
-            elif e.returncode == 4:
-                error_response = create_error_response("connect_wifi", ErrorCode.WIFI_PASSWORD_WRONG, "The WiFi password is incorrect")
-            else:
-                error_response = handle_exception("connect_wifi", e, "Failed to connect to WiFi")
-            error_response["command"] = "connect_wifi"
-            cls.send_data(error_response)
+            cls.send_data(_connect_wifi_error_response(e))
 
     @classmethod
     def _reconnect_wifi_task(cls):
