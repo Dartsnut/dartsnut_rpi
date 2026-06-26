@@ -717,7 +717,7 @@ class RemoteDeviceConfigApplier:
         if not isinstance(config, dict):
             return
 
-        _log.info(
+        _log.debug(
             "remote config: apply snapshot source=%s pages=%s games=%s firmware_update=%s",
             str(config.get("last_update_source", "") or "").strip() or "?",
             isinstance(config.get("pages"), list),
@@ -743,7 +743,7 @@ class RemoteDeviceConfigApplier:
         skip_game_commands = False
         skip_games_dedupe = should_skip_duplicate_remote_snapshot(rt, config)
         if skip_games_dedupe:
-            _log.info(
+            _log.debug(
                 "remote config: skip duplicate bridge snapshot within %.1fs",
                 _DUPLICATE_SNAPSHOT_WINDOW_SECONDS,
             )
@@ -992,7 +992,7 @@ class RemoteDeviceConfigApplier:
                         "playing",
                         "ready",
                     }:
-                        _log.info(
+                        _log.debug(
                             "remote config: ignore bridge game status echo game_id=%s status=%s cfg_ts=%s",
                             game_id,
                             status,
@@ -1107,7 +1107,7 @@ class RemoteDeviceConfigApplier:
                     if status == "playing" and not should_accept_remote_playing_command(
                         rt, game_id, cfg_ts, source=source
                     ):
-                        _log.info(
+                        _log.debug(
                             "remote config: ignore stale playing game_id=%s cfg_ts=%s",
                             game_id,
                             cfg_ts,
