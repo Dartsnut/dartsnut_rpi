@@ -1,7 +1,42 @@
 from types import SimpleNamespace
 
+from PIL import Image, ImageFont
+
 from states import menu as smenu
 from states import settings as ssettings
+from states import widget as swidget
+
+
+class _Display:
+    def __init__(self):
+        self.frame = None
+
+    def update_frame_buffer(self, img):
+        self.frame = img
+
+
+def _icon(color):
+    return Image.new("RGBA", (11, 11), color)
+
+
+def _assets():
+    return SimpleNamespace(
+        logo_image=Image.new("RGB", (128, 128), (0, 0, 0)),
+        game_icon=_icon((10, 10, 10, 255)),
+        widget_icon=_icon((20, 20, 20, 255)),
+        settings_icon=_icon((30, 30, 30, 255)),
+        wifi_disconnect_icon=_icon((0, 0, 255, 255)),
+        internet_disconnect_icon=_icon((255, 0, 0, 255)),
+        font8=ImageFont.load_default(),
+    )
+
+
+class _Sync:
+    def is_bridge_active(self):
+        return True
+
+    def is_connected(self):
+        return True
 
 
 def test_settings_rssi_and_level_mappings():
@@ -11,7 +46,8 @@ def test_settings_rssi_and_level_mappings():
 
     assert ssettings._latency_to_color(None) == (128, 128, 128)
     assert ssettings._latency_to_color(100) == (0, 255, 0)
-    assert ssettings._latency_to_color(301) == (255, 0, 0)
+    assert ssettings._latency_to_color(600) == (0, 255, 0)
+    assert ssettings._latency_to_color(601) == (255, 0, 0)
 
     # Brightness level mapping and inverse
     lvl = ssettings._brightness_raw_to_level("bad")
@@ -93,12 +129,67 @@ def test_should_show_bridge_disconnect_icon(monkeypatch):
     monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 50)
     assert ssettings.should_show_bridge_disconnect_icon(ctx) is False
 
-    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 400)
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 601)
     assert ssettings.should_show_bridge_disconnect_icon(ctx) is True
 
     monkeypatch.setattr(ssettings, "get_supabase_rest_probe_ok", lambda: False)
     monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 50)
     assert ssettings.should_show_bridge_disconnect_icon(ctx) is True
+
+
+def test_menu_latency_disconnect_icon_uses_600ms_threshold(monkeypatch):
+    ctx = SimpleNamespace(
+        assets=_assets(),
+        display=_Display(),
+        menu_select_index=0,
+        wifi_connected=True,
+        get_device_info=lambda: {"model": "PixelDart"},
+    )
+    monkeypatch.setattr(smenu.time, "time", lambda: 0.0)
+    monkeypatch.setattr(smenu, "_check_firmware_updated_flag", lambda: False)
+    monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _Sync())
+    monkeypatch.setattr(ssettings, "get_supabase_rest_probe_ok", lambda: True)
+
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 600)
+    smenu.MenuState().update(ctx)
+    assert ctx.display.frame.getpixel((117, 0)) != (255, 0, 0)
+
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 601)
+    smenu.MenuState().update(ctx)
+    assert ctx.display.frame.getpixel((117, 0)) == (255, 0, 0)
+
+
+def test_widget_latency_disconnect_icon_uses_600ms_threshold(monkeypatch):
+    ctx = SimpleNamespace(
+        assets=_assets(),
+        display=_Display(),
+        page_freeze=False,
+        page_index=0,
+        last_page_index=0,
+        page_tick=0.0,
+        next_page_prepared_index=-1,
+        wifi_connected=True,
+        pages=[
+            {
+                "uuid": "page-1",
+                "enabled": True,
+                "duration": 60,
+                "widgets": [],
+                "framebuffer": bytearray(128 * 160 * 3),
+            }
+        ],
+    )
+    monkeypatch.setattr(swidget.time, "time", lambda: 0.0)
+    monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _Sync())
+    monkeypatch.setattr(ssettings, "get_supabase_rest_probe_ok", lambda: True)
+
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 600)
+    swidget.WidgetState().update(ctx)
+    assert ctx.display.frame.getpixel((117, 0)) != (255, 0, 0)
+
+    monkeypatch.setattr(ssettings, "get_supabase_rest_latency_ms", lambda: 601)
+    swidget.WidgetState().update(ctx)
+    assert ctx.display.frame.getpixel((117, 0)) == (255, 0, 0)
 
 
 def test_settings_wifi_icon_color_uses_rssi_when_bridge_inactive(monkeypatch):
