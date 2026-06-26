@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import os
 import signal
 
@@ -151,6 +152,26 @@ def test_load_game_list_bad_preview_still_includes_game_and_summary(monkeypatch,
     assert isinstance(game_list[0]["preview"][0], bytearray)
     assert len(game_list[0]["preview"][0]) == 128 * 160 * 3
     assert summary == [{"id": "dart_checker", "version": "2.0.0", "status": "ready"}]
+
+
+def test_bad_preview_decode_warning_is_deduped(caplog):
+    gl._bad_preview_warning_keys.clear()
+
+    with caplog.at_level(logging.DEBUG, logger=gl.__name__):
+        gl._decode_game_preview_frames(["!!!not-valid-base64!!!"], "dart_checker")
+        gl._decode_game_preview_frames(["!!!not-valid-base64!!!"], "dart_checker")
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "Skipping bad preview frame for dart_checker" in record.getMessage()
+    ]
+    warning_count = sum(1 for record in caplog.records if record.levelno == logging.WARNING)
+    debug_count = sum(1 for record in caplog.records if record.levelno == logging.DEBUG)
+
+    assert len(messages) == 2
+    assert warning_count == 1
+    assert debug_count == 1
 
 
 def test_local_game_index_maps_valid_game_ids_to_folders(monkeypatch, tmp_path):

@@ -10,7 +10,7 @@ import logging
 import os
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
@@ -19,6 +19,7 @@ from domain.game_remote_sync import handle_incoming_game_status
 _log = logging.getLogger(__name__)
 
 _DUPLICATE_SNAPSHOT_WINDOW_SECONDS = 2.0
+_LOCAL_GAME_EXIT_GUARD_SECONDS = 10.0
 _BRIDGE_SOURCES = frozenset({"supabase_bridge", "supabase_bridge_init"})
 
 
@@ -214,9 +215,14 @@ def note_local_game_transition(
     normalized = str(status or "").strip().lower()
     if normalized not in {"ready", "playing"}:
         return
-    runtime.local_game_transition_at[gid] = (
-        _normalize_utc_naive(at) if at is not None else _utc_now()
-    )
+    transition_at = _normalize_utc_naive(at) if at is not None else _utc_now()
+    runtime.local_game_transition_at[gid] = transition_at
+    if normalized == "ready":
+        runtime.local_game_exit_guard_until[gid] = transition_at + timedelta(
+            seconds=_LOCAL_GAME_EXIT_GUARD_SECONDS
+        )
+    else:
+        runtime.local_game_exit_guard_until.pop(gid, None)
 
 
 def should_accept_remote_playing_command(
@@ -236,6 +242,12 @@ def should_accept_remote_playing_command(
     if not gid:
         return False
     src = str(source or "").strip().lower()
+
+    exit_guard_until = runtime.local_game_exit_guard_until.get(gid)
+    if exit_guard_until is not None:
+        if _utc_now() <= exit_guard_until:
+            return False
+        runtime.local_game_exit_guard_until.pop(gid, None)
 
     local_at = runtime.local_game_transition_at.get(gid)
     if local_at is not None:
@@ -340,6 +352,7 @@ class RemoteConfigRuntimeState:
     last_applied_non_bridge_pages_fingerprint: Optional[str] = None
     last_remote_controller_macs: set[str] = field(default_factory=set)
     local_game_transition_at: Dict[str, datetime] = field(default_factory=dict)
+    local_game_exit_guard_until: Dict[str, datetime] = field(default_factory=dict)
     last_processed_remote_playing_at: Dict[str, datetime] = field(default_factory=dict)
     last_remote_snapshot_fingerprint: Optional[str] = None
     last_remote_snapshot_applied_at: Optional[datetime] = None
@@ -704,7 +717,7 @@ class RemoteDeviceConfigApplier:
         if not isinstance(config, dict):
             return
 
-        _log.info(
+        _log.debug(
             "remote config: apply snapshot source=%s pages=%s games=%s firmware_update=%s",
             str(config.get("last_update_source", "") or "").strip() or "?",
             isinstance(config.get("pages"), list),
@@ -730,7 +743,7 @@ class RemoteDeviceConfigApplier:
         skip_game_commands = False
         skip_games_dedupe = should_skip_duplicate_remote_snapshot(rt, config)
         if skip_games_dedupe:
-            _log.info(
+            _log.debug(
                 "remote config: skip duplicate bridge snapshot within %.1fs",
                 _DUPLICATE_SNAPSHOT_WINDOW_SECONDS,
             )
@@ -974,6 +987,18 @@ class RemoteDeviceConfigApplier:
                     if not game_id:
                         continue
                     game_id = str(game_id)
+                    if source in _BRIDGE_SOURCES and status in {
+                        "downloading",
+                        "playing",
+                        "ready",
+                    }:
+                        _log.debug(
+                            "remote config: ignore bridge game status echo game_id=%s status=%s cfg_ts=%s",
+                            game_id,
+                            status,
+                            cfg_ts,
+                        )
+                        continue
                     if status == "downloading":
                         was_downloading = game_id in rt.remote_downloading_game_ids
                         rt.remote_downloading_game_ids.add(game_id)
@@ -1082,7 +1107,7 @@ class RemoteDeviceConfigApplier:
                     if status == "playing" and not should_accept_remote_playing_command(
                         rt, game_id, cfg_ts, source=source
                     ):
-                        _log.info(
+                        _log.debug(
                             "remote config: ignore stale playing game_id=%s cfg_ts=%s",
                             game_id,
                             cfg_ts,

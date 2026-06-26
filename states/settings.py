@@ -25,6 +25,7 @@ except ImportError:
 
 # Rate limit WiFi RSSI: refresh every ~5 seconds
 RSSI_MIN_INTERVAL = 5
+SUPABASE_LATENCY_WARN_MS = 600
 _last_rssi = None
 _last_rssi_time = 0.0
 
@@ -71,7 +72,7 @@ def _latency_to_color(ms):
     """Map Supabase REST round-trip (ms) to (R, G, B)."""
     if ms is None:
         return (128, 128, 128)
-    if ms <= 300:
+    if ms <= SUPABASE_LATENCY_WARN_MS:
         return (0, 255, 0)
     return (255, 0, 0)
 

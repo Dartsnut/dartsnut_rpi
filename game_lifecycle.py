@@ -61,6 +61,8 @@ atexit.register(shutdown_preview_worker)
 
 _game_list_cache: list = []
 _game_list_cache_lock = threading.Lock()
+_bad_preview_warning_keys: set[tuple[str, str]] = set()
+_bad_preview_warning_lock = threading.Lock()
 
 
 def _on_preview_updated(game_id: str, preview_data: list) -> None:
@@ -87,7 +89,9 @@ def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
     """
     images: list = []
     if not isinstance(preview_raw, list):
-        _log.warning(
+        _log_bad_preview_once(
+            game_label,
+            f"invalid-type:{type(preview_raw).__name__}",
             "Invalid preview for %s (expected list, got %s); using blank frame",
             game_label,
             type(preview_raw).__name__,
@@ -108,11 +112,35 @@ def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
                 image.paste(img, (0, 0))
                 images.append(bytearray(image.tobytes()))
             except Exception as e:
-                _log.warning("Skipping bad preview frame for %s: %s", game_label, e)
+                _log_bad_preview_once(
+                    game_label,
+                    type(e).__name__,
+                    "Skipping bad preview frame for %s: %s",
+                    game_label,
+                    e,
+                )
     if not images:
         blank = Image.new("RGB", (128, 160), (0, 0, 0))
         return [bytearray(blank.tobytes())]
     return images
+
+
+def _log_bad_preview_once(
+    game_label: str,
+    reason_key: str,
+    message: str,
+    *args,
+) -> None:
+    """Warn once for repeated bad preview decode failures, then keep repeats at debug."""
+    key = (str(game_label), str(reason_key))
+    with _bad_preview_warning_lock:
+        first_seen = key not in _bad_preview_warning_keys
+        if first_seen:
+            _bad_preview_warning_keys.add(key)
+    if first_seen:
+        _log.warning(message, *args)
+    else:
+        _log.debug(message, *args)
 
 
 def generate_placeholder_preview(game_name: str, status_hint: str) -> list:
