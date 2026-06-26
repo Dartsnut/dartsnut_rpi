@@ -33,9 +33,11 @@ class SyncOutbox:
         send_fn: Callable[[str, Dict[str, Any], bool, Optional[str]], bool],
         *,
         backoff_seconds: tuple[float, ...] = _DEFAULT_BACKOFF_SECONDS,
+        ack_timeout_seconds: float = 30.0,
     ) -> None:
         self._send_fn = send_fn
         self._backoff = backoff_seconds
+        self._ack_timeout_seconds = max(0.1, float(ack_timeout_seconds))
         self._lock = threading.Lock()
         self._pending: Dict[str, OutboxEntry] = {}
         self._order: List[str] = []
@@ -188,10 +190,13 @@ class SyncOutbox:
             if entry.next_retry_at > now:
                 continue
             ok = self._send_fn(entry.ref, entry.patch, entry.full, entry.source)
-            if not ok:
-                with self._lock:
-                    e = self._pending.get(ref)
-                    if e is not None:
-                        e.attempts += 1
-                        idx = min(e.attempts, len(self._backoff) - 1)
-                        e.next_retry_at = time.monotonic() + self._backoff[idx]
+            with self._lock:
+                e = self._pending.get(ref)
+                if e is None:
+                    continue
+                if ok:
+                    e.next_retry_at = time.monotonic() + self._ack_timeout_seconds
+                else:
+                    e.attempts += 1
+                    idx = min(e.attempts, len(self._backoff) - 1)
+                    e.next_retry_at = time.monotonic() + self._backoff[idx]

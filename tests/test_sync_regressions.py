@@ -139,6 +139,48 @@ def test_outbox_ack_removes_pending():
     outbox.stop()
 
 
+def test_outbox_does_not_resend_successful_send_before_ack():
+    calls = []
+
+    def send_fn(ref, patch, _full, _source):
+        calls.append((ref, patch))
+        return True
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]})
+    outbox._flush_ready()
+
+    assert len(calls) == 1
+    assert outbox.pending_count() == 1
+
+
+def test_outbox_newer_game_status_cancels_older_inflight_retry():
+    calls = []
+
+    def send_fn(ref, patch, _full, _source):
+        calls.append((ref, patch))
+        return True
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    old_ref = outbox.enqueue(
+        {"games": [{"id": "g1", "status": "playing", "version": "1"}]},
+        source="local",
+    )
+    new_ref = outbox.enqueue(
+        {"games": [{"id": "g1", "status": "ready", "version": "1"}]},
+        source="local",
+    )
+    outbox.on_error(old_ref, "late bridge error")
+
+    assert old_ref != new_ref
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].ref == new_ref
+    assert pending[0].patch == {
+        "games": [{"id": "g1", "status": "ready", "version": "1"}]
+    }
+
+
 def test_outbox_coalesces_pending_scalars_so_latest_value_wins():
     def send_fn(_ref, _patch, _full, _source):
         return False
