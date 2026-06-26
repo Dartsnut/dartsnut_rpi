@@ -115,7 +115,8 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 - `rest_latency_ms` is the round-trip time of the **last successful** `apply_remote_device_patch_v2` RPC (games, settings, initial state, or idle heartbeat). Settings WiFi color uses this write RTT, not a separate read probe.
 - Every outbound patch RPC records latency and `last_outbound_at` in the bridge. Failed RPCs clear `rest_probe_ok` until the next success.
 - A background probe wakes every 60s and always emits `bridge_health`. If an outbound RPC succeeded within the last 60s, it **reuses** the cached snapshot (no extra Supabase call).
-- When idle for 60s or more, the probe posts a timestamp-only patch (`device_updated_at`, `last_update_source = supabase_bridge_heartbeat`). Realtime rows with that source are always dropped in Rust before Python sees them (full row state still contains games/pages from the DB merge).
+- When idle for 60s or more, the probe posts a heartbeat patch (`device_updated_at`, optional `latency`, `last_update_source = supabase_bridge_heartbeat`). Realtime rows with that source are always dropped in Rust before Python sees them (full row state still contains games/pages from the DB merge).
+- `remote_devices.state.latency` is the latest known successful firmware bridge REST latency in milliseconds. It is omitted until the bridge has recorded a successful REST write.
 - All v2 patch RPCs (socket thread and idle probe) share one mutex so concurrent writes cannot race.
 - Read-only `remote_devices` GET (row existence during initial connect) does not update latency.
 

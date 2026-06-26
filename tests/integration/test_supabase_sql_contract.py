@@ -176,6 +176,7 @@ def test_apply_remote_device_patch_v2_updates_existing_games_only_and_filters_fi
                 ],
                 "device_info": {"id": device_id, "name": "Local Name"},
                 "dim_window": {"dim_window_enabled": False},
+                "latency": 123,
             },
             "p_full": False,
             "p_source": "integration_test",
@@ -200,6 +201,7 @@ def test_apply_remote_device_patch_v2_updates_existing_games_only_and_filters_fi
     state = query.json()[0]["state"]
     assert state["device_info"] == {"id": device_id, "name": "Remote Name"}
     assert state["dim_window"] == {"dim_window_enabled": True}
+    assert state["latency"] == 123
 
 
 def test_apply_remote_device_patch_v2_partial_does_not_create_missing_row():
