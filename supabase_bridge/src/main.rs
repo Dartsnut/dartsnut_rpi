@@ -307,9 +307,15 @@ fn probe_idle_device_updated_at_write(
     rpc_lock: &Arc<Mutex<()>>,
     probe_state: &Arc<Mutex<ProbeState>>,
 ) -> RestProbeSnapshot {
-    let patch = json!({
+    let cached_latency_ms = probe_state.lock().ok().and_then(|s| s.snapshot.latency_ms);
+    let mut patch = json!({
         "device_updated_at": device_updated_at_iso_timestamp(),
     });
+    if let Some(ms) = cached_latency_ms {
+        if let Some(obj) = patch.as_object_mut() {
+            obj.insert("latency".to_string(), json!(ms));
+        }
+    }
     let _ = rpc_apply_patch_recorded(
         client,
         cfg,
@@ -1256,10 +1262,13 @@ mod tests {
     fn probe_idle_device_updated_at_write_records_latency_on_rpc_success() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = mpsc::channel();
         let server = thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
-                let _ = stream.read(&mut buf);
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                tx.send(request).expect("send request");
                 let body = b"[]";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1281,12 +1290,21 @@ mod tests {
             .expect("client");
         let rpc_lock = Arc::new(Mutex::new(()));
         let probe_state = Arc::new(Mutex::new(ProbeState::default()));
-        let snapshot =
-            probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
+        {
+            let mut s = probe_state.lock().expect("lock");
+            record_outbound_success(&mut s, 77);
+        }
+        let snapshot = probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
+        let request = rx.recv_timeout(Duration::from_secs(3)).expect("request");
         let _ = server.join();
 
         assert!(snapshot.probe_ok);
         assert!(snapshot.latency_ms.is_some());
+        let body = request.split("\r\n\r\n").nth(1).expect("http body");
+        let body: Value = serde_json::from_str(body).expect("json body");
+        let patch = body.get("p_patch").expect("p_patch");
+        assert_eq!(patch.get("latency"), Some(&json!(77)));
+        assert!(patch.get("device_updated_at").is_some());
         let at = probe_state
             .lock()
             .expect("lock")
@@ -1314,10 +1332,8 @@ mod tests {
             .expect("client");
         let rpc_lock = Arc::new(Mutex::new(()));
         let probe_state = Arc::new(Mutex::new(ProbeState::default()));
-        let snapshot =
-            probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
+        let snapshot = probe_idle_device_updated_at_write(&client, &cfg, &rpc_lock, &probe_state);
         assert!(!snapshot.probe_ok);
         assert!(snapshot.latency_ms.is_none());
     }
-
 }
