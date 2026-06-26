@@ -987,6 +987,18 @@ class RemoteDeviceConfigApplier:
                     if not game_id:
                         continue
                     game_id = str(game_id)
+                    if source in _BRIDGE_SOURCES and status in {
+                        "downloading",
+                        "playing",
+                        "ready",
+                    }:
+                        _log.info(
+                            "remote config: ignore bridge game status echo game_id=%s status=%s cfg_ts=%s",
+                            game_id,
+                            status,
+                            cfg_ts,
+                        )
+                        continue
                     if status == "downloading":
                         was_downloading = game_id in rt.remote_downloading_game_ids
                         rt.remote_downloading_game_ids.add(game_id)

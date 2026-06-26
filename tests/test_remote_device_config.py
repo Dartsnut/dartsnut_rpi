@@ -1884,6 +1884,22 @@ def test_newer_remote_playing_after_local_exit_launches(tmp_path, monkeypatch):
             "games": [{"id": "g1", "status": "playing", "version": "1"}],
         }
     )
+    assert game_ctx.start_game is False
+
+
+def test_app_origin_playing_after_local_exit_launches(tmp_path, monkeypatch):
+    applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
+    note_local_game_transition(
+        applier.runtime, "g1", "ready", at=parse_iso_ts("2026-05-29T09:15:00")
+    )
+
+    applier.apply(
+        {
+            "last_update_source": "app",
+            "updated_at": "2026-05-29T09:16:05",
+            "games": [{"id": "g1", "status": "playing", "version": "1"}],
+        }
+    )
     assert game_ctx.start_game is True
     assert game_ctx.game_id == "g1"
 
@@ -1920,6 +1936,25 @@ def test_local_exit_guard_does_not_block_remote_other_game(tmp_path, monkeypatch
             "games": [{"id": "g2", "status": "playing", "version": "1"}],
         }
     )
+    assert game_ctx.start_game is False
+
+
+def test_app_origin_playing_other_game_launches_during_local_exit_guard(
+    tmp_path, monkeypatch
+):
+    applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
+    os.makedirs("apps/g2", exist_ok=True)
+    now = datetime(2026, 5, 29, 9, 16, 0)
+    monkeypatch.setattr(rdc, "_utc_now", lambda: now)
+    note_local_game_transition(applier.runtime, "g1", "ready", at=now)
+
+    applier.apply(
+        {
+            "last_update_source": "app",
+            "updated_at": "2026-05-29T09:16:05",
+            "games": [{"id": "g2", "status": "playing", "version": "1"}],
+        }
+    )
     assert game_ctx.start_game is True
     assert game_ctx.game_id == "g2"
 
@@ -1936,13 +1971,11 @@ def test_local_relaunch_clears_same_game_exit_guard(monkeypatch):
     note_local_game_transition(rt, "g1", "playing", at=parse_iso_ts("2026-05-29T10:00:06"))
 
     assert should_accept_remote_playing_command(
-        rt, "g1", parse_iso_ts("2026-05-29T10:00:07"), source="supabase_bridge"
+        rt, "g1", parse_iso_ts("2026-05-29T10:00:07"), source="app"
     )
 
 
-def test_duplicate_identical_bridge_snapshot_suppresses_second_launch(
-    tmp_path, monkeypatch
-):
+def test_bridge_playing_status_echo_does_not_launch(tmp_path, monkeypatch):
     applier, game_ctx = _playing_guard_applier(tmp_path, monkeypatch)
     cfg = {
         "last_update_source": "supabase_bridge",
@@ -1950,11 +1983,6 @@ def test_duplicate_identical_bridge_snapshot_suppresses_second_launch(
         "games": [{"id": "g1", "status": "playing", "version": "1"}],
     }
     applier.apply(cfg)
-    assert game_ctx.start_game is True
-    game_ctx.start_game = False
-    game_ctx.game_id = None
-
-    applier.apply(dict(cfg))
     assert game_ctx.start_game is False
 
 
@@ -1965,7 +1993,7 @@ def test_should_accept_remote_playing_requires_strictly_newer_than_local():
         rt, "g1", parse_iso_ts("2026-05-29T09:59:59"), source="supabase_bridge"
     )
     assert should_accept_remote_playing_command(
-        rt, "g1", parse_iso_ts("2026-05-29T10:00:01"), source="supabase_bridge"
+        rt, "g1", parse_iso_ts("2026-05-29T10:00:01"), source="app"
     )
 
 
