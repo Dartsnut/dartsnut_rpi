@@ -76,3 +76,4 @@ def capture_screen(surface: str = "full", image_format: str = "png") -> Captured
         mime_type="image/png",
         data=base64.b64encode(buffer.getvalue()).decode("ascii"),
     )
+

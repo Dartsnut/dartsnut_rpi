@@ -139,7 +139,9 @@ class InGameState(BaseState):
             ctx.display.update_frame_buffer(menu_image)
             return
         game_id = game.get("game_id", "unknown")
-        shm_buf0 = game["shm"].buf[0] if game.get("shm") else None
+        shm = game.get("shm")
+        shm_buf = getattr(shm, "buf", None) if shm is not None else None
+        shm_buf0 = shm_buf[0] if shm_buf is not None else None
         if game_id == "pico8":
             prev_buf0 = game.get("pico8_prev_buf0", None)
             if shm_buf0 == 0:
@@ -147,10 +149,10 @@ class InGameState(BaseState):
                     game_image = Image.frombytes(
                         "RGB",
                         (128, 160),
-                        bytes(game["shm"].buf[1 : 1 + 128 * 160 * 3]),
+                        bytes(shm_buf[1 : 1 + 128 * 160 * 3]),
                     )
                     ctx.display.update_frame_buffer(game_image)
-                    game["shm"].buf[0] = 1
+                    shm_buf[0] = 1
                     if prev_buf0 == 1:
                         game["pico8_first_frame_seen"] = True
                     game["pico8_prev_buf0"] = 1
@@ -167,10 +169,10 @@ class InGameState(BaseState):
                 game_image = Image.frombytes(
                     "RGB",
                     (128, 160),
-                    bytes(game["shm"].buf[1 : 1 + 128 * 160 * 3]),
+                    bytes(shm_buf[1 : 1 + 128 * 160 * 3]),
                 )
                 ctx.display.update_frame_buffer(game_image)
-                game["shm"].buf[0] = 1
+                shm_buf[0] = 1
             elif game.get("launched", False):
                 ctx.display.update_frame_buffer(assets.create_loading_image())
             else:

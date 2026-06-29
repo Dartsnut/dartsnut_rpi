@@ -91,3 +91,4 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
     if response is None:
         return JSONResponse({}, status_code=202)
     return JSONResponse(response)
+

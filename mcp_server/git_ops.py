@@ -126,3 +126,4 @@ def perform_firmware_update() -> dict[str, Any]:
     except OSError:
         pass
     return {"message": "Update successful", **get_firmware_version()}
+

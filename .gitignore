@@ -24,6 +24,7 @@ device.json
 .DS_Store
 .cursor/
 .agents/
+.dartsnut/
 
 *.swp
 target/
