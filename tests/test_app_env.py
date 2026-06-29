@@ -1,6 +1,9 @@
 import json
+import io
 import subprocess
 import tarfile
+
+import pytest
 
 import core.app_env as app_env
 
@@ -200,6 +203,90 @@ def test_infer_app_id_from_tarball(tmp_path):
 
     assert app_env.infer_app_id_from_tarball(str(tar_path)) == "dart_checker"
     assert app_env.infer_app_id_from_url("https://cdn.example.com/beerpong.tar.gz") == "beerpong"
+
+
+def _write_tarball(path, members):
+    with tarfile.open(path, "w:gz") as tar:
+        for name, content in members.items():
+            data = content.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+
+def test_install_app_tarball_uses_game_id_not_archive_folder(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apps").mkdir()
+    tar_path = tmp_path / "downloads" / "random-name.tar.gz"
+    tar_path.parent.mkdir()
+    _write_tarball(
+        tar_path,
+        {
+            "wrong-folder/conf.json": json.dumps({"id": "wrong-folder", "type": "game"}),
+            "wrong-folder/main.py": "print('ok')\n",
+        },
+    )
+
+    app_env.install_app_tarball(str(tar_path), "chess")
+
+    assert (tmp_path / "apps" / "chess" / "conf.json").is_file()
+    assert (tmp_path / "apps" / "chess" / "main.py").is_file()
+    assert not (tmp_path / "apps" / "wrong-folder").exists()
+
+
+def test_install_app_tarball_supports_flat_archive(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apps").mkdir()
+    tar_path = tmp_path / "flat.tar.gz"
+    _write_tarball(
+        tar_path,
+        {
+            "conf.json": json.dumps({"id": "flat-source", "type": "game"}),
+            "main.py": "print('ok')\n",
+        },
+    )
+
+    app_env.install_app_tarball(str(tar_path), "flat-game")
+
+    assert (tmp_path / "apps" / "flat-game" / "conf.json").is_file()
+    assert (tmp_path / "apps" / "flat-game" / "main.py").is_file()
+
+
+def test_install_app_tarball_rejects_unsafe_members_without_replacing_existing_app(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    existing = tmp_path / "apps" / "chess"
+    existing.mkdir(parents=True)
+    (existing / "main.py").write_text("print('old')\n", encoding="utf-8")
+    tar_path = tmp_path / "unsafe.tar.gz"
+    _write_tarball(tar_path, {"../evil.txt": "bad"})
+
+    with pytest.raises(ValueError):
+        app_env.install_app_tarball(str(tar_path), "chess")
+
+    assert (existing / "main.py").read_text(encoding="utf-8") == "print('old')\n"
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_install_app_tarball_replaces_existing_app_after_success(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    existing = tmp_path / "apps" / "chess"
+    existing.mkdir(parents=True)
+    (existing / "old.txt").write_text("old\n", encoding="utf-8")
+    tar_path = tmp_path / "replacement.tar.gz"
+    _write_tarball(
+        tar_path,
+        {
+            "other-name/conf.json": json.dumps({"id": "other-name", "type": "game"}),
+            "other-name/main.py": "print('new')\n",
+        },
+    )
+
+    app_env.install_app_tarball(str(tar_path), "chess")
+
+    assert not (existing / "old.txt").exists()
+    assert (existing / "main.py").read_text(encoding="utf-8") == "print('new')\n"
 
 
 def test_ensure_app_venv_after_extract_uses_url(monkeypatch, tmp_path):

@@ -1,3 +1,9 @@
+import hashlib
+import io
+import subprocess
+import tarfile
+
+import game_lifecycle
 from game_lifecycle import (
     compare_game_versions,
     ensure_game_downloaded,
@@ -166,6 +172,46 @@ def test_ensure_game_downloaded_retries_info_fetch(monkeypatch):
     assert ensure_game_downloaded("chess") is True
     assert calls["requests"] == 2
     assert calls["download"] == [("https://example.com/chess.tar.gz", "abc123", "chess")]
+
+
+def test_download_game_file_installs_archive_into_game_id_folder(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apps").mkdir()
+    tar_buffer = io.BytesIO()
+    with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+        for name, content in {
+            "not-chess/conf.json": '{"id": "not-chess", "type": "game"}',
+            "not-chess/main.py": "print('ok')\n",
+        }.items():
+            data = content.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    payload = tar_buffer.getvalue()
+    checksum = hashlib.md5(payload).hexdigest()
+
+    def _run(cmd, **kwargs):
+        if cmd[0] == "wget":
+            (tmp_path / "downloads" / "random-name.tar.gz").write_bytes(payload)
+            return subprocess.CompletedProcess(cmd, 0)
+        if cmd[0] == "md5sum":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=f"{checksum}  downloads/random-name.tar.gz\n"
+            )
+        if cmd[0] == "tar":
+            return subprocess.CompletedProcess(cmd, 0)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(game_lifecycle.subprocess, "run", _run)
+    monkeypatch.setattr(
+        game_lifecycle, "ensure_app_venv", lambda game_id: game_id == "chess"
+    )
+
+    assert game_lifecycle._download_game_file(
+        "https://example.com/random-name.tar.gz", checksum, "chess"
+    ) is True
+    assert (tmp_path / "apps" / "chess" / "conf.json").is_file()
+    assert not (tmp_path / "apps" / "not-chess").exists()
 
 
 def test_local_game_version_matches_true_when_versions_equal(monkeypatch):
