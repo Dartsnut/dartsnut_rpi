@@ -18,7 +18,7 @@ from core.helpers import (
     subprocess_launch_kwargs,
     terminate_process_group,
 )
-from core.app_env import ensure_app_venv
+from core.app_env import ensure_app_venv, install_app_tarball
 from core.retry import retry_with_backoff
 from runtime.api_token_store import build_api_headers
 from python_websocket.user_data_operations import (
@@ -306,14 +306,10 @@ def _download_game_file(url: str, md5: str, game_id: str) -> bool:
                 os.remove(download_path)
             return False
 
-        # Extract tarball
+        # Extract tarball into apps/<game_id>, independent of archive naming.
         try:
-            subprocess.run(
-                ["tar", "-xzf", download_path, "-C", os.path.join(os.getcwd(), "apps")],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
+            install_app_tarball(download_path, game_id)
+        except Exception as e:
             _log.error("game: extraction failed game_id=%s: %s", game_id, e)
             if os.path.isfile(download_path):
                 os.remove(download_path)

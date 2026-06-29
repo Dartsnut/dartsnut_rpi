@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Awaitable, Callable
 
 from python_websocket.error_handler import ErrorCode
@@ -123,28 +122,17 @@ async def try_handle_file_json_actions(
         url = message.get("url")
         md5 = message.get("md5")
         game_id = message.get("game_id")
-        if not url or not md5:
+        if not game_id or not url or not md5:
             await _respond(
                 send_response,
                 req_id,
                 error("download_app", ErrorCode.MISSING_PARAMETER, "Required information is missing"),
             )
             return True
-        if game_id:
-            await send_response(
-                req_id,
-                registry.file_ops.start_game_download_async_with_url(game_id, url, md5),
-            )
-            return True
-
-        async def run_sync_download_then_respond():
-            result = await invoke("download_app", registry.file_ops.download_app, url, md5)
-            try:
-                await _respond(send_response, req_id, result)
-            except Exception:
-                pass
-
-        asyncio.create_task(run_sync_download_then_respond())
+        await send_response(
+            req_id,
+            registry.file_ops.start_game_download_async_with_url(game_id, url, md5),
+        )
         return True
     if action == "get_download_progress":
         game_ids = message.get("game_ids")
