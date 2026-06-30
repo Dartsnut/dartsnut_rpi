@@ -77,6 +77,10 @@ from runtime.remote_sync_port import (
 from runtime.reset_workflow import request_confirm_and_forget_wifi
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
+from runtime.joystick_input import (
+    should_consume_joystick,
+    should_consume_joystick_button,
+)
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
@@ -627,13 +631,8 @@ _JS_BUTTON_TO_APP = {
 # Buttons: GPIO + joystick (skip joystick when in_game so game receives input)
 # -----------------------------------------------------------------------------
 def get_buttons_pressed(context: AppContext):
-    consume_joystick = True
-    if context is not None and context.current_state is not None:
-        # In in_game without overlay, game gets joystick; with overlay, app handles A/B
-        consume_joystick = (
-            context.current_state.name() != "in_game"
-            or context.current_state.is_showing_exit_game_overlay(context)
-        )
+    # In in_game without overlay, game gets joystick; with overlay, app handles A/B.
+    consume_joystick = should_consume_joystick(context)
 
     if not hasattr(get_buttons_pressed, "old_buttons"):
         get_buttons_pressed.old_buttons = {
@@ -677,8 +676,8 @@ def get_buttons_pressed(context: AppContext):
                     event_kind = type_ & 0x7F  # JS_EVENT_* (ignore JS_EVENT_INIT)
                     if event_kind == 0x01:
                         app_btn = _JS_BUTTON_TO_APP.get(number)
-                        if value != 0 and app_btn and (
-                            consume_joystick or app_btn == "btn_home"
+                        if value != 0 and app_btn and should_consume_joystick_button(
+                            context, app_btn
                         ):
                             button_pressed[app_btn] = True
                     elif consume_joystick and event_kind == 0x02:
