@@ -32,6 +32,32 @@ def test_ensure_game_downloaded_returns_true_when_game_already_exists(monkeypatc
     assert called["download"] == 0
 
 
+def test_ensure_game_downloaded_syncs_pico8_favourites_when_already_exists(monkeypatch):
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/pico8"))
+    monkeypatch.setattr("game_lifecycle.get_pico8_key", lambda: "secret-key")
+    calls = []
+    monkeypatch.setattr(
+        "game_lifecycle.sync_pico8_favourites",
+        lambda key: calls.append(key),
+    )
+
+    assert ensure_game_downloaded("pico8") is True
+    assert calls == ["secret-key"]
+
+
+def test_ensure_game_downloaded_skips_pico8_sync_when_key_missing(monkeypatch):
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/pico8"))
+    monkeypatch.setattr("game_lifecycle.get_pico8_key", lambda: "")
+    calls = []
+    monkeypatch.setattr(
+        "game_lifecycle.sync_pico8_favourites",
+        lambda key: calls.append(key),
+    )
+
+    assert ensure_game_downloaded("pico8") is True
+    assert calls == []
+
+
 def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
     calls = {"download": []}
     state = {"exists": False}
@@ -62,6 +88,59 @@ def test_ensure_game_downloaded_downloads_when_missing(monkeypatch):
 
     assert ensure_game_downloaded("chess") is True
     assert calls["download"] == [("https://example.com/chess.zip", "abc123", "chess")]
+
+
+def test_ensure_game_downloaded_syncs_pico8_after_download(monkeypatch):
+    calls = {"download": [], "sync": []}
+    state = {"exists": False}
+
+    def _isdir(path):
+        return state["exists"] and path.endswith("/apps/pico8")
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_download_url": "https://example.com/pico8.tar.gz",
+                    "game_download_md5": "abc123",
+                }
+            }
+
+    def _download_game_file(url, md5, game_id):
+        calls["download"].append((url, md5, game_id))
+        state["exists"] = True
+        return True
+
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", _isdir)
+    monkeypatch.setattr("game_lifecycle.requests.get", lambda url, **kwargs: _Resp())
+    monkeypatch.setattr("game_lifecycle._download_game_file", _download_game_file)
+    monkeypatch.setattr("game_lifecycle.get_pico8_key", lambda: "secret-key")
+    monkeypatch.setattr(
+        "game_lifecycle.sync_pico8_favourites",
+        lambda key: calls["sync"].append(key),
+    )
+
+    assert ensure_game_downloaded("pico8") is True
+    assert calls["download"] == [
+        ("https://example.com/pico8.tar.gz", "abc123", "pico8")
+    ]
+    assert calls["sync"] == ["secret-key"]
+
+
+def test_ensure_game_downloaded_does_not_sync_non_pico8(monkeypatch):
+    monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda p: p.endswith("/apps/chess"))
+    calls = []
+    monkeypatch.setattr("game_lifecycle.get_pico8_key", lambda: "secret-key")
+    monkeypatch.setattr(
+        "game_lifecycle.sync_pico8_favourites",
+        lambda key: calls.append(key),
+    )
+
+    assert ensure_game_downloaded("chess") is True
+    assert calls == []
 
 
 def test_ensure_game_downloaded_sends_token_header(monkeypatch, tmp_path):

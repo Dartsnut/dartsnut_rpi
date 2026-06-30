@@ -414,6 +414,12 @@ def _remember_remote_game_ids(config: Dict[str, Any]) -> None:
     if not isinstance(config, dict) or "games" not in config:
         return
     games = config.get("games")
+    try:
+        from runtime.game_secret_store import remember_game_secrets_from_games
+
+        remember_game_secrets_from_games(games)
+    except Exception:
+        pass
     next_ids: set[str] = set()
     next_games_by_id: Dict[str, Dict[str, Any]] = {}
     if isinstance(games, list):
