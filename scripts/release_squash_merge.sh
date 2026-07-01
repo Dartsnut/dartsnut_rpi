@@ -9,28 +9,27 @@
 # system-packages, and the compiled Supabase sync binary at ./bridge (no supabase/,
 # supabase_bridge/, tests/, docs/, or legacy requirements.txt in the release commit).
 #
-# Flow: resolve version -> bump pyproject.toml and uv.lock on master and commit ->
-# checkout release -> ff-only origin/release -> merge --squash master ->
-# optional cargo bridge build -> clear index -> stage allowlist only -> verify ->
-# single commit -> tag vX.Y.Z.
+# Flow: resolve version -> dry-run report if requested, otherwise bump
+# pyproject.toml and uv.lock on master and commit -> checkout release ->
+# ff-only origin/release -> merge --squash master -> optional cargo bridge build ->
+# clear index -> stage allowlist only -> verify -> single commit -> tag vX.Y.Z.
 #
 # Environment:
 #   BUILD_BRIDGE=1        — run scripts/compile_supabase_bridge.sh after squash
 #                           (default: skip bridge build and reuse existing ./bridge).
+#   DRY_RUN=1             — inspect release inputs without changing branches,
+#                           commits, tags, or the working tree.
 #   SKIP_GIT_FETCH=1      — do not run git fetch origin before branch checks.
 #   RELEASE_PUSH=1        — git push origin release and the version tag after commit.
 #
 # Usage:
-#   scripts/release_squash_merge.sh [vX.Y.Z|X.Y.Z]
+#   scripts/release_squash_merge.sh [--dry-run] [vX.Y.Z|X.Y.Z]
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
-
-GIT_INDEX_LOCK="${REPO_ROOT}/.git/index.lock"
-RELEASE_SCRIPT_LOCK="${REPO_ROOT}/.git/dartsnut-release-squash.lock"
 
 # Paths included in the release commit (minimal device tree).
 ALLOWLIST=(
@@ -48,6 +47,7 @@ ALLOWLIST=(
   machine_state_service.py
   network_utils.py
   community_api.py
+  pico8_sync.py
   preview_cache.py
   validation_worker.py
   remote_sync_bridge.py
@@ -77,6 +77,9 @@ ALLOWLIST=(
   scripts/uv_env.sh
 )
 
+DRY_RUN="${DRY_RUN:-0}"
+INPUT_VERSION=""
+
 log() {
   printf '[release-squash] %s\n' "$*" >&2
 }
@@ -86,86 +89,43 @@ fail() {
   exit 1
 }
 
-index_lock_mtime() {
-  # Lock may disappear between -f test and mtime (git finished); treat as unlocked.
-  python3 -c "
-import os, sys
-p = sys.argv[1]
-try:
-    print(int(os.path.getmtime(p)))
-except FileNotFoundError:
-    raise SystemExit(1)
-" "$1"
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  scripts/release_squash_merge.sh [--dry-run] [vX.Y.Z|X.Y.Z]
+
+Environment:
+  BUILD_BRIDGE=1    Build bridge before staging release allowlist.
+  DRY_RUN=1         Inspect release inputs without changing git state.
+  SKIP_GIT_FETCH=1  Skip git fetch origin.
+  RELEASE_PUSH=1    Push release branch and tag after commit.
+EOF
 }
 
-release_clear_stale_index_lock() {
-  local age=0
-  local now mtime
-  [[ -f "${GIT_INDEX_LOCK}" ]] || return 0
-  now=$(date +%s)
-  mtime="$(index_lock_mtime "${GIT_INDEX_LOCK}" 2>/dev/null)" || return 0
-  age=$((now - mtime))
-  if (( age < 15 )); then
-    return 0
-  fi
-  if pgrep -x git >/dev/null 2>&1; then
-    return 0
-  fi
-  log "removing stale .git/index.lock (age=${age}s, no git process)"
-  rm -f "${GIT_INDEX_LOCK}"
-}
-
-release_acquire_script_lock() {
-  if ! mkdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null; then
-    fail "release squash already running (or stale ${RELEASE_SCRIPT_LOCK}); remove that directory if no script is active"
-  fi
-  trap 'rmdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null || true' EXIT INT TERM
-}
-
-wait_for_unlocked_git_index() {
-  local attempt=0
-  local max_attempts=120
-  while (( attempt < max_attempts )); do
-    release_clear_stale_index_lock
-    if [[ ! -f "${GIT_INDEX_LOCK}" ]]; then
-      return 0
-    fi
-    if (( attempt == 0 || attempt % 10 == 0 )); then
-      log "waiting for .git/index.lock to clear (attempt $((attempt + 1))/${max_attempts})"
-    fi
-    attempt=$((attempt + 1))
-    sleep 0.5
+parse_args() {
+  local arg
+  while [[ "$#" -gt 0 ]]; do
+    arg="$1"
+    case "${arg}" in
+      --dry-run)
+        DRY_RUN=1
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -*)
+        fail "unknown option: ${arg}"
+        ;;
+      *)
+        if [[ -n "${INPUT_VERSION}" ]]; then
+          fail "unexpected extra argument: ${arg}"
+        fi
+        INPUT_VERSION="${arg}"
+        ;;
+    esac
+    shift
   done
-  fail "git index.lock still present; close other git UIs or run: rm -f .git/index.lock"
-}
-
-# Retry git when IDE background git holds index.lock. Logs stay on stderr via log().
-git_cmd() {
-  local attempt=0
-  local max_attempts=120
-  local errfile
-  errfile="$(mktemp)"
-  while (( attempt < max_attempts )); do
-    wait_for_unlocked_git_index
-    if command git "$@" 2>"${errfile}"; then
-      rm -f "${errfile}"
-      return 0
-    fi
-    if grep -q 'index.lock' "${errfile}" 2>/dev/null; then
-      attempt=$((attempt + 1))
-      sleep 0.5
-      continue
-    fi
-    cat "${errfile}" >&2
-    rm -f "${errfile}"
-    return 1
-  done
-  rm -f "${errfile}"
-  fail "git failed waiting for index.lock: git $*"
-}
-
-git() {
-  git_cmd "$@"
 }
 
 require_clean_tree() {
@@ -257,6 +217,41 @@ require_allowlist_paths_exist() {
   fi
 }
 
+is_allowlisted_path() {
+  local path="$1"
+  local allowed
+  for allowed in "${ALLOWLIST[@]}"; do
+    if [[ "${path}" == "${allowed}" || "${path}" == "${allowed}/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+warn_added_paths_outside_allowlist() {
+  local base_ref="$1"
+  local source_ref="$2"
+  local path
+  local warned=0
+
+  log "dry-run: checking added files outside release allowlist (${base_ref}..${source_ref})"
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] || continue
+    if is_allowlisted_path "${path}"; then
+      continue
+    fi
+    if [[ "${warned}" -eq 0 ]]; then
+      log "dry-run warning: added files not covered by release allowlist"
+      warned=1
+    fi
+    printf '[release-squash]   %s\n' "${path}" >&2
+  done < <(git diff --name-only --diff-filter=A "${base_ref}..${source_ref}")
+
+  if [[ "${warned}" -eq 0 ]]; then
+    log "dry-run: no added files outside release allowlist"
+  fi
+}
+
 stage_allowlist_only() {
   local p
   log "clearing index and staging allowlist only"
@@ -312,7 +307,7 @@ assert_index_excludes_legacy_requirements() {
 assert_release_imports_resolve() {
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"; rmdir "${RELEASE_SCRIPT_LOCK}" 2>/dev/null || true' EXIT INT TERM
+  trap 'rm -rf "${tmpdir}"' EXIT INT TERM
   git checkout-index --prefix="${tmpdir}/" -a
   log "verifying release import graph from staged allowlist"
   PYTHONPATH="${tmpdir}" python3 - <<'PY'
@@ -362,18 +357,17 @@ resolve_squash_conflicts_prefer_master() {
   # During `git merge --squash master` on release, unmerged paths must match master.
   local f leftover
   log "merge reported conflicts, resolving with master-preferred strategy"
-  wait_for_unlocked_git_index
   while IFS= read -r -d '' f; do
-    if git_cmd show "master:${f}" >/dev/null 2>&1; then
+    if git show "master:${f}" >/dev/null 2>&1; then
       log "conflict: using master for ${f}"
-      git_cmd checkout "master" -- "${f}"
+      git checkout "master" -- "${f}"
     else
       log "conflict: removing ${f} (absent on master)"
-      git_cmd rm -f -- "${f}" 2>/dev/null || true
+      git rm -f -- "${f}" 2>/dev/null || true
     fi
-  done < <(git_cmd diff -z --name-only --diff-filter=U)
-  git_cmd add -A
-  leftover="$(git_cmd diff --name-only --diff-filter=U || true)"
+  done < <(git diff -z --name-only --diff-filter=U)
+  git add -A
+  leftover="$(git diff --name-only --diff-filter=U || true)"
   if [[ -n "${leftover}" ]]; then
     printf '%s\n' "${leftover}" >&2
     fail "unmerged paths remain after conflict resolution"
@@ -461,25 +455,39 @@ uv_lock.write_text(lock_new, encoding='utf-8')
   log "master version commit: $(git rev-parse --short HEAD)"
 }
 
-main() {
-  local input_version resolved_version commit_message
-  input_version="${1:-}"
+run_dry_run() {
+  local resolved_version="$1"
 
-  release_acquire_script_lock
-  release_clear_stale_index_lock
-  log "tip: pause Cursor/IDE Source Control git activity until this script finishes"
-  require_clean_tree
+  log "DRY_RUN=1: no branches, commits, tags, pushes, or working-tree files will be changed"
+  log "would use version: v${resolved_version}"
+  warn_added_paths_outside_allowlist "origin/release" "master"
+  log "dry-run: diff summary for origin/release..master"
+  git --no-pager diff --stat "origin/release..master"
+  log "dry-run complete"
+}
+
+main() {
+  local resolved_version commit_message
+  parse_args "$@"
+
   require_branch_exists "master"
   require_branch_exists "release"
   maybe_fetch_origin
   require_remote_branch_exists "origin/release"
 
-  if [[ -n "${input_version}" ]]; then
-    resolved_version="$(normalize_version_input "${input_version}")"
+  if [[ -n "${INPUT_VERSION}" ]]; then
+    resolved_version="$(normalize_version_input "${INPUT_VERSION}")"
   else
     resolved_version="$(next_patch_from_release_tags)"
   fi
   commit_message="Release version v${resolved_version}"
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    run_dry_run "${resolved_version}"
+    return 0
+  fi
+
+  require_clean_tree
 
   log "using version: v${resolved_version}"
   bump_pyproject_version_on_master "${resolved_version}"
