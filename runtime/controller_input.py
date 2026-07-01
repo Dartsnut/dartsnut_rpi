@@ -8,7 +8,7 @@ import os
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 _log = logging.getLogger(__name__)
 
@@ -112,14 +112,28 @@ class ControllerInputManager:
         self._ev_axes: dict[tuple[str, int], str | None] = {}
         self._ev_keys: dict[tuple[str, int], str] = {}
 
-    def poll(self, dartsnut: Any, *, consume_app_controls: bool = True) -> ControllerPollResult:
+    def poll(
+        self,
+        dartsnut: Any,
+        *,
+        consume_app_controls: bool = True,
+        should_consume_button: Callable[[str], bool] | None = None,
+    ) -> ControllerPollResult:
         pressed = {button: False for button in APP_BUTTONS}
         self.press_counts = {button: 0 for button in APP_BUTTONS}
         self._poll_gpio(dartsnut, pressed)
         self._open_new_inputs(self.js_glob, self.js_files)
         self._open_new_inputs(self.evdev_glob, self.ev_files)
-        self._poll_js_files(pressed, consume_app_controls=consume_app_controls)
-        self._poll_evdev_files(pressed, consume_app_controls=consume_app_controls)
+        self._poll_js_files(
+            pressed,
+            consume_app_controls=consume_app_controls,
+            should_consume_button=should_consume_button,
+        )
+        self._poll_evdev_files(
+            pressed,
+            consume_app_controls=consume_app_controls,
+            should_consume_button=should_consume_button,
+        )
         return ControllerPollResult(
             pressed=pressed,
             current=dict(self.current),
@@ -159,7 +173,11 @@ class ControllerInputManager:
                 _log.debug("Unable to open controller input %s: %s", path, e)
 
     def _poll_js_files(
-        self, pressed: dict[str, bool], *, consume_app_controls: bool
+        self,
+        pressed: dict[str, bool],
+        *,
+        consume_app_controls: bool,
+        should_consume_button: Callable[[str], bool] | None,
     ) -> None:
         for path in list(self.js_files.keys()):
             input_file = self.js_files[path]
@@ -184,6 +202,7 @@ class ControllerInputManager:
                                 button,
                                 pressed,
                                 consume_app_controls=consume_app_controls,
+                                should_consume_button=should_consume_button,
                             )
                     elif event_kind == JS_EVENT_AXIS:
                         self._handle_axis(
@@ -195,6 +214,7 @@ class ControllerInputManager:
                             y_axis=7,
                             pressed=pressed,
                             consume_app_controls=consume_app_controls,
+                            should_consume_button=should_consume_button,
                             hat_axis=False,
                         )
                 except (BlockingIOError, InterruptedError):
@@ -205,7 +225,11 @@ class ControllerInputManager:
                     break
 
     def _poll_evdev_files(
-        self, pressed: dict[str, bool], *, consume_app_controls: bool
+        self,
+        pressed: dict[str, bool],
+        *,
+        consume_app_controls: bool,
+        should_consume_button: Callable[[str], bool] | None,
     ) -> None:
         for path in list(self.ev_files.keys()):
             input_file = self.ev_files[path]
@@ -226,6 +250,7 @@ class ControllerInputManager:
                             value,
                             pressed,
                             consume_app_controls=consume_app_controls,
+                            should_consume_button=should_consume_button,
                         )
                     elif event_type == EV_ABS:
                         if code in (ABS_HAT0X, ABS_HAT0Y, ABS_X, ABS_Y):
@@ -240,6 +265,7 @@ class ControllerInputManager:
                                 hat_y_axis=ABS_HAT0Y,
                                 pressed=pressed,
                                 consume_app_controls=consume_app_controls,
+                                should_consume_button=should_consume_button,
                                 hat_axis=code in (ABS_HAT0X, ABS_HAT0Y),
                             )
                 except (BlockingIOError, InterruptedError):
@@ -257,6 +283,7 @@ class ControllerInputManager:
         pressed: dict[str, bool],
         *,
         consume_app_controls: bool,
+        should_consume_button: Callable[[str], bool] | None,
     ) -> None:
         button = EV_KEY_TO_APP.get(code)
         if button is None:
@@ -268,7 +295,10 @@ class ControllerInputManager:
             self._ev_keys[key] = button
             self._set_current(button, True)
             self._press_if_allowed(
-                button, pressed, consume_app_controls=consume_app_controls
+                button,
+                pressed,
+                consume_app_controls=consume_app_controls,
+                should_consume_button=should_consume_button,
             )
         else:
             self._ev_keys.pop(key, None)
@@ -285,6 +315,7 @@ class ControllerInputManager:
         y_axis: int,
         pressed: dict[str, bool],
         consume_app_controls: bool,
+        should_consume_button: Callable[[str], bool] | None,
         hat_axis: bool,
         hat_x_axis: int | None = None,
         hat_y_axis: int | None = None,
@@ -311,7 +342,10 @@ class ControllerInputManager:
         if next_button:
             self._set_current(next_button, True)
             self._press_if_allowed(
-                next_button, pressed, consume_app_controls=consume_app_controls
+                next_button,
+                pressed,
+                consume_app_controls=consume_app_controls,
+                should_consume_button=should_consume_button,
             )
 
     def _axis_button(
@@ -355,7 +389,10 @@ class ControllerInputManager:
         pressed: dict[str, bool],
         *,
         consume_app_controls: bool,
+        should_consume_button: Callable[[str], bool] | None,
     ) -> None:
+        if should_consume_button is not None and not should_consume_button(button):
+            return
         if consume_app_controls or button == "btn_home":
             self._mark_pressed(button, pressed)
 

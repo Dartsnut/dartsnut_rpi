@@ -221,6 +221,49 @@ def test_in_game_poll_suppresses_app_controls_but_allows_home(monkeypatch):
     assert result.current["btn_home"] is True
 
 
+def test_in_game_poll_can_suppress_evdev_home_for_pico8(monkeypatch):
+    ev = _FakeInputFile([_ev_key(BTN_MODE)])
+    manager = _manager(monkeypatch, ev_files={"/dev/input/event0": ev})
+
+    result = manager.poll(
+        _Dartsnut(),
+        consume_app_controls=False,
+        should_consume_button=lambda button: button != "btn_home",
+    )
+
+    assert result.pressed["btn_home"] is False
+    assert result.current["btn_home"] is True
+
+
+def test_in_game_poll_can_suppress_legacy_joystick_home_for_pico8(monkeypatch):
+    js = _FakeInputFile([_js_button(8)])
+    manager = _manager(monkeypatch, js_files={"/dev/input/js0": js})
+
+    result = manager.poll(
+        _Dartsnut(),
+        consume_app_controls=False,
+        should_consume_button=lambda button: button != "btn_home",
+    )
+
+    assert result.pressed["btn_home"] is False
+    assert result.current["btn_home"] is True
+
+
+def test_overlay_poll_consumes_pico8_controller_buttons(monkeypatch):
+    ev = _FakeInputFile([_ev_key(BTN_SOUTH), _ev_key(BTN_EAST), _ev_key(BTN_MODE)])
+    manager = _manager(
+        monkeypatch,
+        ev_files={"/dev/input/event0": ev},
+        now=[1.0, 1.2, 1.4],
+    )
+
+    result = manager.poll(_Dartsnut(), consume_app_controls=True)
+
+    assert result.pressed["btn_a"] is True
+    assert result.pressed["btn_b"] is True
+    assert result.pressed["btn_home"] is True
+
+
 def test_evdev_current_state_persists_until_release_event(monkeypatch):
     ev = _FakeInputFile([_ev_key(BTN_SOUTH)])
     manager = _manager(

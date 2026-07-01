@@ -616,6 +616,15 @@ def reload_pages_from_conf(context: AppContext) -> None:
 # -----------------------------------------------------------------------------
 # Buttons: GPIO + controller input (skip app controls in_game so games receive input)
 # -----------------------------------------------------------------------------
+def _should_consume_controller_button(context: AppContext, button: str) -> bool:
+    if button != "btn_home":
+        return True
+    game = getattr(context, "game", None)
+    if isinstance(game, dict) and str(game.get("game_id") or "") == "pico8":
+        return False
+    return True
+
+
 def get_buttons_pressed(context: AppContext):
     consume_app_controls = True
     if context is not None and context.current_state is not None:
@@ -627,6 +636,8 @@ def get_buttons_pressed(context: AppContext):
     result = _controller_input_manager.poll(
         dartsnut,
         consume_app_controls=consume_app_controls,
+        should_consume_button=lambda button: consume_app_controls
+        or _should_consume_controller_button(context, button),
     )
     get_buttons_pressed.old_buttons = result.current
     return result.pressed
