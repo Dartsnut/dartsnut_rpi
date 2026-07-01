@@ -45,12 +45,20 @@ the [Dartsnut docs](https://dartsnut.github.io/docs/).
   [hzeller/rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix).
 - Raspberry Pi deployment is managed with systemd services.
 
-## Bluetooth Controller Input
+## Controller Input
 
 Bluetooth controller pairing and connection management are handled through the
-runtime Bluetooth operations. Once a controller is connected, Linux exposes it
-as a joystick device under `/dev/input/js*`. The runtime opens those joystick
-devices in nonblocking mode, reads 8-byte Linux joystick events, and maps button
-and axis events into the app button names (`btn_a`, `btn_b`, directions, and
-`btn_home`). During in-game states, joystick input is left for the game unless
-the exit overlay is active.
+runtime Bluetooth operations. Once connected, many Bluetooth pads appear as
+legacy joystick devices under `/dev/input/js*`. Common 2.4G USB controller
+dongles may instead appear as Linux input event devices under
+`/dev/input/event*`.
+
+The runtime opens both device families in nonblocking mode and maps standard
+gamepad buttons, D-pad/analog axes, and keyboard-style controls
+(arrows/enter/space/escape/backspace/home) into the app button names
+(`btn_a`, `btn_b`, directions, and `btn_home`). During normal in-game states,
+controller input is left for the game except for `btn_home`, which opens the
+firmware overlay; when the exit overlay is active, the firmware consumes the
+controller controls again. The event reader is built into the runtime, so no
+extra Python or apt package is required. The deployed Python service currently
+runs as `root`, which provides access to `/dev/input/event*`.

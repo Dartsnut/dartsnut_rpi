@@ -4,6 +4,7 @@ import socket
 import time
 
 import supabase_sync_bridge as ssb
+from runtime.game_secret_store import clear_game_secrets, get_pico8_key
 
 
 # Initial-state construction (happy path -> fallback identity)
@@ -175,6 +176,63 @@ def test_sanitize_firmware_partial_patch_keeps_game_identity_only_for_lookup():
     assert out == {
         "games": [{"id": "chess", "status": "playing", "version": "1.0.0"}]
     }
+
+
+def test_sanitize_firmware_partial_patch_strips_pico8_key():
+    out = ssb._sanitize_firmware_partial_patch(
+        {
+            "games": [
+                {
+                    "id": "pico8",
+                    "status": "ready",
+                    "version": "1.0.0",
+                    "key": "secret-key",
+                }
+            ]
+        }
+    )
+
+    assert out == {
+        "games": [{"id": "pico8", "status": "ready", "version": "1.0.0"}]
+    }
+
+
+def test_remember_remote_game_ids_stores_inbound_pico8_key():
+    clear_game_secrets()
+
+    ssb._remember_remote_game_ids(
+        {
+            "games": [
+                {"id": "chess", "key": "ignored"},
+                {"id": "pico8", "status": "ready", "key": "secret-key"},
+            ]
+        }
+    )
+
+    assert get_pico8_key() == "secret-key"
+
+
+def test_request_set_game_status_does_not_publish_pico8_key(monkeypatch):
+    clear_game_secrets()
+    ssb._remember_remote_game_ids(
+        {"games": [{"id": "pico8", "version": "1.0.0", "key": "secret-key"}]}
+    )
+    captured = []
+    monkeypatch.setattr(ssb, "publish_device_state_update", lambda payload: captured.append(payload))
+    monkeypatch.setattr(
+        "game_lifecycle.get_games_summary",
+        lambda: [{"id": "pico8", "version": "1.0.0", "status": "ready"}],
+    )
+    monkeypatch.setattr(
+        "game_lifecycle.resolve_game_version_for_sync",
+        lambda _gid, remote_version: remote_version,
+    )
+
+    ssb.request_set_game_status("pico8", "ready")
+
+    assert captured == [
+        {"games": [{"id": "pico8", "version": "1.0.0", "status": "ready"}]}
+    ]
 
 
 def test_publish_device_state_update_sanitizes_partial_payload(monkeypatch):

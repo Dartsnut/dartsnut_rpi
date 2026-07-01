@@ -75,6 +75,88 @@ def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     assert isinstance(created["shm"].buf, bytearray)
 
 
+def test_start_game_process_syncs_pico8_before_launch(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "pico8"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    events = []
+
+    class _LoadingImg:
+        def tobytes(self):
+            return b"\x00" * (128 * 160 * 3)
+
+    def _shared_memory(name, create=False, size=None):
+        if not create:
+            raise FileNotFoundError
+        return _FakeShm(name, size)
+
+    monkeypatch.setattr(gl.shared_memory, "SharedMemory", _shared_memory)
+    monkeypatch.setattr(gl.assets, "create_loading_image", lambda: _LoadingImg())
+    monkeypatch.setattr(gl, "start_game_tracking", lambda gid: events.append(("track", gid)))
+    monkeypatch.setattr(gl, "get_user_data_store_path", lambda gid: f"/tmp/{gid}.json")
+    monkeypatch.setattr(gl, "ensure_app_venv", lambda gid, force=False: True)
+    monkeypatch.setattr(gl, "get_pico8_key", lambda: "secret-key")
+    monkeypatch.setattr(
+        gl,
+        "sync_pico8_favourites",
+        lambda key: events.append(("sync", key)),
+    )
+    monkeypatch.setattr(
+        gl.subprocess,
+        "Popen",
+        lambda cmd, cwd, **kwargs: events.append(("popen", cwd)) or _Proc(),
+    )
+
+    game = gl.start_game_process("pico8")
+
+    assert game["game_id"] == "pico8"
+    assert events[:2] == [
+        ("sync", "secret-key"),
+        ("popen", str(tmp_path / "apps" / "pico8")),
+    ]
+
+
+def test_start_game_process_skips_pico8_sync_without_key(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "pico8"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    events = []
+
+    class _LoadingImg:
+        def tobytes(self):
+            return b"\x00" * (128 * 160 * 3)
+
+    def _shared_memory(name, create=False, size=None):
+        if not create:
+            raise FileNotFoundError
+        return _FakeShm(name, size)
+
+    monkeypatch.setattr(gl.shared_memory, "SharedMemory", _shared_memory)
+    monkeypatch.setattr(gl.assets, "create_loading_image", lambda: _LoadingImg())
+    monkeypatch.setattr(gl, "start_game_tracking", lambda gid: events.append(("track", gid)))
+    monkeypatch.setattr(gl, "get_user_data_store_path", lambda gid: f"/tmp/{gid}.json")
+    monkeypatch.setattr(gl, "ensure_app_venv", lambda gid, force=False: True)
+    monkeypatch.setattr(gl, "get_pico8_key", lambda: "")
+    monkeypatch.setattr(
+        gl,
+        "sync_pico8_favourites",
+        lambda key: events.append(("sync", key)),
+    )
+    monkeypatch.setattr(
+        gl.subprocess,
+        "Popen",
+        lambda cmd, cwd, **kwargs: events.append(("popen", cwd)) or _Proc(),
+    )
+
+    game = gl.start_game_process("pico8")
+
+    assert game["game_id"] == "pico8"
+    assert ("sync", "") not in events
+    assert events[0] == ("popen", str(tmp_path / "apps" / "pico8"))
+
+
 def test_start_game_process_returns_none_when_venv_setup_fails(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "chess"
