@@ -21,6 +21,8 @@ from core.helpers import (
 from core.app_env import ensure_app_venv, install_app_tarball
 from core.retry import retry_with_backoff
 from runtime.api_token_store import build_api_headers
+from runtime.game_secret_store import get_pico8_key
+from pico8_sync import sync_pico8_favourites
 from python_websocket.user_data_operations import (
     start_game_tracking,
     stop_game_tracking,
@@ -78,6 +80,19 @@ def _on_preview_updated(game_id: str, preview_data: list) -> None:
 # Track in-flight game downloads (by game_id) to prevent duplicate concurrent downloads
 _game_background_download_inflight = set()
 _game_download_lock = threading.Lock()
+
+
+def _sync_pico8_favourites_if_configured() -> None:
+    key = get_pico8_key()
+    if not key:
+        return
+    try:
+        result = sync_pico8_favourites(key)
+    except Exception as e:
+        _log.warning("game: pico8 favourites sync failed: %s", e)
+        return
+    if result is not None and not result.ok:
+        _log.warning("game: pico8 favourites sync failed: %s", result.message or "unknown error")
 
 
 def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
@@ -351,8 +366,11 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     """Ensure local game exists and is at least remote_version when provided."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     expected_version = str(remote_version or "").strip()
+    normalized_gameid = str(gameid or "").strip()
     if os.path.isdir(game_path):
         if not expected_version:
+            if normalized_gameid == "pico8":
+                _sync_pico8_favourites_if_configured()
             return True
         local_version = get_local_game_version(gameid)
         if compare_game_versions(local_version, expected_version) >= 0:
@@ -363,6 +381,8 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                     local_version or "(empty)",
                     expected_version,
                 )
+            if normalized_gameid == "pico8":
+                _sync_pico8_favourites_if_configured()
             return True
         _log.info(
             "Game %s local version %s < target %s; downloading update",
@@ -410,8 +430,12 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
 
     if expected_version:
         local = get_local_game_version(gameid)
-        return compare_game_versions(local, expected_version) >= 0
-    return os.path.isdir(game_path)
+        ok = compare_game_versions(local, expected_version) >= 0
+    else:
+        ok = os.path.isdir(game_path)
+    if ok and normalized_gameid == "pico8":
+        _sync_pico8_favourites_if_configured()
+    return ok
 
 
 def download_game_async(
@@ -495,6 +519,8 @@ def start_game_process(gameid: str) -> dict:
     if not ensure_app_venv(gameid):
         _log.error("Failed to set up virtualenv for game %s", gameid)
         return None
+    if str(gameid or "").strip() == "pico8":
+        _sync_pico8_favourites_if_configured()
     shm_name = "game_shm"
     shm_size = 128 * 160 * 3 + 1
     try:
