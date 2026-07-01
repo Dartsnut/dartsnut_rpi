@@ -1,0 +1,403 @@
+"""Local controller input readers for GPIO, Linux joystick, and evdev devices."""
+
+from __future__ import annotations
+
+import glob
+import logging
+import os
+import struct
+import time
+from dataclasses import dataclass, field
+from typing import Any, BinaryIO
+
+_log = logging.getLogger(__name__)
+
+APP_BUTTONS = (
+    "btn_a",
+    "btn_b",
+    "btn_left",
+    "btn_up",
+    "btn_right",
+    "btn_down",
+    "btn_home",
+    "btn_reserved",
+)
+
+AXIS_THRESHOLD = 16000
+DUPLICATE_PRESS_WINDOW_SECONDS = 0.08
+
+JS_EVENT_BUTTON = 0x01
+JS_EVENT_AXIS = 0x02
+
+EV_KEY = 0x01
+EV_ABS = 0x03
+
+KEY_ESC = 1
+KEY_BACKSPACE = 14
+KEY_ENTER = 28
+KEY_SPACE = 57
+KEY_HOME = 102
+KEY_UP = 103
+KEY_LEFT = 105
+KEY_RIGHT = 106
+KEY_DOWN = 108
+
+BTN_SOUTH = 0x130
+BTN_EAST = 0x131
+BTN_SELECT = 0x13A
+BTN_START = 0x13B
+BTN_MODE = 0x13C
+
+ABS_X = 0x00
+ABS_Y = 0x01
+ABS_HAT0X = 0x10
+ABS_HAT0Y = 0x11
+
+JS_BUTTON_TO_APP = {
+    0: "btn_a",
+    1: "btn_b",
+    8: "btn_home",
+    9: "btn_home",
+    10: "btn_home",
+}
+
+EV_KEY_TO_APP = {
+    BTN_SOUTH: "btn_a",
+    KEY_ENTER: "btn_a",
+    KEY_SPACE: "btn_a",
+    BTN_EAST: "btn_b",
+    KEY_ESC: "btn_b",
+    KEY_BACKSPACE: "btn_b",
+    KEY_LEFT: "btn_left",
+    KEY_UP: "btn_up",
+    KEY_RIGHT: "btn_right",
+    KEY_DOWN: "btn_down",
+    BTN_MODE: "btn_home",
+    BTN_START: "btn_home",
+    BTN_SELECT: "btn_home",
+    KEY_HOME: "btn_home",
+}
+
+_JS_EVENT = struct.Struct("Ihbb")
+_EVDEV_EVENT = struct.Struct("@llHHi")
+
+
+@dataclass
+class ControllerPollResult:
+    pressed: dict[str, bool]
+    current: dict[str, bool]
+    press_counts: dict[str, int] = field(default_factory=dict)
+
+
+class ControllerInputManager:
+    """Polls all local input sources and normalizes them to app button names."""
+
+    def __init__(
+        self,
+        *,
+        js_glob: str = "/dev/input/js*",
+        evdev_glob: str = "/dev/input/event*",
+        duplicate_press_window_seconds: float = DUPLICATE_PRESS_WINDOW_SECONDS,
+    ) -> None:
+        self.js_glob = js_glob
+        self.evdev_glob = evdev_glob
+        self.duplicate_press_window_seconds = duplicate_press_window_seconds
+        self.old_buttons = {button: False for button in APP_BUTTONS}
+        self.current = {button: False for button in APP_BUTTONS}
+        self.press_counts = {button: 0 for button in APP_BUTTONS}
+        self.js_files: dict[str, BinaryIO] = {}
+        self.ev_files: dict[str, BinaryIO] = {}
+        self._last_press_at: dict[str, float] = {}
+        self._js_axes: dict[tuple[str, int], str | None] = {}
+        self._ev_axes: dict[tuple[str, int], str | None] = {}
+        self._ev_keys: dict[tuple[str, int], str] = {}
+
+    def poll(self, dartsnut: Any, *, consume_app_controls: bool = True) -> ControllerPollResult:
+        pressed = {button: False for button in APP_BUTTONS}
+        self.press_counts = {button: 0 for button in APP_BUTTONS}
+        self._poll_gpio(dartsnut, pressed)
+        self._open_new_inputs(self.js_glob, self.js_files)
+        self._open_new_inputs(self.evdev_glob, self.ev_files)
+        self._poll_js_files(pressed, consume_app_controls=consume_app_controls)
+        self._poll_evdev_files(pressed, consume_app_controls=consume_app_controls)
+        return ControllerPollResult(
+            pressed=pressed,
+            current=dict(self.current),
+            press_counts=dict(self.press_counts),
+        )
+
+    def _poll_gpio(self, dartsnut: Any, pressed: dict[str, bool]) -> None:
+        try:
+            button_states = dartsnut.get_buttons()
+        except Exception as e:
+            _log.debug("Error reading GPIO buttons: %s", e)
+            return
+        if not isinstance(button_states, dict):
+            return
+        for button in APP_BUTTONS:
+            if button not in button_states:
+                continue
+            state = bool(button_states.get(button, False))
+            if state != self.old_buttons[button]:
+                self.old_buttons[button] = state
+                self.current[button] = state
+                if state:
+                    self._mark_pressed(button, pressed)
+            else:
+                self.current[button] = state
+
+    def _open_new_inputs(self, pattern: str, files: dict[str, BinaryIO]) -> None:
+        for path in glob.glob(pattern):
+            if path in files:
+                continue
+            try:
+                input_file = open(path, "rb")
+                os.set_blocking(input_file.fileno(), False)
+                files[path] = input_file
+                _log.info("controller input opened: %s", path)
+            except OSError as e:
+                _log.debug("Unable to open controller input %s: %s", path, e)
+
+    def _poll_js_files(
+        self, pressed: dict[str, bool], *, consume_app_controls: bool
+    ) -> None:
+        for path in list(self.js_files.keys()):
+            input_file = self.js_files[path]
+            while True:
+                try:
+                    event_data = input_file.read(_JS_EVENT.size)
+                    if event_data is None:
+                        break
+                    if not event_data:
+                        raise OSError("Device disconnected")
+                    if len(event_data) != _JS_EVENT.size:
+                        continue
+                    _time_ms, value, type_, number = _JS_EVENT.unpack(event_data)
+                    event_kind = type_ & 0x7F
+                    if event_kind == JS_EVENT_BUTTON:
+                        button = JS_BUTTON_TO_APP.get(number)
+                        if button is None:
+                            continue
+                        self._set_current(button, value != 0)
+                        if value != 0:
+                            self._press_if_allowed(
+                                button,
+                                pressed,
+                                consume_app_controls=consume_app_controls,
+                            )
+                    elif event_kind == JS_EVENT_AXIS:
+                        self._handle_axis(
+                            source_axes=self._js_axes,
+                            source_path=path,
+                            number=number,
+                            value=value,
+                            x_axis=6,
+                            y_axis=7,
+                            pressed=pressed,
+                            consume_app_controls=consume_app_controls,
+                            hat_axis=False,
+                        )
+                except (BlockingIOError, InterruptedError):
+                    break
+                except Exception as e:
+                    _log.debug("controller joystick input closed %s: %s", path, e)
+                    self._close_input(path, self.js_files)
+                    break
+
+    def _poll_evdev_files(
+        self, pressed: dict[str, bool], *, consume_app_controls: bool
+    ) -> None:
+        for path in list(self.ev_files.keys()):
+            input_file = self.ev_files[path]
+            while True:
+                try:
+                    event_data = input_file.read(_EVDEV_EVENT.size)
+                    if event_data is None:
+                        break
+                    if not event_data:
+                        raise OSError("Device disconnected")
+                    if len(event_data) != _EVDEV_EVENT.size:
+                        continue
+                    _sec, _usec, event_type, code, value = _EVDEV_EVENT.unpack(event_data)
+                    if event_type == EV_KEY:
+                        self._handle_evdev_key(
+                            path,
+                            code,
+                            value,
+                            pressed,
+                            consume_app_controls=consume_app_controls,
+                        )
+                    elif event_type == EV_ABS:
+                        if code in (ABS_HAT0X, ABS_HAT0Y, ABS_X, ABS_Y):
+                            self._handle_axis(
+                                source_axes=self._ev_axes,
+                                source_path=path,
+                                number=code,
+                                value=value,
+                                x_axis=ABS_X,
+                                y_axis=ABS_Y,
+                                hat_x_axis=ABS_HAT0X,
+                                hat_y_axis=ABS_HAT0Y,
+                                pressed=pressed,
+                                consume_app_controls=consume_app_controls,
+                                hat_axis=code in (ABS_HAT0X, ABS_HAT0Y),
+                            )
+                except (BlockingIOError, InterruptedError):
+                    break
+                except Exception as e:
+                    _log.debug("controller evdev input closed %s: %s", path, e)
+                    self._close_input(path, self.ev_files)
+                    break
+
+    def _handle_evdev_key(
+        self,
+        path: str,
+        code: int,
+        value: int,
+        pressed: dict[str, bool],
+        *,
+        consume_app_controls: bool,
+    ) -> None:
+        button = EV_KEY_TO_APP.get(code)
+        if button is None:
+            return
+        if value == 2:
+            return
+        key = (path, code)
+        if value:
+            self._ev_keys[key] = button
+            self._set_current(button, True)
+            self._press_if_allowed(
+                button, pressed, consume_app_controls=consume_app_controls
+            )
+        else:
+            self._ev_keys.pop(key, None)
+            self._set_current(button, self._is_button_held_elsewhere(button))
+
+    def _handle_axis(
+        self,
+        *,
+        source_axes: dict[tuple[str, int], str | None],
+        source_path: str,
+        number: int,
+        value: int,
+        x_axis: int,
+        y_axis: int,
+        pressed: dict[str, bool],
+        consume_app_controls: bool,
+        hat_axis: bool,
+        hat_x_axis: int | None = None,
+        hat_y_axis: int | None = None,
+    ) -> None:
+        axis_key = (source_path, number)
+        previous_button = source_axes.get(axis_key)
+        next_button = self._axis_button(
+            number,
+            value,
+            x_axis=x_axis,
+            y_axis=y_axis,
+            hat_axis=hat_axis,
+            hat_x_axis=hat_x_axis,
+            hat_y_axis=hat_y_axis,
+        )
+        if previous_button == next_button:
+            return
+        if previous_button:
+            self._set_current(
+                previous_button,
+                self._is_button_held_elsewhere(previous_button, excluding_axis=axis_key),
+            )
+        source_axes[axis_key] = next_button
+        if next_button:
+            self._set_current(next_button, True)
+            self._press_if_allowed(
+                next_button, pressed, consume_app_controls=consume_app_controls
+            )
+
+    def _axis_button(
+        self,
+        number: int,
+        value: int,
+        *,
+        x_axis: int,
+        y_axis: int,
+        hat_axis: bool,
+        hat_x_axis: int | None,
+        hat_y_axis: int | None,
+    ) -> str | None:
+        if hat_axis:
+            if number == hat_x_axis:
+                if value < 0:
+                    return "btn_left"
+                if value > 0:
+                    return "btn_right"
+            elif number == hat_y_axis:
+                if value < 0:
+                    return "btn_up"
+                if value > 0:
+                    return "btn_down"
+            return None
+        if number == x_axis:
+            if value < -AXIS_THRESHOLD:
+                return "btn_left"
+            if value > AXIS_THRESHOLD:
+                return "btn_right"
+        elif number == y_axis:
+            if value < -AXIS_THRESHOLD:
+                return "btn_up"
+            if value > AXIS_THRESHOLD:
+                return "btn_down"
+        return None
+
+    def _press_if_allowed(
+        self,
+        button: str,
+        pressed: dict[str, bool],
+        *,
+        consume_app_controls: bool,
+    ) -> None:
+        if consume_app_controls or button == "btn_home":
+            self._mark_pressed(button, pressed)
+
+    def _mark_pressed(self, button: str, pressed: dict[str, bool]) -> None:
+        now = time.monotonic()
+        last_press = self._last_press_at.get(button)
+        if (
+            last_press is not None
+            and now - last_press < self.duplicate_press_window_seconds
+        ):
+            return
+        self._last_press_at[button] = now
+        pressed[button] = True
+        self.press_counts[button] += 1
+
+    def _set_current(self, button: str, state: bool) -> None:
+        if button in self.current:
+            self.current[button] = state
+
+    def _is_button_held_elsewhere(
+        self,
+        button: str,
+        *,
+        excluding_axis: tuple[str, int] | None = None,
+    ) -> bool:
+        if self.old_buttons.get(button):
+            return True
+        if button in self._ev_keys.values():
+            return True
+        for axis_key, axis_button in self._js_axes.items():
+            if axis_key != excluding_axis and axis_button == button:
+                return True
+        for axis_key, axis_button in self._ev_axes.items():
+            if axis_key != excluding_axis and axis_button == button:
+                return True
+        return False
+
+    def _close_input(self, path: str, files: dict[str, BinaryIO]) -> None:
+        input_file = files.pop(path, None)
+        if input_file is None:
+            return
+        try:
+            input_file.close()
+        except Exception:
+            pass
