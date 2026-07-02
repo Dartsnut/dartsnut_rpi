@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict
 import requests
 
 DEFAULT_SOCKET_PATH = "/tmp/dartsnut-supabase-command.sock"
-DEFAULT_UPLOAD_URL = "https://api.dartsnut.com/xxx"
+DEFAULT_UPLOAD_URL = "https://api.dartsnut.com/v1/mobile/device-log/upload"
 DEFAULT_TIMEOUT_SECONDS = 20.0
 TIMEOUT_STATUS_CODE = 124
 
@@ -155,15 +155,51 @@ def write_log_archive(
     return LogArchive(path=archive_path, log_name=log_name)
 
 
-def upload_archive(archive_path: str | os.PathLike[str], upload_url: str) -> None:
+def upload_archive(
+    archive_path: str | os.PathLike[str],
+    upload_url: str,
+    *,
+    log_id: str,
+    device_id: str,
+    command_id: str,
+    event: str = "engineer_command",
+    device_version: str = "",
+    os_version: str = "",
+) -> None:
     path = Path(archive_path)
+    metadata = json.dumps(
+        {
+            "command_id": command_id,
+            "reason": "engineer requested logs",
+            "log_range": "latest",
+        },
+        sort_keys=True,
+    )
+    data = {
+        "log_id": log_id,
+        "device_id": device_id,
+        "event": event,
+        "metadata": metadata,
+    }
+    if device_version:
+        data["device_version"] = device_version
+    if os_version:
+        data["os_version"] = os_version
     with path.open("rb") as f:
         response = requests.post(
             upload_url,
+            data=data,
             files={"file": (path.name, f, "application/gzip")},
             timeout=30,
         )
     response.raise_for_status()
+
+
+def log_id_for_archive(archive_path: str | os.PathLike[str]) -> str:
+    name = Path(archive_path).name
+    if name.endswith(".tar.gz"):
+        return name[: -len(".tar.gz")]
+    return Path(name).stem
 
 
 class CommandSocketServer:
@@ -252,7 +288,15 @@ def build_handler(
             device_id=device_id,
         )
         try:
-            upload_archive(archive.path, upload_url)
+            upload_archive(
+                archive.path,
+                upload_url,
+                log_id=log_id_for_archive(archive.path),
+                device_id=device_id,
+                command_id=command_id,
+                device_version=os.getenv("DARTSNUT_FIRMWARE_VERSION", ""),
+                os_version=os.getenv("DARTSNUT_OS_VERSION", ""),
+            )
         except Exception:
             pass
         return {

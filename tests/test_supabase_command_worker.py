@@ -113,8 +113,9 @@ def test_upload_archive_posts_multipart_file(tmp_path, monkeypatch):
         def raise_for_status(self):
             return None
 
-    def fake_post(url, files, timeout):
+    def fake_post(url, data, files, timeout):
         captured["url"] = url
+        captured["data"] = data
         captured["timeout"] = timeout
         file_name, file_obj, mime = files["file"]
         captured["file_name"] = file_name
@@ -124,15 +125,47 @@ def test_upload_archive_posts_multipart_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(worker.requests, "post", fake_post)
 
-    worker.upload_archive(archive_path, "https://api.dartsnut.com/xxx")
+    worker.upload_archive(
+        archive_path,
+        "https://api.example.com/v1/mobile/device-log/upload",
+        log_id="log-1",
+        device_id="PD-123456",
+        command_id="cmd-1",
+        device_version="1.0.8",
+        os_version="linux-test",
+    )
 
-    assert captured == {
-        "url": "https://api.dartsnut.com/xxx",
+    assert captured["url"] == "https://api.example.com/v1/mobile/device-log/upload"
+    assert captured["data"] == {
+        "log_id": "log-1",
+        "device_id": "PD-123456",
+        "event": "engineer_command",
+        "device_version": "1.0.8",
+        "os_version": "linux-test",
+        "metadata": json.dumps(
+            {
+                "command_id": "cmd-1",
+                "reason": "engineer requested logs",
+                "log_range": "latest",
+            },
+            sort_keys=True,
+        ),
+    }
+    assert {
+        "timeout": captured["timeout"],
+        "file_name": captured["file_name"],
+        "file_bytes": captured["file_bytes"],
+        "mime": captured["mime"],
+    } == {
         "timeout": 30,
         "file_name": "command.tar.gz",
         "file_bytes": b"archive",
         "mime": "application/gzip",
     }
+
+
+def test_log_id_for_archive_strips_tar_gz_suffix():
+    assert worker.log_id_for_archive("PD-123-cmd-1.tar.gz") == "PD-123-cmd-1"
 
 
 def test_socket_request_response_frame(tmp_path, monkeypatch):
