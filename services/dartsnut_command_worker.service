@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 Environment=DARTSNUT_LOG_LEVEL=INFO
-ExecStart=/home/rpi/dartsnut_rpi/uv run supabase_command_worker.py
+ExecStart=/home/rpi/dartsnut_rpi/command_worker
 Restart=always
 
 [Install]

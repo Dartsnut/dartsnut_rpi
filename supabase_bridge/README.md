@@ -1,14 +1,18 @@
 # Dartsnut Supabase Bridge (Rust)
 
-Rust executable used by the Python runtime to sync device state with Supabase over a Unix socket.
+Rust executables used for Supabase device sync and remote command handling.
+
+- `dartsnut-supabase-bridge`: syncs `remote_devices` with the Python runtime over a Unix socket.
+- `dartsnut-command-worker`: standalone worker for `remote_device_commands`; it runs commands, uploads logs, and clears command rows.
 
 ## Build
 
 ```bash
 cd supabase_bridge
-cargo build --release
-cp target/release/dartsnut-supabase-bridge ./bridge
-chmod +x ./bridge
+cargo build --release --bins
+cp target/release/dartsnut-supabase-bridge ../bridge
+cp target/release/dartsnut-command-worker ../command_worker
+chmod +x ../bridge ../command_worker
 ```
 
 ## Credentials
@@ -21,9 +25,10 @@ You can supply Supabase credentials either at runtime or embed them at compile t
 cd supabase_bridge
 DARTSNUT_EMBEDDED_SUPABASE_URL="https://<project-ref>.supabase.co" \
 DARTSNUT_EMBEDDED_SUPABASE_KEY="<supabase-key>" \
-cargo build --release
-cp target/release/dartsnut-supabase-bridge ./bridge
-chmod +x ./bridge
+cargo build --release --bins
+cp target/release/dartsnut-supabase-bridge ../bridge
+cp target/release/dartsnut-command-worker ../command_worker
+chmod +x ../bridge ../command_worker
 ```
 
 Do not commit real credential values into source files or documentation.
@@ -35,6 +40,9 @@ Do not commit real credential values into source files or documentation.
 - `DARTSNUT_SUPABASE_BRIDGE` (optional; overrides executable path)
 - `DARTSNUT_SUPABASE_SOCKET` (optional; overrides socket path)
 - `DARTSNUT_SUPABASE_DEVICE_ID` (optional; override `device_id` when BLE MAC is unavailable)
+- `DARTSNUT_LOG_UPLOAD_URL` (optional; command worker upload endpoint)
+- `DARTSNUT_COMMAND_TIMEOUT_SECONDS` (optional; command timeout, default `20`)
+- `DARTSNUT_COMMAND_LOG_DIR` (optional; command log archive directory)
 
 ## Device ID source
 
@@ -47,6 +55,14 @@ Do not commit real credential values into source files or documentation.
 - Inbound config is driven by Supabase Realtime `postgres_changes` on `public.remote_devices`.
 - The subscription is device-scoped via `device_id=eq.<BLE_MAC_UPPER>`.
 - Events with `last_update_source = 'supabase_bridge'` are dropped to avoid echo loops.
+
+## Remote commands
+
+- `dartsnut-command-worker` subscribes to `public.remote_device_commands`.
+- Non-empty `command` values run via `/bin/sh -c` from the repo root.
+- Commands time out after 20 seconds by default and return status `124`.
+- Logs are written as `.tar.gz`, uploaded to the device-log API, and the returned `file_url` is saved in `log_filename`.
+- Completion clears `command` and sets `last_update_source = dartsnut_command_bridge:<device_id>`.
 
 ## Notes
 

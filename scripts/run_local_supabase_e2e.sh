@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_DIR="${REPO_ROOT}/supabase_bridge"
 BRIDGE_BIN="${REPO_ROOT}/bridge"
+COMMAND_WORKER_BIN="${REPO_ROOT}/command_worker"
 SUPABASE_URL_DEFAULT="http://127.0.0.1:54321"
 
 if ! command -v supabase >/dev/null 2>&1; then
@@ -27,11 +28,13 @@ fi
 echo "Bootstrapping local Supabase..."
 "${SCRIPT_DIR}/supabase_bootstrap.sh"
 
-echo "Building Supabase bridge..."
+echo "Building Supabase bridge and command worker..."
 cd "${BRIDGE_DIR}"
-cargo build --release
+cargo build --release --bins
 cp "${BRIDGE_DIR}/target/release/dartsnut-supabase-bridge" "${BRIDGE_BIN}"
 chmod +x "${BRIDGE_BIN}"
+cp "${BRIDGE_DIR}/target/release/dartsnut-command-worker" "${COMMAND_WORKER_BIN}"
+chmod +x "${COMMAND_WORKER_BIN}"
 
 cd "${REPO_ROOT}"
 export RUN_SUPABASE_LOCAL_E2E=1
