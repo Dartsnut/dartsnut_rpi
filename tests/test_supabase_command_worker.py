@@ -35,6 +35,47 @@ def test_run_command_timeout_kills_process_group(tmp_path):
     assert result.timed_out is True
 
 
+def test_prepare_shell_command_strips_sudo_when_worker_is_root(monkeypatch):
+    monkeypatch.setattr(worker.os, "geteuid", lambda: 0)
+
+    prepared = worker.prepare_shell_command("sudo systemctl restart dartsnut_python.service")
+
+    assert "sudo() { command \"$@\"; }" in prepared
+    assert "sudo systemctl restart dartsnut_python.service" in prepared
+
+
+def test_prepare_shell_command_uses_noninteractive_sudo_when_not_root(monkeypatch):
+    monkeypatch.setattr(worker.os, "geteuid", lambda: 1000)
+
+    prepared = worker.prepare_shell_command("sudo systemctl status dartsnut_python.service")
+
+    assert "sudo() { command sudo -n \"$@\"; }" in prepared
+    assert "sudo systemctl status dartsnut_python.service" in prepared
+
+
+def test_run_command_closes_stdin(tmp_path, monkeypatch):
+    captured = {}
+
+    class _Proc:
+        pid = 123
+        returncode = 0
+
+        def communicate(self, timeout):
+            return "", ""
+
+    def fake_popen(*args, **kwargs):
+        captured.update(kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+
+    result = worker.run_command("sudo true", cwd=tmp_path, timeout_seconds=20)
+
+    assert result.status_code == 0
+    assert captured["stdin"] == worker.subprocess.DEVNULL
+    assert captured["start_new_session"] is True
+
+
 def test_write_log_archive_contains_command_metadata(tmp_path):
     command_result = worker.CommandResult(
         command="printf hello",

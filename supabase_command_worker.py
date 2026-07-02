@@ -55,6 +55,22 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def prepare_shell_command(command: str) -> str:
+    """Make sudo noninteractive for shell commands.
+
+    The production service runs as root, so sudo is unnecessary on-device. A
+    shell function keeps incoming "sudo ..." commands working by dispatching
+    directly to the wrapped command. If the worker is ever run as non-root,
+    sudo uses -n so password prompts fail fast instead of hanging forever.
+    """
+    sudo_function = (
+        'sudo() { command "$@"; };'
+        if os.geteuid() == 0
+        else 'sudo() { command sudo -n "$@"; };'
+    )
+    return f"{sudo_function} {command}"
+
+
 def run_command(
     command: str,
     *,
@@ -63,9 +79,11 @@ def run_command(
 ) -> CommandResult:
     started_at = utc_now_iso()
     proc = subprocess.Popen(
-        command,
+        prepare_shell_command(command),
         cwd=str(cwd),
         shell=True,
+        executable="/bin/sh",
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -186,7 +204,10 @@ class CommandSocketServer:
     def _serve_connection(self, conn: socket.socket) -> None:
         buf = b""
         while not self._stop.is_set():
-            data = conn.recv(4096)
+            try:
+                data = conn.recv(4096)
+            except OSError:
+                break
             if not data:
                 break
             buf += data
