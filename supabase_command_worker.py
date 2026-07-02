@@ -51,6 +51,11 @@ class LogArchive:
         return self.path.name
 
 
+@dataclass
+class UploadResult:
+    file_url: str
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -165,7 +170,7 @@ def upload_archive(
     event: str = "engineer_command",
     device_version: str = "",
     os_version: str = "",
-) -> None:
+) -> UploadResult:
     path = Path(archive_path)
     metadata = json.dumps(
         {
@@ -193,6 +198,15 @@ def upload_archive(
             timeout=30,
         )
     response.raise_for_status()
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    data_payload = payload.get("data") if isinstance(payload, dict) else None
+    file_url = ""
+    if isinstance(data_payload, dict):
+        file_url = str(data_payload.get("file_url") or "").strip()
+    return UploadResult(file_url=file_url)
 
 
 def log_id_for_archive(archive_path: str | os.PathLike[str]) -> str:
@@ -287,8 +301,9 @@ def build_handler(
             command_id=command_id,
             device_id=device_id,
         )
+        log_reference = archive.name
         try:
-            upload_archive(
+            upload_result = upload_archive(
                 archive.path,
                 upload_url,
                 log_id=log_id_for_archive(archive.path),
@@ -297,6 +312,8 @@ def build_handler(
                 device_version=os.getenv("DARTSNUT_FIRMWARE_VERSION", ""),
                 os_version=os.getenv("DARTSNUT_OS_VERSION", ""),
             )
+            if upload_result.file_url:
+                log_reference = upload_result.file_url
         except Exception:
             pass
         return {
@@ -304,7 +321,7 @@ def build_handler(
             "payload": {
                 "command_id": command_id,
                 "status_code": result.status_code,
-                "log_filename": archive.name,
+                "log_filename": log_reference,
             },
         }
 

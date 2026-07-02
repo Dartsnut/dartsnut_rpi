@@ -201,7 +201,7 @@ def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
                 "payload": {
                     "command_id": payload.get("command_id", ""),
                     "status_code": 0,
-                    "log_filename": "e2e-command.tar.gz",
+                    "log_filename": "https://oss.example.com/e2e-command.tar.gz",
                 },
             }
         ),
@@ -243,7 +243,7 @@ def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
             ok = (
                 row.get("command") == ""
                 and row.get("status_code") == 0
-                and row.get("log_filename") == "e2e-command.tar.gz"
+                and row.get("log_filename") == "https://oss.example.com/e2e-command.tar.gz"
                 and row.get("last_update_source")
                 == f"dartsnut_command_bridge:{device_id}"
             )

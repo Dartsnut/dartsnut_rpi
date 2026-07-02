@@ -110,6 +110,14 @@ def test_upload_archive_posts_multipart_file(tmp_path, monkeypatch):
     captured = {}
 
     class _Response:
+        def json(self):
+            return {
+                "code": 1001,
+                "data": {
+                    "file_url": "https://oss.example.com/device.log.gz",
+                },
+            }
+
         def raise_for_status(self):
             return None
 
@@ -125,7 +133,7 @@ def test_upload_archive_posts_multipart_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(worker.requests, "post", fake_post)
 
-    worker.upload_archive(
+    result = worker.upload_archive(
         archive_path,
         "https://api.example.com/v1/mobile/device-log/upload",
         log_id="log-1",
@@ -135,6 +143,7 @@ def test_upload_archive_posts_multipart_file(tmp_path, monkeypatch):
         os_version="linux-test",
     )
 
+    assert result.file_url == "https://oss.example.com/device.log.gz"
     assert captured["url"] == "https://api.example.com/v1/mobile/device-log/upload"
     assert captured["data"] == {
         "log_id": "log-1",
@@ -166,6 +175,82 @@ def test_upload_archive_posts_multipart_file(tmp_path, monkeypatch):
 
 def test_log_id_for_archive_strips_tar_gz_suffix():
     assert worker.log_id_for_archive("PD-123-cmd-1.tar.gz") == "PD-123-cmd-1"
+
+
+def test_handler_returns_uploaded_file_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        worker,
+        "run_command",
+        lambda *_a, **_k: worker.CommandResult(
+            command="printf hi",
+            status_code=0,
+            stdout="hi",
+            stderr="",
+            timed_out=False,
+            started_at="2026-07-02T00:00:00+00:00",
+            finished_at="2026-07-02T00:00:01+00:00",
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "upload_archive",
+        lambda *_a, **_k: worker.UploadResult(
+            file_url="https://oss.example.com/full-url.log.gz"
+        ),
+    )
+    handler = worker.build_handler(
+        repo_root=tmp_path,
+        log_dir=tmp_path,
+        upload_url="https://api.example.com/v1/mobile/device-log/upload",
+        timeout_seconds=20,
+    )
+
+    response = handler(
+        {
+            "command_id": "cmd-1",
+            "device_id": "PD-123",
+            "command": "printf hi",
+        }
+    )
+
+    assert response["payload"]["log_filename"] == "https://oss.example.com/full-url.log.gz"
+
+
+def test_handler_falls_back_to_archive_name_when_upload_has_no_file_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        worker,
+        "run_command",
+        lambda *_a, **_k: worker.CommandResult(
+            command="printf hi",
+            status_code=0,
+            stdout="hi",
+            stderr="",
+            timed_out=False,
+            started_at="2026-07-02T00:00:00+00:00",
+            finished_at="2026-07-02T00:00:01+00:00",
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "upload_archive",
+        lambda *_a, **_k: worker.UploadResult(file_url=""),
+    )
+    handler = worker.build_handler(
+        repo_root=tmp_path,
+        log_dir=tmp_path,
+        upload_url="https://api.example.com/v1/mobile/device-log/upload",
+        timeout_seconds=20,
+    )
+
+    response = handler(
+        {
+            "command_id": "cmd-1",
+            "device_id": "PD-123",
+            "command": "printf hi",
+        }
+    )
+
+    assert response["payload"]["log_filename"].endswith(".tar.gz")
 
 
 def test_socket_request_response_frame(tmp_path, monkeypatch):
