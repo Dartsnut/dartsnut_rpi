@@ -82,9 +82,7 @@ fn record_outbound_failure(state: &mut ProbeState) {
 }
 
 fn outbound_within_idle_window(state: &ProbeState, idle: Duration) -> bool {
-    state
-        .last_outbound_at
-        .is_some_and(|t| t.elapsed() < idle)
+    state.last_outbound_at.is_some_and(|t| t.elapsed() < idle)
 }
 
 fn device_updated_at_iso_timestamp() -> String {
@@ -127,7 +125,11 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
                 "UNKNOWN-DEVICE".to_string()
             })
         });
-    Ok(SupabaseConfig { url, key, device_id })
+    Ok(SupabaseConfig {
+        url,
+        key,
+        device_id,
+    })
 }
 
 fn normalize_mac(value: &str) -> Option<String> {
@@ -173,10 +175,7 @@ fn resolve_device_id() -> Result<String> {
         }
     }
 
-    for cmd in [
-        ("hciconfig", vec!["-a"]),
-        ("bluetoothctl", vec!["list"]),
-    ] {
+    for cmd in [("hciconfig", vec!["-a"]), ("bluetoothctl", vec!["list"])] {
         if let Ok(out) = Command::new(cmd.0).args(cmd.1).output() {
             if out.status.success() {
                 if let Ok(stdout) = String::from_utf8(out.stdout) {
@@ -197,6 +196,7 @@ fn resolve_device_id() -> Result<String> {
 /// the reader keeps draining the websocket (so it still observes disconnects and
 /// reconnects) instead of blocking inside `write_all` and wedging the connection.
 type OutSender = mpsc::SyncSender<String>;
+type CommandSender = mpsc::SyncSender<Value>;
 
 fn send_msg(out: &OutSender, kind: &str, payload: Value) -> Result<()> {
     let msg = OutMessage { kind, payload };
@@ -206,9 +206,9 @@ fn send_msg(out: &OutSender, kind: &str, payload: Value) -> Result<()> {
         // Channel full: the writer thread can't keep up because Python isn't draining.
         // Drop this message rather than block; the reader must stay responsive. The
         // writer thread's own write timeout is what ultimately forces a respawn.
-        Err(mpsc::TrySendError::Full(_)) => {
-            Err(anyhow::anyhow!("unix writer channel full; dropped {kind} message"))
-        }
+        Err(mpsc::TrySendError::Full(_)) => Err(anyhow::anyhow!(
+            "unix writer channel full; dropped {kind} message"
+        )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(anyhow::anyhow!("unix writer channel disconnected"))
         }
@@ -218,6 +218,63 @@ fn send_msg(out: &OutSender, kind: &str, payload: Value) -> Result<()> {
 const SOURCE_SUPABASE_BRIDGE: &str = "supabase_bridge";
 const SOURCE_SUPABASE_BRIDGE_INIT: &str = "supabase_bridge_init";
 const SOURCE_SUPABASE_BRIDGE_HEARTBEAT: &str = "supabase_bridge_heartbeat";
+const COMMAND_CHANNEL_CAPACITY: usize = 16;
+
+fn parse_command_socket_path() -> String {
+    for arg in env::args() {
+        if let Some(path) = arg.strip_prefix("--command-socket-path=") {
+            return path.to_string();
+        }
+    }
+    env::var("DARTSNUT_SUPABASE_COMMAND_SOCKET")
+        .unwrap_or_else(|_| "/tmp/dartsnut-supabase-command.sock".to_string())
+}
+
+fn command_source(cfg: &SupabaseConfig) -> String {
+    format!("dartsnut_command_bridge:{}", cfg.device_id)
+}
+
+fn should_filter_command_echo(source: &str, cfg: &SupabaseConfig) -> bool {
+    source == command_source(cfg)
+}
+
+fn command_row_url(cfg: &SupabaseConfig) -> Result<Url> {
+    let mut url = Url::parse(&format!(
+        "{}/rest/v1/remote_device_commands",
+        cfg.url.trim_end_matches('/')
+    ))
+    .context("invalid remote_device_commands url")?;
+    url.query_pairs_mut()
+        .append_pair("device_id", &format!("eq.{}", cfg.device_id));
+    Ok(url)
+}
+
+fn command_completion_patch(cfg: &SupabaseConfig, status_code: i64, log_filename: &str) -> Value {
+    json!({
+        "command": "",
+        "status_code": status_code,
+        "log_filename": log_filename,
+        "last_update_source": command_source(cfg),
+    })
+}
+
+fn update_command_completion(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    status_code: i64,
+    log_filename: &str,
+) -> Result<()> {
+    client
+        .patch(command_row_url(cfg)?)
+        .header("apikey", &cfg.key)
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .header("Content-Type", "application/json")
+        .header("Prefer", "return=minimal")
+        .json(&command_completion_patch(cfg, status_code, log_filename))
+        .send()?
+        .error_for_status()?;
+    Ok(())
+}
 
 fn rpc_apply_patch(
     client: &Client,
@@ -346,11 +403,7 @@ fn run_probe_tick(
     probe_idle_device_updated_at_write(client, cfg, rpc_lock, probe_state)
 }
 
-fn send_bridge_health(
-    writer: &OutSender,
-    state: &str,
-    probe: &RestProbeSnapshot,
-) {
+fn send_bridge_health(writer: &OutSender, state: &str, probe: &RestProbeSnapshot) {
     let mut payload = json!({ "state": state });
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("rest_probe_ok".to_string(), json!(probe.probe_ok));
@@ -381,10 +434,7 @@ fn run_rest_probe_loop(
     rpc_apply_lock: Arc<Mutex<()>>,
     probe_in_flight: Arc<AtomicBool>,
 ) {
-    let client = match Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-    {
+    let client = match Client::builder().timeout(Duration::from_secs(3)).build() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("bridge: failed to build probe http client: {e}");
@@ -444,7 +494,9 @@ fn apply_initial_state_with_retry(
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
+                eprintln!(
+                    "bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}"
+                );
                 match rpc_apply_patch_recorded(
                     client,
                     cfg,
@@ -484,7 +536,12 @@ fn build_realtime_ws_url(cfg: &SupabaseConfig) -> Result<Url> {
     let scheme = match base.scheme() {
         "https" => "wss",
         "http" => "ws",
-        other => return Err(anyhow::anyhow!("unsupported supabase url scheme: {}", other)),
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported supabase url scheme: {}",
+                other
+            ))
+        }
     };
     base.set_scheme(scheme)
         .map_err(|_| anyhow::anyhow!("failed to set websocket scheme"))?;
@@ -524,7 +581,10 @@ fn build_config_payload(record: &Value, state: &Value) -> Value {
 
     if let Some(obj) = payload.as_object_mut() {
         if let Some(updated_at) = record.get("updated_at").and_then(|v| v.as_str()) {
-            obj.insert("updated_at".to_string(), Value::String(updated_at.to_string()));
+            obj.insert(
+                "updated_at".to_string(),
+                Value::String(updated_at.to_string()),
+            );
         }
         if let Some(source) = record.get("last_update_source").and_then(|v| v.as_str()) {
             obj.insert(
@@ -571,10 +631,7 @@ fn is_reset_confirmation_state(state: &Value) -> bool {
 }
 
 fn is_game_state_payload(state: &Value) -> bool {
-    state
-        .get("games")
-        .and_then(|v| v.as_array())
-        .is_some()
+    state.get("games").and_then(|v| v.as_array()).is_some()
 }
 
 fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
@@ -589,8 +646,192 @@ fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
         && !is_game_state_payload(state)
 }
 
+fn build_command_payload(record: &Value) -> Option<Value> {
+    let command = record.get("command").and_then(|v| v.as_str())?.trim();
+    if command.is_empty() {
+        return None;
+    }
+    let device_id = record
+        .get("device_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let updated_at = record
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let command_id = if !device_id.is_empty() && !updated_at.is_empty() {
+        format!("{device_id}:{updated_at}")
+    } else if !updated_at.is_empty() {
+        updated_at.to_string()
+    } else {
+        command.to_string()
+    };
+    Some(json!({
+        "command_id": command_id,
+        "device_id": device_id,
+        "command": command,
+    }))
+}
+
+fn send_command_msg(out: &CommandSender, payload: Value) {
+    match out.try_send(payload) {
+        Ok(()) => {}
+        Err(mpsc::TrySendError::Full(_)) => {
+            eprintln!("bridge: command channel full; dropped command")
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            eprintln!("bridge: command channel disconnected; dropped command")
+        }
+    }
+}
+
+fn handle_realtime_record(
+    record: &Value,
+    cfg: &SupabaseConfig,
+    writer: &OutSender,
+    command_tx: &CommandSender,
+    realtime_connected: &Arc<AtomicBool>,
+    emit_health: &dyn Fn(&str),
+) {
+    let table = record.get("table").and_then(|v| v.as_str()).unwrap_or("");
+    if table == "remote_device_commands" || record.get("command").is_some() {
+        let source = record
+            .get("last_update_source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if should_filter_command_echo(source, cfg) {
+            return;
+        }
+        if let Some(command_payload) = build_command_payload(record) {
+            send_command_msg(command_tx, command_payload);
+        }
+        return;
+    }
+
+    let state = match record.get("state") {
+        Some(v) => v.clone(),
+        None => return,
+    };
+    let source = record
+        .get("last_update_source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if should_filter_bridge_echo(source, &state) {
+        return;
+    }
+    let config_payload = build_config_payload(record, &state);
+    if send_msg(writer, "remote_row", config_payload).is_ok() {
+        realtime_connected.store(true, Ordering::Relaxed);
+        emit_health("connected");
+    }
+}
+
+fn run_command_socket_loop(
+    socket_path: String,
+    command_rx: mpsc::Receiver<Value>,
+    cfg: SupabaseConfig,
+) {
+    let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("bridge: failed to build command http client: {e}");
+            return;
+        }
+    };
+
+    let mut pending: Option<Value> = None;
+    loop {
+        let mut stream = loop {
+            match UnixStream::connect(&socket_path) {
+                Ok(s) => break s,
+                Err(_) => thread::sleep(Duration::from_millis(250)),
+            }
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(WRITE_TIMEOUT_SECS)));
+        let read_stream = match stream.try_clone() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("bridge: command socket clone failed: {e}");
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let mut reader = BufReader::new(read_stream);
+
+        loop {
+            let command_payload = match pending.take() {
+                Some(v) => v,
+                None => match command_rx.recv() {
+                    Ok(v) => v,
+                    Err(_) => return,
+                },
+            };
+            let request = OutMessage {
+                kind: "run_command",
+                payload: command_payload.clone(),
+            };
+            let line = match serde_json::to_string(&request) {
+                Ok(v) => v + "\n",
+                Err(e) => {
+                    eprintln!("bridge: command serialize failed: {e}");
+                    continue;
+                }
+            };
+            if stream.write_all(line.as_bytes()).is_err() || stream.flush().is_err() {
+                eprintln!("bridge: command socket write failed; reconnecting");
+                pending = Some(command_payload);
+                break;
+            }
+
+            let mut response_line = String::new();
+            match reader.read_line(&mut response_line) {
+                Ok(0) => {
+                    eprintln!("bridge: command socket closed; reconnecting");
+                    pending = Some(command_payload);
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("bridge: command socket read failed: {e}; reconnecting");
+                    pending = Some(command_payload);
+                    break;
+                }
+            }
+            let parsed: Value = match serde_json::from_str(response_line.trim()) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("bridge: command response parse failed: {e}");
+                    continue;
+                }
+            };
+            if parsed.get("kind").and_then(|v| v.as_str()) != Some("command_result") {
+                continue;
+            }
+            let payload = match parsed.get("payload") {
+                Some(v) => v,
+                None => continue,
+            };
+            let status_code = payload
+                .get("status_code")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1);
+            let log_filename = payload
+                .get("log_filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if let Err(e) = update_command_completion(&client, &cfg, status_code, log_filename) {
+                eprintln!("bridge: command completion update failed: {e}");
+            }
+        }
+    }
+}
+
 fn run_realtime_loop(
     writer: OutSender,
+    command_tx: CommandSender,
     cfg: SupabaseConfig,
     probe_wake_tx: mpsc::Sender<()>,
     realtime_connected: Arc<AtomicBool>,
@@ -636,19 +877,27 @@ fn run_realtime_loop(
         backoff_seconds = 1;
         set_ws_read_timeout(&mut socket, Some(Duration::from_secs(10)));
 
-        let topic = "realtime:public:remote_devices";
+        let topic = "realtime:public:dartsnut_bridge";
         let join_payload = json!({
             "topic": topic,
             "event": "phx_join",
             "payload": {
                 "config": {
                     "broadcast": {"self": false},
-                    "postgres_changes": [{
-                        "event": "*",
-                        "schema": "public",
-                        "table": "remote_devices",
-                        "filter": format!("device_id=eq.{}", cfg.device_id),
-                    }]
+                    "postgres_changes": [
+                        {
+                            "event": "*",
+                            "schema": "public",
+                            "table": "remote_devices",
+                            "filter": format!("device_id=eq.{}", cfg.device_id),
+                        },
+                        {
+                            "event": "*",
+                            "schema": "public",
+                            "table": "remote_device_commands",
+                            "filter": format!("device_id=eq.{}", cfg.device_id),
+                        }
+                    ]
                 },
                 "access_token": cfg.key,
             },
@@ -699,22 +948,14 @@ fn run_realtime_loop(
                             Some(r) => r,
                             None => continue,
                         };
-                        let state = match record.get("state") {
-                            Some(v) => v.clone(),
-                            None => continue,
-                        };
-                        let source = record
-                            .get("last_update_source")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if should_filter_bridge_echo(source, &state) {
-                            continue;
-                        }
-                        let config_payload = build_config_payload(record, &state);
-                        if send_msg(&writer, "remote_row", config_payload).is_ok() {
-                            realtime_connected.store(true, Ordering::Relaxed);
-                            emit_health("connected");
-                        }
+                        handle_realtime_record(
+                            record,
+                            &cfg,
+                            &writer,
+                            &command_tx,
+                            &realtime_connected,
+                            &emit_health,
+                        );
                     }
                 }
                 Err(e) => {
@@ -796,6 +1037,7 @@ fn main() -> Result<()> {
     }
 
     let socket_path = parse_socket_path();
+    let command_socket_path = parse_command_socket_path();
     let cfg = load_supabase_config()?;
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
@@ -827,9 +1069,7 @@ fn main() -> Result<()> {
     thread::spawn(move || {
         let mut write_stream = write_stream;
         for line in out_rx {
-            if write_stream.write_all(line.as_bytes()).is_err()
-                || write_stream.flush().is_err()
-            {
+            if write_stream.write_all(line.as_bytes()).is_err() || write_stream.flush().is_err() {
                 // Python side is gone or unresponsive past the write timeout. The
                 // bridge can't recover this unix socket on its own (Python owns the
                 // listener); exit so the supervisor respawns us with a fresh pipe.
@@ -839,6 +1079,7 @@ fn main() -> Result<()> {
         }
     });
     let writer = out_tx;
+    let (command_tx, command_rx) = mpsc::sync_channel::<Value>(COMMAND_CHANNEL_CAPACITY);
 
     send_msg(&writer, "ready", json!({}))?;
 
@@ -867,7 +1108,13 @@ fn main() -> Result<()> {
     });
     let _ = probe_wake_tx.send(());
 
+    let cfg_command = cfg.clone();
+    thread::spawn(move || {
+        run_command_socket_loop(command_socket_path, command_rx, cfg_command);
+    });
+
     let writer_clone = writer.clone();
+    let command_tx_rt = command_tx.clone();
     let cfg_clone = cfg.clone();
     let probe_state_rt = Arc::clone(&probe_state);
     let probe_wake_tx_rt = probe_wake_tx.clone();
@@ -875,6 +1122,7 @@ fn main() -> Result<()> {
     thread::spawn(move || {
         run_realtime_loop(
             writer_clone,
+            command_tx_rt,
             cfg_clone,
             probe_wake_tx_rt,
             realtime_connected_rt,
@@ -896,10 +1144,7 @@ fn main() -> Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let write_ref = msg
-            .r#ref
-            .clone()
-            .unwrap_or_else(|| "legacy".to_string());
+        let write_ref = msg.r#ref.clone().unwrap_or_else(|| "legacy".to_string());
         let is_full = msg.full.unwrap_or(false);
         match msg.kind.as_str() {
             "initial_state" | "rpc_patch" => {
@@ -925,11 +1170,7 @@ fn main() -> Result<()> {
                 };
                 match result {
                     Ok(()) => {
-                        let _ = send_msg(
-                            &writer,
-                            "ack",
-                            json!({"ref": write_ref}),
-                        );
+                        let _ = send_msg(&writer, "ack", json!({"ref": write_ref}));
                     }
                     Err(e) => {
                         let _ = send_msg(
@@ -954,11 +1195,7 @@ fn main() -> Result<()> {
                     &probe_state_main,
                 ) {
                     Ok(()) => {
-                        let _ = send_msg(
-                            &writer,
-                            "ack",
-                            json!({"ref": write_ref}),
-                        );
+                        let _ = send_msg(&writer, "ack", json!({"ref": write_ref}));
                     }
                     Err(e) => {
                         let _ = send_msg(
@@ -1013,7 +1250,9 @@ mod tests {
     #[test]
     fn game_state_payload_detects_games_array() {
         assert!(is_game_state_payload(&json!({"games": []})));
-        assert!(is_game_state_payload(&json!({"games": [{"id":"g1","status":"ready"}]})));
+        assert!(is_game_state_payload(
+            &json!({"games": [{"id":"g1","status":"ready"}]})
+        ));
         assert!(!is_game_state_payload(&json!({"games": null})));
         assert!(!is_game_state_payload(&json!({"brightness": 70})));
     }
@@ -1027,7 +1266,10 @@ mod tests {
             "games": [],
             "dim_window": {"dim_window_enabled": false}
         });
-        assert!(!should_filter_bridge_echo(SOURCE_SUPABASE_BRIDGE_INIT, &state));
+        assert!(!should_filter_bridge_echo(
+            SOURCE_SUPABASE_BRIDGE_INIT,
+            &state
+        ));
     }
 
     #[test]
@@ -1088,6 +1330,95 @@ mod tests {
     }
 
     #[test]
+    fn command_table_url_targets_device_row() {
+        let cfg = SupabaseConfig {
+            url: "https://example.supabase.co".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+
+        let url = command_row_url(&cfg).expect("url");
+
+        assert_eq!(url.as_str(), "https://example.supabase.co/rest/v1/remote_device_commands?device_id=eq.AA%3ABB%3ACC%3ADD%3AEE%3AFF");
+    }
+
+    #[test]
+    fn command_source_loopback_is_filtered() {
+        let cfg = SupabaseConfig {
+            url: "https://example.supabase.co".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+
+        assert!(should_filter_command_echo(&command_source(&cfg), &cfg));
+        assert!(!should_filter_command_echo("mobile_app", &cfg));
+    }
+
+    #[test]
+    fn command_payload_requires_non_empty_command() {
+        let record = json!({
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "command": "  ls  ",
+            "updated_at": "2026-07-02T00:00:00Z"
+        });
+
+        let payload = build_command_payload(&record).expect("payload");
+
+        assert_eq!(payload.get("command").and_then(|v| v.as_str()), Some("ls"));
+        assert_eq!(
+            payload.get("command_id").and_then(|v| v.as_str()),
+            Some("AA:BB:CC:DD:EE:FF:2026-07-02T00:00:00Z")
+        );
+        assert!(build_command_payload(&json!({"command": "   "})).is_none());
+    }
+
+    #[test]
+    fn command_completion_patch_shape_clears_command() {
+        let cfg = SupabaseConfig {
+            url: "https://example.supabase.co".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+
+        let patch = command_completion_patch(&cfg, 124, "cmd.tar.gz");
+
+        assert_eq!(
+            patch,
+            json!({
+                "command": "",
+                "status_code": 124,
+                "log_filename": "cmd.tar.gz",
+                "last_update_source": "dartsnut_command_bridge:AA:BB:CC:DD:EE:FF"
+            })
+        );
+    }
+
+    #[test]
+    fn command_record_routes_to_command_channel_only() {
+        let cfg = SupabaseConfig {
+            url: "https://example.supabase.co".to_string(),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let (config_tx, config_rx) = mpsc::sync_channel::<String>(1);
+        let (command_tx, command_rx) = mpsc::sync_channel::<Value>(1);
+        let connected = Arc::new(AtomicBool::new(false));
+        let record = json!({
+            "table": "remote_device_commands",
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "command": "ls",
+            "updated_at": "2026-07-02T00:00:00Z",
+            "last_update_source": "mobile_app"
+        });
+
+        handle_realtime_record(&record, &cfg, &config_tx, &command_tx, &connected, &|_| {});
+
+        assert!(config_rx.try_recv().is_err());
+        let payload = command_rx.try_recv().expect("command payload");
+        assert_eq!(payload.get("command").and_then(|v| v.as_str()), Some("ls"));
+    }
+
+    #[test]
     fn rpc_games_patch_posts_to_v2_merge_rpc_as_partial() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -1134,10 +1465,7 @@ mod tests {
             first_line,
             "POST /rest/v1/rpc/apply_remote_device_patch_v2 HTTP/1.1"
         );
-        let body = request
-            .split("\r\n\r\n")
-            .nth(1)
-            .expect("http body");
+        let body = request.split("\r\n\r\n").nth(1).expect("http body");
         let body: Value = serde_json::from_str(body).expect("json body");
         assert_eq!(body.get("p_full"), Some(&json!(false)));
         assert_eq!(

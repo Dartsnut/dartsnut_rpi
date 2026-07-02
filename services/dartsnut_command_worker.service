@@ -1,0 +1,14 @@
+[Unit]
+Description=Dartsnut Supabase Command Worker
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rpi/dartsnut_rpi
+Environment=DARTSNUT_LOG_LEVEL=INFO
+ExecStart=/home/rpi/dartsnut_rpi/uv run supabase_command_worker.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

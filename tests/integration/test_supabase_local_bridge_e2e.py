@@ -10,6 +10,7 @@ import pytest
 import requests
 
 import supabase_sync_bridge as ssb
+import supabase_command_worker as command_worker
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.contract]
@@ -87,7 +88,7 @@ def local_bridge_runtime(monkeypatch):
     yield {
         "base_url": base_url,
         "api_key": api_key,
-        "id": device_id,
+        "device_id": device_id,
         "incoming_configs": incoming_configs,
         "reload_count": reload_count,
     }
@@ -169,3 +170,92 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
     assert latest.get("updated_at")
     assert latest.get("last_update_source") == "mobile_app_test"
     assert reload_count["n"] > 0
+
+
+def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
+    local_bridge_runtime,
+):
+    base_url = local_bridge_runtime["base_url"]
+    api_key = local_bridge_runtime["api_key"]
+    device_id = local_bridge_runtime["device_id"]
+    command_socket_path = command_worker.DEFAULT_SOCKET_PATH
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+    command_received = threading.Event()
+    completion_written = threading.Event()
+
+    try:
+        os.remove(command_socket_path)
+    except FileNotFoundError:
+        pass
+    command_server = command_worker.CommandSocketServer(
+        command_socket_path,
+        handler=lambda payload: (
+            command_received.set()
+            or {
+                "kind": "command_result",
+                "payload": {
+                    "command_id": payload.get("command_id", ""),
+                    "status_code": 0,
+                    "log_filename": "e2e-command.tar.gz",
+                },
+            }
+        ),
+    )
+    server_thread = threading.Thread(target=command_server.serve_once, daemon=True)
+    server_thread.start()
+
+    try:
+        inserted = requests.post(
+            row_url,
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            json={
+                "device_id": device_id,
+                "command": "printf e2e",
+                "last_update_source": "integration_test",
+            },
+            timeout=15,
+        )
+        assert inserted.status_code in (200, 201), inserted.text
+
+        _wait_until(command_received.is_set, desc="command worker request")
+
+        def _row_cleared() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "command,status_code,log_filename,last_update_source",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200:
+                return False
+            rows = r.json()
+            if not rows:
+                return False
+            row = rows[0]
+            ok = (
+                row.get("command") == ""
+                and row.get("status_code") == 0
+                and row.get("log_filename") == "e2e-command.tar.gz"
+                and row.get("last_update_source")
+                == f"dartsnut_command_bridge:{device_id}"
+            )
+            if ok:
+                completion_written.set()
+            return ok
+
+        _wait_until(_row_cleared, desc="command row completion")
+        assert completion_written.is_set()
+    finally:
+        command_server.stop()
+        try:
+            os.remove(command_socket_path)
+        except FileNotFoundError:
+            pass

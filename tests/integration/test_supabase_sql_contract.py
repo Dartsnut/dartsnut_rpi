@@ -268,3 +268,56 @@ def test_apply_remote_device_patch_v2_partial_does_not_create_missing_row():
     assert query.json()[0]["state"]["games"] == [
         {"id": "g1", "status": "ready", "version": "1"}
     ]
+
+
+def test_remote_device_commands_table_contract():
+    base_url, api_key = _require_contract_env()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    device_id = f"ITEST-CMD-{uuid.uuid4()}"
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+
+    inserted = requests.post(
+        row_url,
+        headers={**headers, "Prefer": "return=representation"},
+        json={"device_id": device_id},
+        timeout=15,
+    )
+    assert inserted.status_code in (200, 201), inserted.text
+    row = inserted.json()[0]
+    assert row["device_id"] == device_id
+    assert row["command"] == ""
+    assert row["status_code"] is None
+    assert row["log_filename"] == ""
+    assert row["last_update_source"] == ""
+    assert row["updated_at"]
+
+    updated = requests.patch(
+        row_url,
+        headers={**headers, "Prefer": "return=representation"},
+        params={"device_id": f"eq.{device_id}"},
+        json={
+            "command": "ls",
+            "last_update_source": "integration_test",
+        },
+        timeout=15,
+    )
+    assert updated.status_code in (200, 204), updated.text
+
+    query = requests.get(
+        row_url,
+        headers=headers,
+        params={
+            "device_id": f"eq.{device_id}",
+            "select": "command,status_code,log_filename,last_update_source,updated_at",
+        },
+        timeout=15,
+    )
+    assert query.status_code == 200, query.text
+    rows = query.json()
+    assert len(rows) == 1
+    assert rows[0]["command"] == "ls"
+    assert rows[0]["last_update_source"] == "integration_test"
