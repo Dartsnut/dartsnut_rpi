@@ -22,7 +22,7 @@ const EMBEDDED_SUPABASE_URL: Option<&str> = option_env!("DARTSNUT_EMBEDDED_SUPAB
 const EMBEDDED_SUPABASE_KEY: Option<&str> = option_env!("DARTSNUT_EMBEDDED_SUPABASE_KEY");
 const DEFAULT_UPLOAD_URL: &str = "https://api.dartsnut.com/v1/mobile/device-log/upload";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 20;
-const DEFAULT_LOG_DIR: &str = "logs/supabase_commands";
+const DEFAULT_LOG_DIR: &str = "logs/supabase_watchdog";
 const TIMEOUT_STATUS_CODE: i32 = 124;
 
 #[derive(Clone, Debug)]
@@ -42,14 +42,14 @@ struct WorkerConfig {
 }
 
 #[derive(Debug)]
-struct CommandRequest {
+struct WatchdogTask {
     command_id: String,
     device_id: String,
     command: String,
 }
 
 #[derive(Debug, Serialize)]
-struct CommandResult {
+struct WatchdogResult {
     command: String,
     status_code: i32,
     stdout: String,
@@ -101,7 +101,7 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| {
             resolve_device_id().unwrap_or_else(|e| {
-                eprintln!("command-worker: failed to resolve BLE device_id: {e}");
+                eprintln!("watchdog: failed to resolve BLE device_id: {e}");
                 "UNKNOWN-DEVICE".to_string()
             })
         });
@@ -113,7 +113,7 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
 }
 
 fn load_worker_config() -> Result<WorkerConfig> {
-    let timeout_secs = env::var("DARTSNUT_COMMAND_TIMEOUT_SECONDS")
+    let timeout_secs = env::var("DARTSNUT_WATCHDOG_TIMEOUT_SECONDS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
@@ -126,7 +126,7 @@ fn load_worker_config() -> Result<WorkerConfig> {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_UPLOAD_URL.to_string()),
         timeout: Duration::from_secs(timeout_secs),
-        log_dir: env::var("DARTSNUT_COMMAND_LOG_DIR")
+        log_dir: env::var("DARTSNUT_WATCHDOG_LOG_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_LOG_DIR)),
         repo_root,
@@ -191,15 +191,15 @@ fn resolve_device_id() -> Result<String> {
     Err(anyhow::anyhow!("no BLE adapter MAC found"))
 }
 
-fn command_source(device_id: &str) -> String {
-    format!("dartsnut_command_bridge:{device_id}")
+fn watchdog_source(device_id: &str) -> String {
+    format!("dartsnut_watchdog:{device_id}")
 }
 
-fn should_filter_command_echo(source: &str, device_id: &str) -> bool {
-    source == command_source(device_id)
+fn should_filter_watchdog_echo(source: &str, device_id: &str) -> bool {
+    source == watchdog_source(device_id)
 }
 
-fn command_row_url(cfg: &SupabaseConfig) -> Result<Url> {
+fn watchdog_row_url(cfg: &SupabaseConfig) -> Result<Url> {
     let mut url = Url::parse(&format!(
         "{}/rest/v1/remote_device_commands",
         cfg.url.trim_end_matches('/')
@@ -210,28 +210,28 @@ fn command_row_url(cfg: &SupabaseConfig) -> Result<Url> {
     Ok(url)
 }
 
-fn command_completion_patch(device_id: &str, status_code: i32, log_filename: &str) -> Value {
+fn watchdog_completion_patch(device_id: &str, status_code: i32, log_filename: &str) -> Value {
     json!({
         "command": "",
         "status_code": status_code,
         "log_filename": log_filename,
-        "last_update_source": command_source(device_id),
+        "last_update_source": watchdog_source(device_id),
     })
 }
 
-fn update_command_completion(
+fn update_watchdog_completion(
     client: &Client,
     cfg: &SupabaseConfig,
     status_code: i32,
     log_filename: &str,
 ) -> Result<()> {
     client
-        .patch(command_row_url(cfg)?)
+        .patch(watchdog_row_url(cfg)?)
         .header("apikey", &cfg.key)
         .header("Authorization", format!("Bearer {}", cfg.key))
         .header("Content-Type", "application/json")
         .header("Prefer", "return=minimal")
-        .json(&command_completion_patch(
+        .json(&watchdog_completion_patch(
             &cfg.device_id,
             status_code,
             log_filename,
@@ -278,7 +278,7 @@ fn extract_record_from_payload(payload: &Value) -> Option<&Value> {
         .or_else(|| payload.get("data").and_then(|d| d.get("new")))
 }
 
-fn build_command_request(record: &Value) -> Option<CommandRequest> {
+fn build_watchdog_task(record: &Value) -> Option<WatchdogTask> {
     let command = record.get("command").and_then(|v| v.as_str())?.trim();
     if command.is_empty() {
         return None;
@@ -301,14 +301,14 @@ fn build_command_request(record: &Value) -> Option<CommandRequest> {
     } else {
         command.to_string()
     };
-    Some(CommandRequest {
+    Some(WatchdogTask {
         command_id,
         device_id,
         command: command.to_string(),
     })
 }
 
-fn prepare_shell_command(command: &str, euid: u32) -> String {
+fn prepare_shell_task(command: &str, euid: u32) -> String {
     let sudo_function = if euid == 0 {
         "sudo() { command \"$@\"; };"
     } else {
@@ -344,9 +344,9 @@ fn read_pipe_to_string<R: Read + Send + 'static>(mut reader: R) -> thread::JoinH
     })
 }
 
-fn run_command(command: &str, cwd: &Path, timeout: Duration) -> Result<CommandResult> {
+fn execute_task(command: &str, cwd: &Path, timeout: Duration) -> Result<WatchdogResult> {
     let started_at = utc_now_iso();
-    let shell_command = prepare_shell_command(command, current_euid());
+    let shell_command = prepare_shell_task(command, current_euid());
     let mut child = unsafe {
         let mut cmd = Command::new("/bin/sh");
         cmd.arg("-c")
@@ -388,7 +388,7 @@ fn run_command(command: &str, cwd: &Path, timeout: Duration) -> Result<CommandRe
         .map(|h| h.join().unwrap_or_default())
         .unwrap_or_default();
 
-    Ok(CommandResult {
+    Ok(WatchdogResult {
         command: command.to_string(),
         status_code,
         stdout,
@@ -419,7 +419,7 @@ fn safe_name(value: &str) -> String {
 }
 
 fn write_log_archive(
-    result: &CommandResult,
+    result: &WatchdogResult,
     log_dir: &Path,
     command_id: &str,
     device_id: &str,
@@ -535,10 +535,10 @@ fn upload_archive(
     parse_upload_file_url(&text)
 }
 
-fn handle_command(client: &Client, cfg: &WorkerConfig, request: CommandRequest) -> (i32, String) {
-    let result = match run_command(&request.command, &cfg.repo_root, cfg.timeout) {
+fn handle_task(client: &Client, cfg: &WorkerConfig, request: WatchdogTask) -> (i32, String) {
+    let result = match execute_task(&request.command, &cfg.repo_root, cfg.timeout) {
         Ok(v) => v,
-        Err(e) => CommandResult {
+        Err(e) => WatchdogResult {
             command: request.command.clone(),
             status_code: 1,
             stdout: String::new(),
@@ -557,7 +557,7 @@ fn handle_command(client: &Client, cfg: &WorkerConfig, request: CommandRequest) 
     ) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("command-worker: failed to write log archive: {e}");
+            eprintln!("watchdog: failed to write log archive: {e}");
             return (status_code, String::new());
         }
     };
@@ -579,7 +579,7 @@ fn handle_command(client: &Client, cfg: &WorkerConfig, request: CommandRequest) 
         Ok(file_url) if !file_url.is_empty() => file_url,
         Ok(_) => fallback,
         Err(e) => {
-            eprintln!("command-worker: log upload failed: {e}");
+            eprintln!("watchdog: log upload failed: {e}");
             fallback
         }
     };
@@ -591,17 +591,17 @@ fn handle_realtime_record(client: &Client, worker_cfg: &WorkerConfig, record: &V
         .get("last_update_source")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if should_filter_command_echo(source, &worker_cfg.supabase.device_id) {
+    if should_filter_watchdog_echo(source, &worker_cfg.supabase.device_id) {
         return;
     }
-    let Some(request) = build_command_request(record) else {
+    let Some(request) = build_watchdog_task(record) else {
         return;
     };
-    let (status_code, log_filename) = handle_command(client, worker_cfg, request);
+    let (status_code, log_filename) = handle_task(client, worker_cfg, request);
     if let Err(e) =
-        update_command_completion(client, &worker_cfg.supabase, status_code, &log_filename)
+        update_watchdog_completion(client, &worker_cfg.supabase, status_code, &log_filename)
     {
-        eprintln!("command-worker: command completion update failed: {e}");
+        eprintln!("watchdog: task completion update failed: {e}");
     }
 }
 
@@ -616,7 +616,7 @@ fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
         let (mut socket, _) = match connect(ws_url.as_str()) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("command-worker: realtime connect failed: {e}");
+                eprintln!("watchdog: realtime connect failed: {e}");
                 thread::sleep(Duration::from_secs(backoff_seconds));
                 backoff_seconds = (backoff_seconds * 2).min(30);
                 continue;
@@ -624,7 +624,7 @@ fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
         };
         backoff_seconds = 1;
         set_ws_read_timeout(&mut socket, Some(Duration::from_secs(10)));
-        let topic = "realtime:public:dartsnut_command_worker";
+        let topic = "realtime:public:dartsnut_watchdog";
         let join_payload = json!({
             "topic": topic,
             "event": "phx_join",
@@ -682,7 +682,7 @@ fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
                                 ticks_since_heartbeat = 0;
                                 if heartbeats_unanswered >= 2 {
                                     eprintln!(
-                                        "command-worker: realtime heartbeat unanswered; reconnecting"
+                                        "watchdog: realtime heartbeat unanswered; reconnecting"
                                     );
                                     break;
                                 }
@@ -704,7 +704,7 @@ fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
                             continue;
                         }
                     }
-                    eprintln!("command-worker: realtime read error: {e}");
+                    eprintln!("watchdog: realtime read error: {e}");
                     break;
                 }
             }
@@ -731,26 +731,26 @@ mod tests {
     }
 
     #[test]
-    fn command_table_url_targets_device_row() {
-        let url = command_row_url(&cfg()).expect("url");
+    fn watchdog_table_url_targets_device_row() {
+        let url = watchdog_row_url(&cfg()).expect("url");
         assert_eq!(url.as_str(), "https://example.supabase.co/rest/v1/remote_device_commands?device_id=eq.AA%3ABB%3ACC%3ADD%3AEE%3AFF");
     }
 
     #[test]
-    fn command_source_loopback_is_filtered() {
-        assert!(should_filter_command_echo(
-            "dartsnut_command_bridge:AA:BB:CC:DD:EE:FF",
+    fn watchdog_source_loopback_is_filtered() {
+        assert!(should_filter_watchdog_echo(
+            "dartsnut_watchdog:AA:BB:CC:DD:EE:FF",
             "AA:BB:CC:DD:EE:FF"
         ));
-        assert!(!should_filter_command_echo(
+        assert!(!should_filter_watchdog_echo(
             "mobile_app",
             "AA:BB:CC:DD:EE:FF"
         ));
     }
 
     #[test]
-    fn command_completion_patch_shape_stores_file_url() {
-        let patch = command_completion_patch(
+    fn watchdog_completion_patch_shape_stores_file_url() {
+        let patch = watchdog_completion_patch(
             "AA:BB:CC:DD:EE:FF",
             0,
             "https://oss.example.com/device.log.gz",
@@ -761,42 +761,42 @@ mod tests {
                 "command": "",
                 "status_code": 0,
                 "log_filename": "https://oss.example.com/device.log.gz",
-                "last_update_source": "dartsnut_command_bridge:AA:BB:CC:DD:EE:FF"
+                "last_update_source": "dartsnut_watchdog:AA:BB:CC:DD:EE:FF"
             })
         );
     }
 
     #[test]
-    fn command_request_requires_non_empty_command() {
+    fn watchdog_task_requires_non_empty_payload() {
         let record = json!({
             "device_id": "AA:BB:CC:DD:EE:FF",
             "command": "  ls  ",
             "updated_at": "2026-07-02T00:00:00Z"
         });
-        let request = build_command_request(&record).expect("request");
+        let request = build_watchdog_task(&record).expect("request");
         assert_eq!(request.command, "ls");
         assert_eq!(request.command_id, "AA:BB:CC:DD:EE:FF:2026-07-02T00:00:00Z");
-        assert!(build_command_request(&json!({"command": "   "})).is_none());
+        assert!(build_watchdog_task(&json!({"command": "   "})).is_none());
     }
 
     #[test]
-    fn prepare_shell_command_strips_sudo_when_worker_is_root() {
-        let prepared = prepare_shell_command("sudo systemctl restart dartsnut_python.service", 0);
+    fn prepare_shell_task_strips_sudo_when_root() {
+        let prepared = prepare_shell_task("sudo systemctl restart dartsnut_python.service", 0);
         assert!(prepared.contains("sudo() { command \"$@\"; }"));
         assert!(prepared.contains("sudo systemctl restart dartsnut_python.service"));
     }
 
     #[test]
-    fn prepare_shell_command_uses_noninteractive_sudo_when_not_root() {
-        let prepared = prepare_shell_command("sudo systemctl status dartsnut_python.service", 1000);
+    fn prepare_shell_task_uses_noninteractive_sudo_when_not_root() {
+        let prepared = prepare_shell_task("sudo systemctl status dartsnut_python.service", 1000);
         assert!(prepared.contains("sudo() { command sudo -n \"$@\"; }"));
         assert!(prepared.contains("sudo systemctl status dartsnut_python.service"));
     }
 
     #[test]
-    fn successful_command_captures_stdout() {
+    fn successful_task_captures_stdout() {
         let tmp = env::temp_dir();
-        let result = run_command("printf hello", &tmp, Duration::from_secs(20)).expect("run");
+        let result = execute_task("printf hello", &tmp, Duration::from_secs(20)).expect("run");
         assert_eq!(result.status_code, 0);
         assert_eq!(result.stdout, "hello");
         assert_eq!(result.stderr, "");
@@ -804,10 +804,10 @@ mod tests {
     }
 
     #[test]
-    fn failed_command_captures_stderr_and_status() {
+    fn failed_task_captures_stderr_and_status() {
         let tmp = env::temp_dir();
         let result =
-            run_command("printf nope >&2; exit 7", &tmp, Duration::from_secs(20)).expect("run");
+            execute_task("printf nope >&2; exit 7", &tmp, Duration::from_secs(20)).expect("run");
         assert_eq!(result.status_code, 7);
         assert_eq!(result.stdout, "");
         assert_eq!(result.stderr, "nope");
@@ -817,19 +817,19 @@ mod tests {
     #[test]
     fn timeout_kills_process_group_and_returns_124() {
         let tmp = env::temp_dir();
-        let result = run_command("sleep 5", &tmp, Duration::from_millis(100)).expect("run");
+        let result = execute_task("sleep 5", &tmp, Duration::from_millis(100)).expect("run");
         assert_eq!(result.status_code, TIMEOUT_STATUS_CODE);
         assert!(result.timed_out);
     }
 
     #[test]
-    fn tarball_contains_command_log() {
+    fn tarball_contains_watchdog_log() {
         let unique = format!(
-            "dartsnut-command-test-{}",
+            "dartsnut-watchdog-test-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or_default()
         );
         let dir = env::temp_dir().join(unique);
-        let result = CommandResult {
+        let result = WatchdogResult {
             command: "printf hello".to_string(),
             status_code: 0,
             stdout: "hello".to_string(),

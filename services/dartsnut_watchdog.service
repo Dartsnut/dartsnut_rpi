@@ -1,5 +1,5 @@
 [Unit]
-Description=Dartsnut Supabase Command Worker
+Description=Dartsnut Supabase Watchdog
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 Environment=DARTSNUT_LOG_LEVEL=INFO
-ExecStart=/home/rpi/dartsnut_rpi/command_worker
+ExecStart=/home/rpi/dartsnut_rpi/watchdog
 Restart=always
 
 [Install]

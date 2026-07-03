@@ -7,7 +7,7 @@
 # systemd units, assets, Python trees (including core/app_defaults and runtime/sync),
 # vendored ./uv + uv.sha256, pyproject.toml, uv.lock, scripts/uv_env.sh,
 # system-packages, and the compiled Supabase binaries at ./bridge and
-# ./command_worker (no supabase/, supabase_bridge/, tests/, docs/, or legacy
+# ./watchdog (no supabase/, supabase_bridge/, tests/, docs/, or legacy
 # requirements.txt in the release commit).
 #
 # Flow: resolve version -> dry-run report if requested, otherwise bump
@@ -18,7 +18,7 @@
 # Environment:
 #   BUILD_BRIDGE=1        — run scripts/compile_supabase_bridge.sh after squash
 #                           (default: skip build and reuse existing ./bridge and
-#                           ./command_worker).
+#                           ./watchdog).
 #   DRY_RUN=1             — inspect release inputs without changing branches,
 #                           commits, tags, or the working tree.
 #   SKIP_GIT_FETCH=1      — do not run git fetch origin before branch checks.
@@ -69,11 +69,11 @@ ALLOWLIST=(
   services/dartsnut_matrix.service
   services/dartsnut_python.service
   services/dartsnut_mcp.service
-  services/dartsnut_command_worker.service
+  services/dartsnut_watchdog.service
   services/99-dartsnut-tcp.conf
   services/logo.ppm
   bridge
-  command_worker
+  watchdog
   pyproject.toml
   uv.lock
   system-packages.txt

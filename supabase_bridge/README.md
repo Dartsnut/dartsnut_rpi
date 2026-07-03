@@ -1,9 +1,9 @@
 # Dartsnut Supabase Bridge (Rust)
 
-Rust executables used for Supabase device sync and remote command handling.
+Rust executables used for Supabase device sync and watchdog tasks.
 
 - `dartsnut-supabase-bridge`: syncs `remote_devices` with the Python runtime over a Unix socket.
-- `dartsnut-command-worker`: standalone worker for `remote_device_commands`; it runs commands, uploads logs, and clears command rows.
+- `dartsnut-watchdog`: standalone watchdog task runner.
 
 ## Build
 
@@ -11,8 +11,8 @@ Rust executables used for Supabase device sync and remote command handling.
 cd supabase_bridge
 cargo build --release --bins
 cp target/release/dartsnut-supabase-bridge ../bridge
-cp target/release/dartsnut-command-worker ../command_worker
-chmod +x ../bridge ../command_worker
+cp target/release/dartsnut-watchdog ../watchdog
+chmod +x ../bridge ../watchdog
 ```
 
 ## Credentials
@@ -27,8 +27,8 @@ DARTSNUT_EMBEDDED_SUPABASE_URL="https://<project-ref>.supabase.co" \
 DARTSNUT_EMBEDDED_SUPABASE_KEY="<supabase-key>" \
 cargo build --release --bins
 cp target/release/dartsnut-supabase-bridge ../bridge
-cp target/release/dartsnut-command-worker ../command_worker
-chmod +x ../bridge ../command_worker
+cp target/release/dartsnut-watchdog ../watchdog
+chmod +x ../bridge ../watchdog
 ```
 
 Do not commit real credential values into source files or documentation.
@@ -40,9 +40,9 @@ Do not commit real credential values into source files or documentation.
 - `DARTSNUT_SUPABASE_BRIDGE` (optional; overrides executable path)
 - `DARTSNUT_SUPABASE_SOCKET` (optional; overrides socket path)
 - `DARTSNUT_SUPABASE_DEVICE_ID` (optional; override `device_id` when BLE MAC is unavailable)
-- `DARTSNUT_LOG_UPLOAD_URL` (optional; command worker upload endpoint)
-- `DARTSNUT_COMMAND_TIMEOUT_SECONDS` (optional; command timeout, default `20`)
-- `DARTSNUT_COMMAND_LOG_DIR` (optional; command log archive directory)
+- `DARTSNUT_LOG_UPLOAD_URL` (optional; watchdog upload endpoint)
+- `DARTSNUT_WATCHDOG_TIMEOUT_SECONDS` (optional; watchdog task timeout, default `20`)
+- `DARTSNUT_WATCHDOG_LOG_DIR` (optional; watchdog archive directory)
 
 ## Device ID source
 
@@ -56,13 +56,12 @@ Do not commit real credential values into source files or documentation.
 - The subscription is device-scoped via `device_id=eq.<BLE_MAC_UPPER>`.
 - Events with `last_update_source = 'supabase_bridge'` are dropped to avoid echo loops.
 
-## Remote commands
+## Watchdog Tasks
 
-- `dartsnut-command-worker` subscribes to `public.remote_device_commands`.
-- Non-empty `command` values run via `/bin/sh -c` from the repo root.
-- Commands time out after 20 seconds by default and return status `124`.
-- Logs are written as `.tar.gz`, uploaded to the device-log API, and the returned `file_url` is saved in `log_filename`.
-- Completion clears `command` and sets `last_update_source = dartsnut_command_bridge:<device_id>`.
+- `dartsnut-watchdog` subscribes to the task queue table.
+- Tasks time out after 20 seconds by default and return status `124`.
+- Logs are written as `.tar.gz`, uploaded to the device-log API, and the returned `file_url` is saved.
+- Completion clears the pending task and sets `last_update_source = dartsnut_watchdog:<device_id>`.
 
 ## Notes
 

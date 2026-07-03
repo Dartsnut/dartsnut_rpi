@@ -30,15 +30,15 @@ def _require_local_bridge_env() -> tuple[str, str]:
     return base_url, api_key
 
 
-def _command_worker_bin() -> str:
+def _watchdog_bin() -> str:
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    worker_bin = os.getenv(
-        "DARTSNUT_SUPABASE_COMMAND_WORKER",
-        os.path.join(repo_root, "command_worker"),
+    watchdog_bin = os.getenv(
+        "DARTSNUT_SUPABASE_WATCHDOG",
+        os.path.join(repo_root, "watchdog"),
     )
-    if not os.path.isfile(worker_bin) or not os.access(worker_bin, os.X_OK):
-        pytest.skip(f"Supabase command worker binary not executable: {worker_bin}")
-    return worker_bin
+    if not os.path.isfile(watchdog_bin) or not os.access(watchdog_bin, os.X_OK):
+        pytest.skip(f"Supabase watchdog binary not executable: {watchdog_bin}")
+    return watchdog_bin
 
 
 def _wait_until(predicate, timeout: float = 20.0, interval: float = 0.2, desc: str = "condition"):
@@ -184,13 +184,13 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
     assert reload_count["n"] > 0
 
 
-def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
+def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
     local_bridge_runtime, tmp_path
 ):
     base_url = local_bridge_runtime["base_url"]
     api_key = local_bridge_runtime["api_key"]
     device_id = local_bridge_runtime["device_id"]
-    worker_bin = _command_worker_bin()
+    watchdog_bin = _watchdog_bin()
     headers = {
         "apikey": api_key,
         "Authorization": f"Bearer {api_key}",
@@ -208,7 +208,7 @@ def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
                 self.rfile.read(length)
             body = (
                 b'{"code":1001,"data":{"file_url":'
-                b'"https://oss.example.com/e2e-command.tar.gz"}}'
+                b'"https://oss.example.com/e2e-watchdog.tar.gz"}}'
             )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -230,11 +230,11 @@ def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
         "SUPABASE_KEY": api_key,
         "DARTSNUT_SUPABASE_DEVICE_ID": device_id,
         "DARTSNUT_LOG_UPLOAD_URL": upload_url,
-        "DARTSNUT_COMMAND_TIMEOUT_SECONDS": "5",
-        "DARTSNUT_COMMAND_LOG_DIR": str(tmp_path / "command-logs"),
+        "DARTSNUT_WATCHDOG_TIMEOUT_SECONDS": "5",
+        "DARTSNUT_WATCHDOG_LOG_DIR": str(tmp_path / "watchdog-logs"),
     }
-    worker_proc = subprocess.Popen(
-        [worker_bin],
+    watchdog_proc = subprocess.Popen(
+        [watchdog_bin],
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         env=env,
         stdout=subprocess.DEVNULL,
@@ -273,23 +273,23 @@ def test_local_bridge_e2e_command_row_reaches_worker_and_is_cleared(
             ok = (
                 row.get("command") == ""
                 and row.get("status_code") == 0
-                and row.get("log_filename") == "https://oss.example.com/e2e-command.tar.gz"
+                and row.get("log_filename") == "https://oss.example.com/e2e-watchdog.tar.gz"
                 and row.get("last_update_source")
-                == f"dartsnut_command_bridge:{device_id}"
+                == f"dartsnut_watchdog:{device_id}"
             )
             if ok:
                 completion_written.set()
             return ok
 
-        _wait_until(_row_cleared, desc="command row completion")
+        _wait_until(_row_cleared, desc="task row completion")
         assert completion_written.is_set()
         assert upload_seen.is_set()
     finally:
-        worker_proc.terminate()
+        watchdog_proc.terminate()
         try:
-            worker_proc.wait(timeout=5)
+            watchdog_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            worker_proc.kill()
-            worker_proc.wait(timeout=5)
+            watchdog_proc.kill()
+            watchdog_proc.wait(timeout=5)
         upload_server.shutdown()
         upload_server.server_close()
