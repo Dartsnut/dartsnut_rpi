@@ -146,7 +146,7 @@ fi
 
 echo "== Python deps refresh (uv) =="
 "${INSTALL_PACKAGES_SCRIPT}" "${SYSTEM_PACKAGES_FILE}"
-refresh_uv_project
+refresh_uv_project || exit $?
 
 echo "== Network tuning (Supabase / Wi-Fi stability) =="
 

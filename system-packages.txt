@@ -4,6 +4,7 @@ python3-dev
 libgirepository1.0-dev
 gir1.2-glib-2.0
 libdbus-1-dev
+python3-dbus
 libbluetooth-dev
 libgl1
 xvfb
