@@ -6,17 +6,19 @@
 # Release branch carries only what is needed to run main.py, setup.sh, update.sh,
 # systemd units, assets, Python trees (including core/app_defaults and runtime/sync),
 # vendored ./uv + uv.sha256, pyproject.toml, uv.lock, scripts/uv_env.sh,
-# system-packages, and the compiled Supabase sync binary at ./bridge (no supabase/,
-# supabase_bridge/, tests/, docs/, or legacy requirements.txt in the release commit).
+# system-packages, and the compiled Supabase binaries at ./bridge and
+# ./watchdog (no supabase/, supabase_bridge/, tests/, docs/, or legacy
+# requirements.txt in the release commit).
 #
 # Flow: resolve version -> dry-run report if requested, otherwise bump
 # pyproject.toml and uv.lock on master and commit -> checkout release ->
-# ff-only origin/release -> merge --squash master -> optional cargo bridge build ->
+# ff-only origin/release -> merge --squash master -> optional cargo bridge/worker build ->
 # clear index -> stage allowlist only -> verify -> single commit -> tag vX.Y.Z.
 #
 # Environment:
 #   BUILD_BRIDGE=1        — run scripts/compile_supabase_bridge.sh after squash
-#                           (default: skip bridge build and reuse existing ./bridge).
+#                           (default: skip build and reuse existing ./bridge and
+#                           ./watchdog).
 #   DRY_RUN=1             — inspect release inputs without changing branches,
 #                           commits, tags, or the working tree.
 #   SKIP_GIT_FETCH=1      — do not run git fetch origin before branch checks.
@@ -67,9 +69,11 @@ ALLOWLIST=(
   services/dartsnut_matrix.service
   services/dartsnut_python.service
   services/dartsnut_mcp.service
+  services/dartsnut_watchdog.service
   services/99-dartsnut-tcp.conf
   services/logo.ppm
   bridge
+  watchdog
   pyproject.toml
   uv.lock
   system-packages.txt

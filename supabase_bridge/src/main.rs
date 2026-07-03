@@ -82,9 +82,7 @@ fn record_outbound_failure(state: &mut ProbeState) {
 }
 
 fn outbound_within_idle_window(state: &ProbeState, idle: Duration) -> bool {
-    state
-        .last_outbound_at
-        .is_some_and(|t| t.elapsed() < idle)
+    state.last_outbound_at.is_some_and(|t| t.elapsed() < idle)
 }
 
 fn device_updated_at_iso_timestamp() -> String {
@@ -127,7 +125,11 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
                 "UNKNOWN-DEVICE".to_string()
             })
         });
-    Ok(SupabaseConfig { url, key, device_id })
+    Ok(SupabaseConfig {
+        url,
+        key,
+        device_id,
+    })
 }
 
 fn normalize_mac(value: &str) -> Option<String> {
@@ -173,10 +175,7 @@ fn resolve_device_id() -> Result<String> {
         }
     }
 
-    for cmd in [
-        ("hciconfig", vec!["-a"]),
-        ("bluetoothctl", vec!["list"]),
-    ] {
+    for cmd in [("hciconfig", vec!["-a"]), ("bluetoothctl", vec!["list"])] {
         if let Ok(out) = Command::new(cmd.0).args(cmd.1).output() {
             if out.status.success() {
                 if let Ok(stdout) = String::from_utf8(out.stdout) {
@@ -206,9 +205,9 @@ fn send_msg(out: &OutSender, kind: &str, payload: Value) -> Result<()> {
         // Channel full: the writer thread can't keep up because Python isn't draining.
         // Drop this message rather than block; the reader must stay responsive. The
         // writer thread's own write timeout is what ultimately forces a respawn.
-        Err(mpsc::TrySendError::Full(_)) => {
-            Err(anyhow::anyhow!("unix writer channel full; dropped {kind} message"))
-        }
+        Err(mpsc::TrySendError::Full(_)) => Err(anyhow::anyhow!(
+            "unix writer channel full; dropped {kind} message"
+        )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(anyhow::anyhow!("unix writer channel disconnected"))
         }
@@ -346,11 +345,7 @@ fn run_probe_tick(
     probe_idle_device_updated_at_write(client, cfg, rpc_lock, probe_state)
 }
 
-fn send_bridge_health(
-    writer: &OutSender,
-    state: &str,
-    probe: &RestProbeSnapshot,
-) {
+fn send_bridge_health(writer: &OutSender, state: &str, probe: &RestProbeSnapshot) {
     let mut payload = json!({ "state": state });
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("rest_probe_ok".to_string(), json!(probe.probe_ok));
@@ -381,10 +376,7 @@ fn run_rest_probe_loop(
     rpc_apply_lock: Arc<Mutex<()>>,
     probe_in_flight: Arc<AtomicBool>,
 ) {
-    let client = match Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-    {
+    let client = match Client::builder().timeout(Duration::from_secs(3)).build() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("bridge: failed to build probe http client: {e}");
@@ -444,7 +436,9 @@ fn apply_initial_state_with_retry(
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}");
+                eprintln!(
+                    "bridge: remote row lookup failed (attempt {attempt}/{max_attempts}): {e}"
+                );
                 match rpc_apply_patch_recorded(
                     client,
                     cfg,
@@ -484,7 +478,12 @@ fn build_realtime_ws_url(cfg: &SupabaseConfig) -> Result<Url> {
     let scheme = match base.scheme() {
         "https" => "wss",
         "http" => "ws",
-        other => return Err(anyhow::anyhow!("unsupported supabase url scheme: {}", other)),
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported supabase url scheme: {}",
+                other
+            ))
+        }
     };
     base.set_scheme(scheme)
         .map_err(|_| anyhow::anyhow!("failed to set websocket scheme"))?;
@@ -524,7 +523,10 @@ fn build_config_payload(record: &Value, state: &Value) -> Value {
 
     if let Some(obj) = payload.as_object_mut() {
         if let Some(updated_at) = record.get("updated_at").and_then(|v| v.as_str()) {
-            obj.insert("updated_at".to_string(), Value::String(updated_at.to_string()));
+            obj.insert(
+                "updated_at".to_string(),
+                Value::String(updated_at.to_string()),
+            );
         }
         if let Some(source) = record.get("last_update_source").and_then(|v| v.as_str()) {
             obj.insert(
@@ -571,10 +573,7 @@ fn is_reset_confirmation_state(state: &Value) -> bool {
 }
 
 fn is_game_state_payload(state: &Value) -> bool {
-    state
-        .get("games")
-        .and_then(|v| v.as_array())
-        .is_some()
+    state.get("games").and_then(|v| v.as_array()).is_some()
 }
 
 fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
@@ -587,6 +586,30 @@ fn should_filter_bridge_echo(source: &str, state: &Value) -> bool {
     source == SOURCE_SUPABASE_BRIDGE
         && !is_reset_confirmation_state(state)
         && !is_game_state_payload(state)
+}
+
+fn handle_realtime_record(
+    record: &Value,
+    writer: &OutSender,
+    realtime_connected: &Arc<AtomicBool>,
+    emit_health: &dyn Fn(&str),
+) {
+    let state = match record.get("state") {
+        Some(v) => v.clone(),
+        None => return,
+    };
+    let source = record
+        .get("last_update_source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if should_filter_bridge_echo(source, &state) {
+        return;
+    }
+    let config_payload = build_config_payload(record, &state);
+    if send_msg(writer, "remote_row", config_payload).is_ok() {
+        realtime_connected.store(true, Ordering::Relaxed);
+        emit_health("connected");
+    }
 }
 
 fn run_realtime_loop(
@@ -636,19 +659,21 @@ fn run_realtime_loop(
         backoff_seconds = 1;
         set_ws_read_timeout(&mut socket, Some(Duration::from_secs(10)));
 
-        let topic = "realtime:public:remote_devices";
+        let topic = "realtime:public:dartsnut_bridge";
         let join_payload = json!({
             "topic": topic,
             "event": "phx_join",
             "payload": {
                 "config": {
                     "broadcast": {"self": false},
-                    "postgres_changes": [{
-                        "event": "*",
-                        "schema": "public",
-                        "table": "remote_devices",
-                        "filter": format!("device_id=eq.{}", cfg.device_id),
-                    }]
+                    "postgres_changes": [
+                        {
+                            "event": "*",
+                            "schema": "public",
+                            "table": "remote_devices",
+                            "filter": format!("device_id=eq.{}", cfg.device_id),
+                        }
+                    ]
                 },
                 "access_token": cfg.key,
             },
@@ -699,22 +724,7 @@ fn run_realtime_loop(
                             Some(r) => r,
                             None => continue,
                         };
-                        let state = match record.get("state") {
-                            Some(v) => v.clone(),
-                            None => continue,
-                        };
-                        let source = record
-                            .get("last_update_source")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if should_filter_bridge_echo(source, &state) {
-                            continue;
-                        }
-                        let config_payload = build_config_payload(record, &state);
-                        if send_msg(&writer, "remote_row", config_payload).is_ok() {
-                            realtime_connected.store(true, Ordering::Relaxed);
-                            emit_health("connected");
-                        }
+                        handle_realtime_record(record, &writer, &realtime_connected, &emit_health);
                     }
                 }
                 Err(e) => {
@@ -827,9 +837,7 @@ fn main() -> Result<()> {
     thread::spawn(move || {
         let mut write_stream = write_stream;
         for line in out_rx {
-            if write_stream.write_all(line.as_bytes()).is_err()
-                || write_stream.flush().is_err()
-            {
+            if write_stream.write_all(line.as_bytes()).is_err() || write_stream.flush().is_err() {
                 // Python side is gone or unresponsive past the write timeout. The
                 // bridge can't recover this unix socket on its own (Python owns the
                 // listener); exit so the supervisor respawns us with a fresh pipe.
@@ -896,10 +904,7 @@ fn main() -> Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let write_ref = msg
-            .r#ref
-            .clone()
-            .unwrap_or_else(|| "legacy".to_string());
+        let write_ref = msg.r#ref.clone().unwrap_or_else(|| "legacy".to_string());
         let is_full = msg.full.unwrap_or(false);
         match msg.kind.as_str() {
             "initial_state" | "rpc_patch" => {
@@ -925,11 +930,7 @@ fn main() -> Result<()> {
                 };
                 match result {
                     Ok(()) => {
-                        let _ = send_msg(
-                            &writer,
-                            "ack",
-                            json!({"ref": write_ref}),
-                        );
+                        let _ = send_msg(&writer, "ack", json!({"ref": write_ref}));
                     }
                     Err(e) => {
                         let _ = send_msg(
@@ -954,11 +955,7 @@ fn main() -> Result<()> {
                     &probe_state_main,
                 ) {
                     Ok(()) => {
-                        let _ = send_msg(
-                            &writer,
-                            "ack",
-                            json!({"ref": write_ref}),
-                        );
+                        let _ = send_msg(&writer, "ack", json!({"ref": write_ref}));
                     }
                     Err(e) => {
                         let _ = send_msg(
@@ -1013,7 +1010,9 @@ mod tests {
     #[test]
     fn game_state_payload_detects_games_array() {
         assert!(is_game_state_payload(&json!({"games": []})));
-        assert!(is_game_state_payload(&json!({"games": [{"id":"g1","status":"ready"}]})));
+        assert!(is_game_state_payload(
+            &json!({"games": [{"id":"g1","status":"ready"}]})
+        ));
         assert!(!is_game_state_payload(&json!({"games": null})));
         assert!(!is_game_state_payload(&json!({"brightness": 70})));
     }
@@ -1027,7 +1026,10 @@ mod tests {
             "games": [],
             "dim_window": {"dim_window_enabled": false}
         });
-        assert!(!should_filter_bridge_echo(SOURCE_SUPABASE_BRIDGE_INIT, &state));
+        assert!(!should_filter_bridge_echo(
+            SOURCE_SUPABASE_BRIDGE_INIT,
+            &state
+        ));
     }
 
     #[test]
@@ -1088,6 +1090,24 @@ mod tests {
     }
 
     #[test]
+    fn bridge_ignores_records_without_device_state() {
+        let (config_tx, config_rx) = mpsc::sync_channel::<String>(1);
+        let connected = Arc::new(AtomicBool::new(false));
+        let record = json!({
+            "table": "remote_device_commands",
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "command": "ls",
+            "updated_at": "2026-07-02T00:00:00Z",
+            "last_update_source": "mobile_app"
+        });
+
+        handle_realtime_record(&record, &config_tx, &connected, &|_| {});
+
+        assert!(config_rx.try_recv().is_err());
+        assert!(!connected.load(Ordering::Relaxed));
+    }
+
+    #[test]
     fn rpc_games_patch_posts_to_v2_merge_rpc_as_partial() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -1134,10 +1154,7 @@ mod tests {
             first_line,
             "POST /rest/v1/rpc/apply_remote_device_patch_v2 HTTP/1.1"
         );
-        let body = request
-            .split("\r\n\r\n")
-            .nth(1)
-            .expect("http body");
+        let body = request.split("\r\n\r\n").nth(1).expect("http body");
         let body: Value = serde_json::from_str(body).expect("json body");
         assert_eq!(body.get("p_full"), Some(&json!(false)));
         assert_eq!(

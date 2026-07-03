@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
@@ -26,6 +28,17 @@ def _require_local_bridge_env() -> tuple[str, str]:
     if not os.path.isfile(bridge_bin) or not os.access(bridge_bin, os.X_OK):
         pytest.skip(f"Supabase bridge binary not executable: {bridge_bin}")
     return base_url, api_key
+
+
+def _watchdog_bin() -> str:
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    watchdog_bin = os.getenv(
+        "DARTSNUT_SUPABASE_WATCHDOG",
+        os.path.join(repo_root, "watchdog"),
+    )
+    if not os.path.isfile(watchdog_bin) or not os.access(watchdog_bin, os.X_OK):
+        pytest.skip(f"Supabase watchdog binary not executable: {watchdog_bin}")
+    return watchdog_bin
 
 
 def _wait_until(predicate, timeout: float = 20.0, interval: float = 0.2, desc: str = "condition"):
@@ -87,7 +100,7 @@ def local_bridge_runtime(monkeypatch):
     yield {
         "base_url": base_url,
         "api_key": api_key,
-        "id": device_id,
+        "device_id": device_id,
         "incoming_configs": incoming_configs,
         "reload_count": reload_count,
     }
@@ -169,3 +182,114 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
     assert latest.get("updated_at")
     assert latest.get("last_update_source") == "mobile_app_test"
     assert reload_count["n"] > 0
+
+
+def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
+    local_bridge_runtime, tmp_path
+):
+    base_url = local_bridge_runtime["base_url"]
+    api_key = local_bridge_runtime["api_key"]
+    device_id = local_bridge_runtime["device_id"]
+    watchdog_bin = _watchdog_bin()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+    completion_written = threading.Event()
+    upload_seen = threading.Event()
+
+    class UploadHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            upload_seen.set()
+            length = int(self.headers.get("content-length", "0"))
+            if length:
+                self.rfile.read(length)
+            body = (
+                b'{"code":1001,"data":{"file_url":'
+                b'"https://oss.example.com/e2e-watchdog.tar.gz"}}'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    upload_server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
+    upload_thread = threading.Thread(target=upload_server.serve_forever, daemon=True)
+    upload_thread.start()
+    upload_url = f"http://127.0.0.1:{upload_server.server_port}/v1/mobile/device-log/upload"
+
+    env = {
+        **os.environ,
+        "SUPABASE_URL": base_url,
+        "SUPABASE_KEY": api_key,
+        "DARTSNUT_SUPABASE_DEVICE_ID": device_id,
+        "DARTSNUT_LOG_UPLOAD_URL": upload_url,
+        "DARTSNUT_WATCHDOG_TIMEOUT_SECONDS": "5",
+        "DARTSNUT_WATCHDOG_LOG_DIR": str(tmp_path / "watchdog-logs"),
+    }
+    watchdog_proc = subprocess.Popen(
+        [watchdog_bin],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    try:
+        inserted = requests.post(
+            row_url,
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            json={
+                "device_id": device_id,
+                "command": "printf e2e",
+                "last_update_source": "integration_test",
+            },
+            timeout=15,
+        )
+        assert inserted.status_code in (200, 201), inserted.text
+
+        def _row_cleared() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "command,status_code,log_filename,last_update_source",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200:
+                return False
+            rows = r.json()
+            if not rows:
+                return False
+            row = rows[0]
+            ok = (
+                row.get("command") == ""
+                and row.get("status_code") == 0
+                and row.get("log_filename") == "https://oss.example.com/e2e-watchdog.tar.gz"
+                and row.get("last_update_source")
+                == f"dartsnut_watchdog:{device_id}"
+            )
+            if ok:
+                completion_written.set()
+            return ok
+
+        _wait_until(_row_cleared, desc="task row completion")
+        assert completion_written.is_set()
+        assert upload_seen.is_set()
+    finally:
+        watchdog_proc.terminate()
+        try:
+            watchdog_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            watchdog_proc.kill()
+            watchdog_proc.wait(timeout=5)
+        upload_server.shutdown()
+        upload_server.server_close()
