@@ -81,6 +81,17 @@ ALLOWLIST=(
   scripts/uv_env.sh
 )
 
+# Top-level folders intentionally stripped from release commits. Dry-run warnings
+# focus on added files that might belong on the device, so these stay quiet.
+STRIPPED_RELEASE_FOLDERS=(
+  docs
+  openspec
+  scripts
+  supabase
+  supabase_bridge
+  tests
+)
+
 DRY_RUN="${DRY_RUN:-0}"
 INPUT_VERSION=""
 
@@ -232,6 +243,17 @@ is_allowlisted_path() {
   return 1
 }
 
+is_always_stripped_release_path() {
+  local path="$1"
+  local stripped
+  for stripped in "${STRIPPED_RELEASE_FOLDERS[@]}"; do
+    if [[ "${path}" == "${stripped}/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 warn_added_paths_outside_allowlist() {
   local base_ref="$1"
   local source_ref="$2"
@@ -242,6 +264,9 @@ warn_added_paths_outside_allowlist() {
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     if is_allowlisted_path "${path}"; then
+      continue
+    fi
+    if is_always_stripped_release_path "${path}"; then
       continue
     fi
     if [[ "${warned}" -eq 0 ]]; then
