@@ -132,6 +132,47 @@ exit 3
     ]
 
 
+def test_refresh_uv_project_cleans_root_cache_on_cache_write_error(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fake_project(
+        tmp_path,
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$UV_CALL_LOG"
+if [ "$1" = "sync" ]; then
+    if [ ! -f "$REPO_DIR/root_cache_cleaned" ]; then
+        echo 'error: Failed to write to the client cache' >&2
+        echo '  Caused by: failed to create directory `/root/.cache/uv/simple-v21/pypi`: Bad message (os error 74)' >&2
+        exit 2
+    fi
+    exit 0
+fi
+[ "$1" = "cache" ] && [ "$2" = "clean" ] && touch "$REPO_DIR/root_cache_cleaned" && exit 0
+[ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
+[ "$1" = "run" ] && exit 0
+[ "$1" = "pip" ] && exit 0
+exit 3
+""",
+    )
+    log = tmp_path / "uv.log"
+
+    result = _run_refresh(repo, log)
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "venv --system-site-packages",
+        "sync --inexact",
+        "cache clean",
+        "sleep 2",
+        "sync --inexact",
+        "run python -c import bluezero",
+        "run python -c import pygame; pygame.Surface",
+        "run python -c import bluetooth; import bluetooth._bluetooth",
+        "run python -c import dbus",
+        "run python -c import gi",
+    ]
+
+
 def test_refresh_uv_project_fails_before_verify_when_sync_retry_cannot_recover(
     tmp_path: Path,
 ) -> None:
@@ -176,8 +217,8 @@ if [ "$1" = "run" ]; then
     exit 1
 fi
 if [ "$1" = "pip" ]; then
-    [ "$2" = "install" ] && [ "$3" = "--no-cache" ] && [ "$4" = "--force-reinstall" ] && [ "$5" = "--no-deps" ] && [ "$6" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
-    [ "$2" = "install" ] && [ "$3" = "--no-cache" ] && [ "$4" = "--force-reinstall" ] && [ "$6" = "pygame-ce==2.5.7" ] && exit 9
+    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
+    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$5" = "pygame-ce==2.5.7" ] && exit 9
 fi
 exit 3
 """,
@@ -191,10 +232,10 @@ exit 3
         "venv --system-site-packages",
         "sync --inexact",
         "run python -c import bluezero",
-        "pip install --no-cache --force-reinstall --no-deps bluezero==0.9.1",
+        "pip install --force-reinstall --no-deps bluezero==0.9.1",
         "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
-        "pip install --no-cache --force-reinstall --no-deps pygame-ce==2.5.7",
+        "pip install --force-reinstall --no-deps pygame-ce==2.5.7",
     ]
 
 
@@ -245,7 +286,7 @@ if [ "$1" = "run" ]; then
     exit 0
 fi
 if [ "$1" = "pip" ]; then
-    [ "$2" = "install" ] && [ "$3" = "--no-cache" ] && [ "$4" = "--force-reinstall" ] && [ "$5" = "--no-deps" ] && [ "$6" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
+    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
 fi
 exit 3
 """,
@@ -259,7 +300,7 @@ exit 3
         "venv --system-site-packages",
         "sync --inexact",
         "run python -c import bluezero",
-        "pip install --no-cache --force-reinstall --no-deps bluezero==0.9.1",
+        "pip install --force-reinstall --no-deps bluezero==0.9.1",
         "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "run python -c import bluetooth; import bluetooth._bluetooth",

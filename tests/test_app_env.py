@@ -191,7 +191,7 @@ def test_uv_sync_retries_then_succeeds(monkeypatch, tmp_path):
     assert attempts["n"] == 3
 
 
-def test_uv_sync_uses_no_cache_for_app_venvs(monkeypatch, tmp_path):
+def test_uv_sync_cleans_root_cache_for_app_venvs(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "cache_busted"
     app_dir.mkdir(parents=True)
@@ -205,6 +205,18 @@ def test_uv_sync_uses_no_cache_for_app_venvs(monkeypatch, tmp_path):
 
     def _run(cmd, **kwargs):
         commands.append(cmd)
+        if cmd == [app_env.uv_bin(), "cache", "clean"]:
+            return subprocess.CompletedProcess(cmd, 0)
+        if len(commands) == 1:
+            raise subprocess.CalledProcessError(
+                2,
+                cmd,
+                stderr=(
+                    "error: Failed to write to the client cache\n"
+                    "  Caused by: failed to create directory "
+                    "`/root/.cache/uv/simple-v21/pypi`: Bad message (os error 74)"
+                ),
+            )
         venv = app_dir / ".venv" / "bin"
         venv.mkdir(parents=True, exist_ok=True)
         (venv / "python").write_text("", encoding="utf-8")
@@ -216,10 +228,16 @@ def test_uv_sync_uses_no_cache_for_app_venvs(monkeypatch, tmp_path):
         [
             app_env.uv_bin(),
             "sync",
-            "--no-cache",
             "--directory",
             str(app_dir),
-        ]
+        ],
+        [app_env.uv_bin(), "cache", "clean"],
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--directory",
+            str(app_dir),
+        ],
     ]
 
 

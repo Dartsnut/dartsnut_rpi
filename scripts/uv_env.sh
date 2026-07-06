@@ -26,7 +26,7 @@ _verify_pygame_ce() {
     local req
     req="$(_pyproject_requirement pygame-ce)"
     req="${req:-pygame-ce}"
-    "${UV_BIN}" pip install --no-cache --force-reinstall --no-deps "${req}" || return $?
+    _run_uv_with_root_cache_repair pip install --force-reinstall --no-deps "${req}" || return $?
     "${UV_BIN}" run python -c "import pygame; pygame.Surface"
 }
 
@@ -39,7 +39,7 @@ _verify_pybluez_dartsnut() {
     local req
     req="$(_pyproject_requirement pybluez-dartsnut)"
     req="${req:-pybluez-dartsnut==0.30}"
-    "${UV_BIN}" pip install --no-cache --force-reinstall --no-deps "${req}" || return $?
+    _run_uv_with_root_cache_repair pip install --force-reinstall --no-deps "${req}" || return $?
     "${UV_BIN}" run python -c "import bluetooth; import bluetooth._bluetooth"
 }
 
@@ -49,7 +49,7 @@ _ensure_bluezero_no_deps() {
         return 0
     fi
     echo "bluezero import failed; installing bluezero without PyPI native deps..."
-    "${UV_BIN}" pip install --no-cache --force-reinstall --no-deps "${BLUEZERO_REQ}" || return $?
+    _run_uv_with_root_cache_repair pip install --force-reinstall --no-deps "${BLUEZERO_REQ}" || return $?
     "${UV_BIN}" run python -c "import bluezero"
 }
 
@@ -77,6 +77,46 @@ verify_uv_python_packages() {
     _verify_pybluez_dartsnut || return $?
     _verify_system_dbus || return $?
     _verify_system_gi
+}
+
+_uv_output_has_root_cache_error() {
+    local output_file="$1"
+    grep -q "Failed to write to the client cache" "${output_file}" ||
+        grep -q "Bad message (os error 74)" "${output_file}"
+}
+
+_clean_uv_root_cache() {
+    echo "uv cache appears corrupt; cleaning root uv cache and retrying..."
+    "${UV_BIN}" cache clean
+}
+
+_run_uv_with_root_cache_repair() {
+    local uv_output
+    local status
+    uv_output="$(mktemp)"
+
+    "${UV_BIN}" "$@" >"${uv_output}" 2>&1
+    status=$?
+    cat "${uv_output}"
+    if [ "${status}" -eq 0 ]; then
+        rm -f "${uv_output}"
+        return 0
+    fi
+
+    if _uv_output_has_root_cache_error "${uv_output}"; then
+        local clean_status
+        _clean_uv_root_cache || {
+            clean_status=$?
+            rm -f "${uv_output}"
+            return "${clean_status}"
+        }
+        "${UV_BIN}" "$@" >"${uv_output}" 2>&1
+        status=$?
+        cat "${uv_output}"
+    fi
+
+    rm -f "${uv_output}"
+    return "${status}"
 }
 
 sync_uv_project() {
@@ -114,6 +154,10 @@ sync_uv_project() {
         if [ "${status}" -eq 0 ]; then
             rm -f "${uv_output}"
             return 0
+        fi
+
+        if _uv_output_has_root_cache_error "${uv_output}"; then
+            _clean_uv_root_cache || return $?
         fi
 
         if [ -z "${package}" ] && grep -q "The wheel is invalid: Metadata field Name not found" "${uv_output}"; then

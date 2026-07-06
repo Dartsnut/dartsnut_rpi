@@ -134,15 +134,42 @@ def _write_stamp(app_id: str) -> None:
         f.write(_compute_stamp(app_id))
 
 
-def _uv_sync(app_id: str) -> None:
-    directory = app_dir(app_id)
-    retry_with_backoff(
-        lambda: subprocess.run(
-            [uv_bin(), "sync", "--no-cache", "--directory", directory],
+def _stderr_has_uv_root_cache_error(stderr: str | None) -> bool:
+    text = stderr or ""
+    return "Failed to write to the client cache" in text or "Bad message (os error 74)" in text
+
+
+def _run_uv_sync_command(directory: str) -> subprocess.CompletedProcess[str]:
+    cmd = [uv_bin(), "sync", "--directory", directory]
+    try:
+        return subprocess.run(
+            cmd,
             check=True,
             capture_output=True,
             text=True,
-        ),
+        )
+    except subprocess.CalledProcessError as e:
+        if not _stderr_has_uv_root_cache_error(e.stderr):
+            raise
+        _log.warning("uv cache appears corrupt; cleaning root uv cache and retrying app sync")
+        subprocess.run(
+            [uv_bin(), "cache", "clean"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def _uv_sync(app_id: str) -> None:
+    directory = app_dir(app_id)
+    retry_with_backoff(
+        lambda: _run_uv_sync_command(directory),
         succeeded=lambda _result: True,
         reraise=True,
         label=f"uv sync {app_id}",
