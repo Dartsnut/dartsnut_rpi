@@ -87,7 +87,7 @@ _uv_output_has_root_cache_error() {
 
 _clean_uv_root_cache() {
     echo "uv cache appears corrupt; cleaning root uv cache and retrying..."
-    "${UV_BIN}" cache clean
+    "${UV_BIN}" cache clean --force
 }
 
 _run_uv_with_root_cache_repair() {

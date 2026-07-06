@@ -205,7 +205,7 @@ def test_uv_sync_cleans_root_cache_for_app_venvs(monkeypatch, tmp_path):
 
     def _run(cmd, **kwargs):
         commands.append(cmd)
-        if cmd == [app_env.uv_bin(), "cache", "clean"]:
+        if cmd == [app_env.uv_bin(), "cache", "clean", "--force"]:
             return subprocess.CompletedProcess(cmd, 0)
         if len(commands) == 1:
             raise subprocess.CalledProcessError(
@@ -231,7 +231,7 @@ def test_uv_sync_cleans_root_cache_for_app_venvs(monkeypatch, tmp_path):
             "--directory",
             str(app_dir),
         ],
-        [app_env.uv_bin(), "cache", "clean"],
+        [app_env.uv_bin(), "cache", "clean", "--force"],
         [
             app_env.uv_bin(),
             "sync",

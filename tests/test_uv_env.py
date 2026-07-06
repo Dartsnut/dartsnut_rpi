@@ -147,7 +147,7 @@ if [ "$1" = "sync" ]; then
     fi
     exit 0
 fi
-[ "$1" = "cache" ] && [ "$2" = "clean" ] && touch "$REPO_DIR/root_cache_cleaned" && exit 0
+[ "$1" = "cache" ] && [ "$2" = "clean" ] && [ "$3" = "--force" ] && touch "$REPO_DIR/root_cache_cleaned" && exit 0
 [ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
 [ "$1" = "run" ] && exit 0
 [ "$1" = "pip" ] && exit 0
@@ -162,7 +162,7 @@ exit 3
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
         "sync --inexact",
-        "cache clean",
+        "cache clean --force",
         "sleep 2",
         "sync --inexact",
         "run python -c import bluezero",

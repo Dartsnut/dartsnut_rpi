@@ -153,7 +153,7 @@ def _run_uv_sync_command(directory: str) -> subprocess.CompletedProcess[str]:
             raise
         _log.warning("uv cache appears corrupt; cleaning root uv cache and retrying app sync")
         subprocess.run(
-            [uv_bin(), "cache", "clean"],
+            [uv_bin(), "cache", "clean", "--force"],
             check=True,
             capture_output=True,
             text=True,
