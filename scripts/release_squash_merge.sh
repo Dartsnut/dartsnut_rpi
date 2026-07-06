@@ -54,6 +54,7 @@ ALLOWLIST=(
   validation_worker.py
   remote_sync_bridge.py
   supabase_sync_bridge.py
+  update_repair.py
   setup.sh
   update.sh
   core
@@ -70,6 +71,7 @@ ALLOWLIST=(
   services/dartsnut_python.service
   services/dartsnut_mcp.service
   services/dartsnut_watchdog.service
+  services/dartsnut_update_repair.service
   services/99-dartsnut-tcp.conf
   services/logo.ppm
   bridge
