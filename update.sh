@@ -111,7 +111,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     fi
 
     if [ -x "${REPAIR_DEVICE_JSON_SCRIPT}" ]; then
-        "${REPAIR_DEVICE_JSON_SCRIPT}"
+        "${REPAIR_DEVICE_JSON_SCRIPT}" || exit $?
     else
         echo "Warning: ${REPAIR_DEVICE_JSON_SCRIPT} not found or not executable; skipping device.json repair."
     fi
