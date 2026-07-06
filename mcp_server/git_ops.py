@@ -4,6 +4,8 @@ import os
 import subprocess
 from typing import Any
 
+from update_repair import clear_update_repair_pending, mark_update_repair_pending
+
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
 
@@ -112,8 +114,11 @@ def perform_firmware_update() -> dict[str, Any]:
         _run_git(["reset", "--hard", reset_ref])
         subprocess.run(["sudo", "./update.sh"], cwd=REPO_DIR, check=True)
     except Exception as exc:
+        mark_update_repair_pending()
         try:
             _run_git(["reset", "--hard", old_commit])
+            subprocess.run(["sudo", "./update.sh"], cwd=REPO_DIR, check=True)
+            clear_update_repair_pending()
         except Exception as rollback_exc:
             raise RuntimeError(
                 f"Update failed and rollback failed: {rollback_exc}"
@@ -126,4 +131,3 @@ def perform_firmware_update() -> dict[str, Any]:
     except OSError:
         pass
     return {"message": "Update successful", **get_firmware_version()}
-

@@ -150,11 +150,10 @@ wheels = [
 
 [[package]]
 name = "dartsnut-rpi"
-version = "2.0.21"
+version = "2.0.22"
 source = { virtual = "." }
 dependencies = [
     { name = "bluezero" },
-    { name = "dbus-python" },
     { name = "fastapi" },
     { name = "numpy" },
     { name = "pillow" },
@@ -169,7 +168,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bluezero", specifier = "==0.9.1" },
-    { name = "dbus-python", specifier = "==1.4.0" },
     { name = "fastapi", specifier = "==0.135.1" },
     { name = "numpy", specifier = "==2.4.2" },
     { name = "pillow", specifier = "==12.1.1" },
@@ -180,12 +178,6 @@ requires-dist = [
     { name = "uvicorn", specifier = "==0.42.0" },
     { name = "websockets", specifier = "==16.0" },
 ]
-
-[[package]]
-name = "dbus-python"
-version = "1.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ff/24/63118050c7dd7be04b1ccd60eab53fef00abe844442e1b6dec92dae505d6/dbus-python-1.4.0.tar.gz", hash = "sha256:991666e498f60dbf3e49b8b7678f5559b8a65034fdf61aae62cdecdb7d89c770", size = 232490, upload-time = "2025-03-13T19:57:54.212Z" }
 
 [[package]]
 name = "fastapi"
