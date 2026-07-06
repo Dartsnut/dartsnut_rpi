@@ -26,7 +26,7 @@ _verify_pygame_ce() {
     local req
     req="$(_pyproject_requirement pygame-ce)"
     req="${req:-pygame-ce}"
-    "${UV_BIN}" pip install --force-reinstall --no-deps "${req}" || return $?
+    "${UV_BIN}" pip install --no-cache --force-reinstall --no-deps "${req}" || return $?
     "${UV_BIN}" run python -c "import pygame; pygame.Surface"
 }
 
@@ -39,7 +39,7 @@ _verify_pybluez_dartsnut() {
     local req
     req="$(_pyproject_requirement pybluez-dartsnut)"
     req="${req:-pybluez-dartsnut==0.30}"
-    "${UV_BIN}" pip install --force-reinstall --no-deps "${req}" || return $?
+    "${UV_BIN}" pip install --no-cache --force-reinstall --no-deps "${req}" || return $?
     "${UV_BIN}" run python -c "import bluetooth; import bluetooth._bluetooth"
 }
 
@@ -49,7 +49,7 @@ _ensure_bluezero_no_deps() {
         return 0
     fi
     echo "bluezero import failed; installing bluezero without PyPI native deps..."
-    "${UV_BIN}" pip install --force-reinstall --no-deps "${BLUEZERO_REQ}" || return $?
+    "${UV_BIN}" pip install --no-cache --force-reinstall --no-deps "${BLUEZERO_REQ}" || return $?
     "${UV_BIN}" run python -c "import bluezero"
 }
 

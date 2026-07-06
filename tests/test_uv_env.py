@@ -176,8 +176,8 @@ if [ "$1" = "run" ]; then
     exit 1
 fi
 if [ "$1" = "pip" ]; then
-    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
-    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$5" = "pygame-ce==2.5.7" ] && exit 9
+    [ "$2" = "install" ] && [ "$3" = "--no-cache" ] && [ "$4" = "--force-reinstall" ] && [ "$5" = "--no-deps" ] && [ "$6" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
+    [ "$2" = "install" ] && [ "$3" = "--no-cache" ] && [ "$4" = "--force-reinstall" ] && [ "$6" = "pygame-ce==2.5.7" ] && exit 9
 fi
 exit 3
 """,
@@ -191,10 +191,10 @@ exit 3
         "venv --system-site-packages",
         "sync --inexact",
         "run python -c import bluezero",
-        "pip install --force-reinstall --no-deps bluezero==0.9.1",
+        "pip install --no-cache --force-reinstall --no-deps bluezero==0.9.1",
         "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
-        "pip install --force-reinstall --no-deps pygame-ce==2.5.7",
+        "pip install --no-cache --force-reinstall --no-deps pygame-ce==2.5.7",
     ]
 
 
@@ -245,7 +245,7 @@ if [ "$1" = "run" ]; then
     exit 0
 fi
 if [ "$1" = "pip" ]; then
-    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
+    [ "$2" = "install" ] && [ "$3" = "--no-cache" ] && [ "$4" = "--force-reinstall" ] && [ "$5" = "--no-deps" ] && [ "$6" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
 fi
 exit 3
 """,
@@ -259,7 +259,7 @@ exit 3
         "venv --system-site-packages",
         "sync --inexact",
         "run python -c import bluezero",
-        "pip install --force-reinstall --no-deps bluezero==0.9.1",
+        "pip install --no-cache --force-reinstall --no-deps bluezero==0.9.1",
         "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "run python -c import bluetooth; import bluetooth._bluetooth",
