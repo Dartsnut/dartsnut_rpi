@@ -138,7 +138,7 @@ def _uv_sync(app_id: str) -> None:
     directory = app_dir(app_id)
     retry_with_backoff(
         lambda: subprocess.run(
-            [uv_bin(), "sync", "--directory", directory],
+            [uv_bin(), "sync", "--no-cache", "--directory", directory],
             check=True,
             capture_output=True,
             text=True,

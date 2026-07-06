@@ -191,6 +191,38 @@ def test_uv_sync_retries_then_succeeds(monkeypatch, tmp_path):
     assert attempts["n"] == 3
 
 
+def test_uv_sync_uses_no_cache_for_app_venvs(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "cache_busted"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("pass\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "cache_busted", "type": "game", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    commands = []
+
+    def _run(cmd, **kwargs):
+        commands.append(cmd)
+        venv = app_dir / ".venv" / "bin"
+        venv.mkdir(parents=True, exist_ok=True)
+        (venv / "python").write_text("", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(app_env.subprocess, "run", _run)
+    assert app_env.ensure_app_venv("cache_busted") is True
+    assert commands == [
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--no-cache",
+            "--directory",
+            str(app_dir),
+        ]
+    ]
+
+
 def test_infer_app_id_from_tarball(tmp_path):
     tar_path = tmp_path / "dart_checker.tar.gz"
     with tarfile.open(tar_path, "w:gz") as tar:
