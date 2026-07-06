@@ -27,7 +27,7 @@ class _ClosedShm:
 
 
 class _Ctx:
-    def __init__(self, model="PixelDart"):
+    def __init__(self):
         self.game_list = [{"id": "g1", "preview": [bytearray(128 * 128 * 3)]}]
         self.game_index = 0
         self.game_preview_index = 0
@@ -40,21 +40,23 @@ class _Ctx:
         self.trigger_dim_check = False
         self.status_calls = []
         self.proc = _Proc()
-        self.model = model
         self.display = _Display()
 
         self.term_game_process = lambda _g: None
         self.term_widget_processes = lambda _p: None
         self.start_game_process = lambda _gid: {"process": self.proc, "game_id": "g1"}
         self.set_game_status = lambda gid, st: self.status_calls.append((gid, st))
-        self.get_device_info = lambda: {"model": self.model}
+        self.get_device_info = lambda: {}
 
     def transition_to(self, state):
         self.transitions.append(type(state).__name__)
 
 
-def test_ingame_home_on_pixelboard_goes_to_widget():
-    ctx = _Ctx(model="PixelBoard")
+def test_ingame_home_on_pixelboard_goes_to_widget(monkeypatch):
+    import states.game as sgame
+
+    monkeypatch.setattr(sgame, "is_pixelboard_device", lambda: True)
+    ctx = _Ctx()
     state = InGameState()
     ctx.game = {"process": ctx.proc, "game_id": "g1"}
 

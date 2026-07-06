@@ -1,5 +1,7 @@
 import time
 
+import states.game as sgame
+import states.menu as smenu
 from states.game import GameSelectState, InGameState
 from states.menu import MenuState
 
@@ -34,13 +36,14 @@ class _Ctx:
         self.term_widget_processes = lambda _p: None
         self.start_game_process = lambda _gid: {"process": self.proc, "game_id": "g1"}
         self.set_game_status = lambda gid, st: self.status_calls.append((gid, st))
-        self.get_device_info = lambda: {"model": "PixelDart"}
+        self.get_device_info = lambda: {}
 
     def transition_to(self, state):
         self.transitions.append(type(state).__name__)
 
 
-def test_menu_input_wrap_and_home_transition():
+def test_menu_input_wrap_and_home_transition(monkeypatch):
+    monkeypatch.setattr(smenu, "is_pixelboard_device", lambda: False)
     ctx = _Ctx()
     ctx.menu_select_index = 0
     ctx.pages = [{"uuid": "x"}]
@@ -89,7 +92,8 @@ def test_game_select_sets_reload_conf_when_start_fails():
     assert ctx.reload_conf is True
 
 
-def test_ingame_home_opens_overlay_and_overlay_b_ends_game():
+def test_ingame_home_opens_overlay_and_overlay_b_ends_game(monkeypatch):
+    monkeypatch.setattr(sgame, "is_pixelboard_device", lambda: False)
     ctx = _Ctx()
     state = InGameState()
     ctx.game = {"process": ctx.proc, "game_id": "g1"}

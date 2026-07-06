@@ -40,6 +40,7 @@ from python_websocket.file_operations import cancel_game_download
 
 import assets
 from domain.app_context import AppContext
+from runtime.pixeldarts_hardware import is_pixelboard_device
 from states import MenuState, WidgetState, GameSelectState, InGameState, SettingsState
 from widget_lifecycle import (
     init_pages,
@@ -575,8 +576,7 @@ def init_widgets(context: AppContext):
     context.game_index = 0
     context.game_list.clear()
     context.page_tick = time.time()
-    device_info = context.get_device_info()
-    if device_info.get("model") == "PixelBoard":
+    if is_pixelboard_device():
         context.transition_to(WidgetState())
     else:
         context.transition_to(MenuState())

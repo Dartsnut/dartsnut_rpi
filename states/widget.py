@@ -7,6 +7,7 @@ from PIL import Image
 
 from core.helpers import signal_process_group
 from domain.app_context import AppContext
+from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
 from states.settings import should_show_bridge_disconnect_icon
 from widget_lifecycle import (
@@ -208,8 +209,7 @@ class WidgetState(BaseState):
                     ctx.page_index = len(pages) - 1
                 ctx.page_tick = time.time()
         elif buttons.get("btn_home"):
-            device_info = ctx.get_device_info()
-            if device_info.get("model") == "PixelBoard":
+            if is_pixelboard_device():
                 ctx.page_freeze = not ctx.page_freeze
                 ctx.page_tick = time.time()
             else:

@@ -13,10 +13,9 @@ class _Ctx:
         self.page_freeze = False
         self.page_tick = 0.0
         self.transitions = []
-        self._device_info = {"model": "PixelDart"}
 
     def get_device_info(self):
-        return dict(self._device_info)
+        return {}
 
     def transition_to(self, state):
         self.transitions.append(type(state).__name__)
@@ -55,7 +54,7 @@ def test_widget_left_right_selects_enabled_non_qr_pages(monkeypatch):
 def test_widget_btn_home_pixelboard_toggles_freeze(monkeypatch):
     pages = [{"uuid": "0", "enabled": True, "widgets": []}]
     ctx = _Ctx(pages=pages, page_index=0)
-    ctx._device_info["model"] = "PixelBoard"
+    monkeypatch.setattr(swidget, "is_pixelboard_device", lambda: True)
     monkeypatch.setattr(swidget.time, "time", lambda: 42.0)
 
     WidgetState().handle_input(ctx, {"btn_home": True})
@@ -67,7 +66,7 @@ def test_widget_btn_home_pixelboard_toggles_freeze(monkeypatch):
 def test_widget_btn_home_other_model_transitions_to_menu(monkeypatch):
     pages = [{"uuid": "0", "enabled": True, "widgets": []}]
     ctx = _Ctx(pages=pages, page_index=0)
-    ctx._device_info["model"] = "PixelDart"
+    monkeypatch.setattr(swidget, "is_pixelboard_device", lambda: False)
     monkeypatch.setattr(swidget.time, "time", lambda: 1.0)
 
     WidgetState().handle_input(ctx, {"btn_home": True})
@@ -98,4 +97,3 @@ def test_widget_navigation_includes_page_with_unlaunched_widgets(monkeypatch):
     WidgetState().handle_input(ctx, {"btn_left": True})
     assert ctx.page_index == 1
     assert ctx.page_tick == 77.0
-

@@ -143,8 +143,9 @@ def test_menu_latency_disconnect_icon_uses_600ms_threshold(monkeypatch):
         display=_Display(),
         menu_select_index=0,
         wifi_connected=True,
-        get_device_info=lambda: {"model": "PixelDart"},
+        get_device_info=lambda: {},
     )
+    monkeypatch.setattr(smenu, "is_pixelboard_device", lambda: False)
     monkeypatch.setattr(smenu.time, "time", lambda: 0.0)
     monkeypatch.setattr(smenu, "_check_firmware_updated_flag", lambda: False)
     monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _Sync())
