@@ -30,7 +30,11 @@ def _write_fake_project(tmp_path: Path, uv_script: str) -> Path:
     return repo
 
 
-def _run_refresh(repo: Path, log: Path) -> subprocess.CompletedProcess[str]:
+def _run_refresh(
+    repo: Path,
+    log: Path,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash",
@@ -43,6 +47,7 @@ def _run_refresh(repo: Path, log: Path) -> subprocess.CompletedProcess[str]:
             "REPO_DIR": str(repo),
             "UV_CALL_LOG": str(log),
             "UV_SYNC_MAX_ATTEMPTS": "3",
+            **(extra_env or {}),
         },
         text=True,
         capture_output=True,
@@ -170,6 +175,51 @@ exit 3
         "run python -c import bluetooth; import bluetooth._bluetooth",
         "run python -c import dbus",
         "run python -c import gi",
+    ]
+
+
+def test_refresh_uv_project_requests_forcefsck_when_cache_clean_finds_fs_corruption(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fake_project(
+        tmp_path,
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$UV_CALL_LOG"
+if [ "$1" = "sync" ]; then
+    echo 'error: Failed to write to the client cache' >&2
+    echo '  Caused by: failed to create directory `/root/.cache/uv/simple-v21/pypi`: Bad message (os error 74)' >&2
+    exit 2
+fi
+if [ "$1" = "cache" ] && [ "$2" = "clean" ] && [ "$3" = "--force" ]; then
+    echo 'error: Failed to clear cache at: /root/.cache/uv' >&2
+    echo '  Caused by: Structure needs cleaning (os error 117)' >&2
+    exit 117
+fi
+[ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
+exit 3
+""",
+    )
+    log = tmp_path / "uv.log"
+    forcefsck = tmp_path / "forcefsck"
+    marker = tmp_path / "dartsnut_update_pending"
+
+    result = _run_refresh(
+        repo,
+        log,
+        {
+            "FORCEFSCK_PATH": str(forcefsck),
+            "DARTSNUT_UPDATE_PENDING_MARKERS": str(marker),
+        },
+    )
+
+    assert result.returncode == 117
+    assert forcefsck.is_file()
+    assert marker.read_text(encoding="utf-8") == "pending\n"
+    assert "requesting filesystem check on next boot" in result.stdout
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "venv --system-site-packages",
+        "sync --inexact",
+        "cache clean --force",
     ]
 
 

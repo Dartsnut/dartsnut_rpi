@@ -3,6 +3,8 @@
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 UV_BIN="${REPO_DIR}/uv"
 BLUEZERO_REQ="${BLUEZERO_REQ:-bluezero==0.9.1}"
+FORCEFSCK_PATH="${FORCEFSCK_PATH:-/forcefsck}"
+DARTSNUT_UPDATE_PENDING_MARKERS="${DARTSNUT_UPDATE_PENDING_MARKERS:-/boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending}"
 
 resolve_uv_bin() {
     if [ ! -x "${UV_BIN}" ]; then
@@ -85,9 +87,50 @@ _uv_output_has_root_cache_error() {
         grep -q "Bad message (os error 74)" "${output_file}"
 }
 
+_uv_output_has_filesystem_corruption() {
+    local output_file="$1"
+    grep -q "Structure needs cleaning" "${output_file}" ||
+        grep -q "os error 117" "${output_file}"
+}
+
+_mark_update_repair_pending() {
+    local marker
+    local parent
+    for marker in ${DARTSNUT_UPDATE_PENDING_MARKERS}; do
+        parent="$(dirname "${marker}")"
+        if [[ "${marker}" == /boot/* ]] && [ ! -d "${parent}" ]; then
+            continue
+        fi
+        mkdir -p "${parent}" 2>/dev/null || continue
+        printf 'pending\n' >"${marker}" 2>/dev/null || true
+    done
+}
+
+_request_forcefsck() {
+    local parent
+    parent="$(dirname "${FORCEFSCK_PATH}")"
+    mkdir -p "${parent}" 2>/dev/null || true
+    if touch "${FORCEFSCK_PATH}" 2>/dev/null; then
+        echo "uv cache clean hit filesystem corruption; requesting filesystem check on next boot (${FORCEFSCK_PATH})"
+    else
+        echo "uv cache clean hit filesystem corruption; unable to create ${FORCEFSCK_PATH}" >&2
+    fi
+}
+
 _clean_uv_root_cache() {
+    local clean_output
+    local clean_status
     echo "uv cache appears corrupt; cleaning root uv cache and retrying..."
-    "${UV_BIN}" cache clean --force
+    clean_output="$(mktemp)"
+    "${UV_BIN}" cache clean --force >"${clean_output}" 2>&1
+    clean_status=$?
+    cat "${clean_output}"
+    if [ "${clean_status}" -ne 0 ] && _uv_output_has_filesystem_corruption "${clean_output}"; then
+        _mark_update_repair_pending
+        _request_forcefsck
+    fi
+    rm -f "${clean_output}"
+    return "${clean_status}"
 }
 
 _run_uv_with_root_cache_repair() {

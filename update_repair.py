@@ -7,6 +7,7 @@ PENDING_UPDATE_MARKERS = (
     "/boot/dartsnut_update_pending",
     "/var/lib/dartsnut/update_pending",
 )
+FORCEFSCK_PATH = "/forcefsck"
 
 
 def _should_skip_missing_boot_parent(path: str) -> bool:
@@ -38,3 +39,15 @@ def clear_update_repair_pending() -> None:
             pass
         except OSError:
             pass
+
+
+def request_forcefsck() -> str | None:
+    try:
+        parent = os.path.dirname(FORCEFSCK_PATH)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(FORCEFSCK_PATH, "a", encoding="utf-8"):
+            pass
+        return FORCEFSCK_PATH
+    except OSError:
+        return None

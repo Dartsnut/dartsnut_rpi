@@ -25,3 +25,13 @@ def test_update_repair_marker_lifecycle(tmp_path, monkeypatch):
     update_repair.clear_update_repair_pending()
 
     assert not any(marker.exists() for marker in markers)
+
+
+def test_request_forcefsck_uses_configured_path(tmp_path, monkeypatch):
+    forcefsck = tmp_path / "forcefsck"
+    monkeypatch.setattr(update_repair, "FORCEFSCK_PATH", str(forcefsck))
+
+    written = update_repair.request_forcefsck()
+
+    assert written == str(forcefsck)
+    assert forcefsck.is_file()
