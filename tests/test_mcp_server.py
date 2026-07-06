@@ -135,6 +135,9 @@ def test_service_install_scripts_reference_mcp_service():
     assert "dartsnut_update_repair.service" in update
     assert "check_and_update.py" in repair_service
     assert "dartsnut_update_pending" in repair_service
+    assert "Restart=on-failure" in repair_service
+    assert "RestartSec=60s" in repair_service
+    assert "StartLimitIntervalSec=0" in repair_service
     assert "--port 9252" in service
     assert "SuccessExitStatus=143" in service
     assert update.index("refresh_uv_project") < update.index("restart dartsnut_mcp.service")
