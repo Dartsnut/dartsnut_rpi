@@ -6,6 +6,7 @@ from python_websocket.error_handler import (
     handle_command_error,
     create_error_response,
 )
+from update_repair import clear_update_repair_pending, mark_update_repair_pending
 
 # Repo root = parent of python_websocket/ so git matches this install, not a hardcoded path.
 GIT_REPO_CWD = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -223,6 +224,7 @@ def perform_update():
             pass  # Ignore errors creating flag file
         return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
+        mark_update_repair_pending()
         # Rollback to old commit
         try:
             subprocess.run(
@@ -230,6 +232,12 @@ def perform_update():
                 cwd=GIT_REPO_CWD,
                 check=True,
             )
+            subprocess.run(
+                ["sudo", "./update.sh"],
+                cwd=GIT_REPO_CWD,
+                check=True,
+            )
+            clear_update_repair_pending()
             return create_error_response(
                 "perform_update",
                 ErrorCode.GIT_UPDATE_FAILED,

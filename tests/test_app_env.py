@@ -191,6 +191,131 @@ def test_uv_sync_retries_then_succeeds(monkeypatch, tmp_path):
     assert attempts["n"] == 3
 
 
+def test_uv_sync_cleans_root_cache_for_app_venvs(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "cache_busted"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("pass\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "cache_busted", "type": "game", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    commands = []
+
+    def _run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd == [app_env.uv_bin(), "cache", "clean", "--force"]:
+            return subprocess.CompletedProcess(cmd, 0)
+        if len(commands) == 1:
+            raise subprocess.CalledProcessError(
+                2,
+                cmd,
+                stderr=(
+                    "error: Failed to write to the client cache\n"
+                    "  Caused by: failed to create directory "
+                    "`/root/.cache/uv/simple-v21/pypi`: Bad message (os error 74)"
+                ),
+            )
+        venv = app_dir / ".venv" / "bin"
+        venv.mkdir(parents=True, exist_ok=True)
+        (venv / "python").write_text("", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(app_env.subprocess, "run", _run)
+    assert app_env.ensure_app_venv("cache_busted") is True
+    assert commands == [
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--directory",
+            str(app_dir),
+        ],
+        [app_env.uv_bin(), "cache", "clean", "--force"],
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--directory",
+            str(app_dir),
+        ],
+    ]
+
+
+def test_uv_sync_requests_forcefsck_when_cache_clean_finds_fs_corruption(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "cache_fsck"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text("pass\n", encoding="utf-8")
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "cache_fsck", "type": "game", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    commands = []
+    repair_markers = []
+
+    def _run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd == [app_env.uv_bin(), "cache", "clean", "--force"]:
+            raise subprocess.CalledProcessError(
+                117,
+                cmd,
+                stderr=(
+                    "error: Failed to clear cache at: /root/.cache/uv\n"
+                    "  Caused by: Structure needs cleaning (os error 117)"
+                ),
+            )
+        raise subprocess.CalledProcessError(
+            2,
+            cmd,
+            stderr=(
+                "error: Failed to write to the client cache\n"
+                "  Caused by: failed to create directory "
+                "`/root/.cache/uv/simple-v21/pypi`: Bad message (os error 74)"
+            ),
+        )
+
+    monkeypatch.setattr(app_env.subprocess, "run", _run)
+    monkeypatch.setattr(
+        app_env,
+        "mark_update_repair_pending",
+        lambda: repair_markers.append("mark"),
+    )
+    monkeypatch.setattr(
+        app_env,
+        "request_forcefsck",
+        lambda: repair_markers.append("forcefsck"),
+    )
+
+    assert app_env.ensure_app_venv("cache_fsck") is False
+    assert repair_markers == ["mark", "forcefsck"] * 3
+    assert commands == [
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--directory",
+            str(app_dir),
+        ],
+        [app_env.uv_bin(), "cache", "clean", "--force"],
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--directory",
+            str(app_dir),
+        ],
+        [app_env.uv_bin(), "cache", "clean", "--force"],
+        [
+            app_env.uv_bin(),
+            "sync",
+            "--directory",
+            str(app_dir),
+        ],
+        [app_env.uv_bin(), "cache", "clean", "--force"],
+    ]
+
+
 def test_infer_app_id_from_tarball(tmp_path):
     tar_path = tmp_path / "dart_checker.tar.gz"
     with tarfile.open(tar_path, "w:gz") as tar:

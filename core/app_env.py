@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 from core.helpers import app_dir, uv_bin
 from core.retry import retry_with_backoff, FAST_BACKOFF_SECONDS
+from update_repair import mark_update_repair_pending, request_forcefsck
 
 _log = logging.getLogger(__name__)
 
@@ -134,15 +135,56 @@ def _write_stamp(app_id: str) -> None:
         f.write(_compute_stamp(app_id))
 
 
-def _uv_sync(app_id: str) -> None:
-    directory = app_dir(app_id)
-    retry_with_backoff(
-        lambda: subprocess.run(
-            [uv_bin(), "sync", "--directory", directory],
+def _stderr_has_uv_root_cache_error(stderr: str | None) -> bool:
+    text = stderr or ""
+    return "Failed to write to the client cache" in text or "Bad message (os error 74)" in text
+
+
+def _stderr_has_filesystem_corruption(stderr: str | None) -> bool:
+    text = stderr or ""
+    return "Structure needs cleaning" in text or "os error 117" in text
+
+
+def _run_uv_sync_command(directory: str) -> subprocess.CompletedProcess[str]:
+    cmd = [uv_bin(), "sync", "--directory", directory]
+    try:
+        return subprocess.run(
+            cmd,
             check=True,
             capture_output=True,
             text=True,
-        ),
+        )
+    except subprocess.CalledProcessError as e:
+        if not _stderr_has_uv_root_cache_error(e.stderr):
+            raise
+        _log.warning("uv cache appears corrupt; cleaning root uv cache and retrying app sync")
+        try:
+            subprocess.run(
+                [uv_bin(), "cache", "clean", "--force"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as clean_error:
+            if _stderr_has_filesystem_corruption(clean_error.stderr):
+                _log.error(
+                    "uv cache clean hit filesystem corruption; requesting fsck on next boot"
+                )
+                mark_update_repair_pending()
+                request_forcefsck()
+            raise
+        return subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def _uv_sync(app_id: str) -> None:
+    directory = app_dir(app_id)
+    retry_with_backoff(
+        lambda: _run_uv_sync_command(directory),
         succeeded=lambda _result: True,
         reraise=True,
         label=f"uv sync {app_id}",
