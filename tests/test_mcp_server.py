@@ -133,6 +133,8 @@ def test_service_install_scripts_reference_mcp_service():
     assert "dartsnut_mcp.service" in update
     assert "dartsnut_update_repair.service" in setup
     assert "dartsnut_update_repair.service" in update
+    assert "repair_device_json.sh" in setup
+    assert "repair_device_json.sh" in update
     assert "./update.sh" in repair_service
     assert "check_and_update.py" not in repair_service
     assert "dartsnut_update_pending" in repair_service

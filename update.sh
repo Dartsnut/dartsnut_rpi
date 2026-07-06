@@ -5,6 +5,7 @@ SERVICES_DIR="${REPO_DIR}/services"
 UV_ENV_SCRIPT="${REPO_DIR}/scripts/uv_env.sh"
 SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
 INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
+REPAIR_DEVICE_JSON_SCRIPT="${REPO_DIR}/scripts/repair_device_json.sh"
 
 # shellcheck source=scripts/uv_env.sh
 source "${UV_ENV_SCRIPT}"
@@ -109,26 +110,10 @@ if [ -d "${SERVICES_DIR}" ]; then
         echo "Warning: logo.ppm not found in ${SERVICES_DIR}; skipping logo update."
     fi
 
-    DEVICE_JSON_DEST="/boot/device.json"
-    if [ ! -f "${DEVICE_JSON_DEST}" ]; then
-        REPO_DEVICE_JSON="${REPO_DIR}/device.json"
-        if [ -f "${REPO_DEVICE_JSON}" ]; then
-            MODEL=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "${REPO_DEVICE_JSON}" | head -1 | sed 's/.*"model"[[:space:]]*:[[:space:]]*"//;s/"//')
-            if [ -n "${MODEL}" ]; then
-                echo "Creating partial device.json at ${DEVICE_JSON_DEST} with model=${MODEL}"
-                echo "{\"model\": \"${MODEL}\", \"brightness\": \"100\"}" | sudo tee "${DEVICE_JSON_DEST}" > /dev/null
-                if [ -f "${SPLASH_DEST_PPM}" ]; then
-                    sudo chown --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
-                    sudo chmod --reference="${SPLASH_DEST_PPM}" "${DEVICE_JSON_DEST}"
-                fi
-            else
-                echo "Warning: could not read model from ${REPO_DEVICE_JSON}; skipping /boot/device.json creation."
-            fi
-        else
-            echo "Warning: ${REPO_DEVICE_JSON} not found; skipping /boot/device.json creation."
-        fi
+    if [ -x "${REPAIR_DEVICE_JSON_SCRIPT}" ]; then
+        "${REPAIR_DEVICE_JSON_SCRIPT}"
     else
-        echo "device.json already present at ${DEVICE_JSON_DEST}"
+        echo "Warning: ${REPAIR_DEVICE_JSON_SCRIPT} not found or not executable; skipping device.json repair."
     fi
 
     if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
