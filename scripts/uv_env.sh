@@ -2,6 +2,7 @@
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 UV_BIN="${REPO_DIR}/uv"
+BLUEZERO_REQ="${BLUEZERO_REQ:-bluezero==0.9.1}"
 
 resolve_uv_bin() {
     if [ ! -x "${UV_BIN}" ]; then
@@ -42,6 +43,16 @@ _verify_pybluez_dartsnut() {
     "${UV_BIN}" run python -c "import bluetooth; import bluetooth._bluetooth"
 }
 
+_ensure_bluezero_no_deps() {
+    echo "Verifying bluezero module..."
+    if "${UV_BIN}" run python -c "import bluezero" 2>/dev/null; then
+        return 0
+    fi
+    echo "bluezero import failed; installing bluezero without PyPI native deps..."
+    "${UV_BIN}" pip install --force-reinstall --no-deps "${BLUEZERO_REQ}" || return $?
+    "${UV_BIN}" run python -c "import bluezero"
+}
+
 _verify_system_dbus() {
     echo "Verifying dbus module (python3-dbus)..."
     if "${UV_BIN}" run python -c "import dbus"; then
@@ -51,10 +62,21 @@ _verify_system_dbus() {
     return 1
 }
 
+_verify_system_gi() {
+    echo "Verifying gi module (python3-gi)..."
+    if "${UV_BIN}" run python -c "import gi"; then
+        return 0
+    fi
+    echo "gi import failed; install/repair system package python3-gi." >&2
+    return 1
+}
+
 verify_uv_python_packages() {
+    _ensure_bluezero_no_deps || return $?
     _verify_pygame_ce || return $?
     _verify_pybluez_dartsnut || return $?
-    _verify_system_dbus
+    _verify_system_dbus || return $?
+    _verify_system_gi
 }
 
 sync_uv_project() {
@@ -82,9 +104,9 @@ sync_uv_project() {
     attempt=1
     while [ "${attempt}" -le "${max_attempts}" ]; do
         if [ -n "${package}" ]; then
-            "${UV_BIN}" sync --refresh-package "${package}" >"${uv_output}" 2>&1
+            "${UV_BIN}" sync --inexact --refresh-package "${package}" >"${uv_output}" 2>&1
         else
-            "${UV_BIN}" sync >"${uv_output}" 2>&1
+            "${UV_BIN}" sync --inexact >"${uv_output}" 2>&1
         fi
         status=$?
         cat "${uv_output}"

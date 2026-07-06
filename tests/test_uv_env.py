@@ -61,7 +61,7 @@ if [ "$1" = "sync" ]; then
         echo '  Caused by: The wheel is invalid: Metadata field Name not found' >&2
         exit 1
     fi
-    [ "$2" = "--refresh-package" ] && [ "$3" = "pygobject" ] && exit 0
+    [ "$2" = "--inexact" ] && [ "$3" = "--refresh-package" ] && [ "$4" = "pygobject" ] && exit 0
     exit 2
 fi
 [ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
@@ -78,13 +78,15 @@ exit 3
     assert result.returncode == 0, result.stderr
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
-        "sync",
+        "sync --inexact",
         "cache clean pygobject",
         "sleep 2",
-        "sync --refresh-package pygobject",
+        "sync --inexact --refresh-package pygobject",
+        "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "run python -c import bluetooth; import bluetooth._bluetooth",
         "run python -c import dbus",
+        "run python -c import gi",
     ]
 
 
@@ -117,14 +119,16 @@ exit 3
     assert result.returncode == 0, result.stderr
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
-        "sync",
+        "sync --inexact",
         "sleep 2",
-        "sync",
+        "sync --inexact",
         "sleep 4",
-        "sync",
+        "sync --inexact",
+        "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "run python -c import bluetooth; import bluetooth._bluetooth",
         "run python -c import dbus",
+        "run python -c import gi",
     ]
 
 
@@ -151,11 +155,11 @@ exit 3
     assert result.returncode == 1
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
-        "sync",
+        "sync --inexact",
         "sleep 2",
-        "sync",
+        "sync --inexact",
         "sleep 4",
-        "sync",
+        "sync --inexact",
     ]
 
 
@@ -167,10 +171,12 @@ printf '%s\\n' "$*" >> "$UV_CALL_LOG"
 [ "$1" = "sync" ] && exit 0
 [ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
 if [ "$1" = "run" ]; then
+    [ "$*" = "run python -c import bluezero" ] && [ -f "$REPO_DIR/bluezero_installed" ] && exit 0
     [ -f "$REPO_DIR/pygame_installed" ] && exit 0
     exit 1
 fi
 if [ "$1" = "pip" ]; then
+    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
     [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$5" = "pygame-ce==2.5.7" ] && exit 9
 fi
 exit 3
@@ -183,7 +189,10 @@ exit 3
     assert result.returncode == 9
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
-        "sync",
+        "sync --inexact",
+        "run python -c import bluezero",
+        "pip install --force-reinstall --no-deps bluezero==0.9.1",
+        "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "pip install --force-reinstall --no-deps pygame-ce==2.5.7",
     ]
@@ -198,10 +207,11 @@ printf '%s\\n' "$*" >> "$UV_CALL_LOG"
 [ "$1" = "sync" ] && exit 0
 if [ "$1" = "run" ]; then
     case "$*" in
-        *"import pygame"*|*"import bluetooth"*) exit 0 ;;
+        *"import pygame"*|*"import bluetooth"*|*"import bluezero"*|*"import gi"*) exit 0 ;;
         *"import dbus"*) exit 11 ;;
     esac
 fi
+[ "$1" = "pip" ] && exit 0
 exit 3
 """,
     )
@@ -213,10 +223,48 @@ exit 3
     assert "python3-dbus" in result.stderr
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
-        "sync",
+        "sync --inexact",
+        "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "run python -c import bluetooth; import bluetooth._bluetooth",
         "run python -c import dbus",
+    ]
+
+
+def test_refresh_uv_project_installs_bluezero_without_pygobject_deps(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fake_project(
+        tmp_path,
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$UV_CALL_LOG"
+[ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
+[ "$1" = "sync" ] && exit 0
+if [ "$1" = "run" ]; then
+    [ "$*" = "run python -c import bluezero" ] && [ ! -f "$REPO_DIR/bluezero_installed" ] && exit 1
+    exit 0
+fi
+if [ "$1" = "pip" ]; then
+    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
+fi
+exit 3
+""",
+    )
+    log = tmp_path / "uv.log"
+
+    result = _run_refresh(repo, log)
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "venv --system-site-packages",
+        "sync --inexact",
+        "run python -c import bluezero",
+        "pip install --force-reinstall --no-deps bluezero==0.9.1",
+        "run python -c import bluezero",
+        "run python -c import pygame; pygame.Surface",
+        "run python -c import bluetooth; import bluetooth._bluetooth",
+        "run python -c import dbus",
+        "run python -c import gi",
     ]
 
 
@@ -232,9 +280,13 @@ def test_setup_script_stops_when_uv_setup_fails() -> None:
     assert 'setup_uv_project || exit $?' in script
 
 
-def test_dbus_comes_from_system_package_not_pypi_build() -> None:
+def test_native_dbus_and_gi_come_from_system_packages_not_pypi_build() -> None:
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
     system_packages = (REPO_ROOT / "system-packages.txt").read_text(encoding="utf-8")
 
     assert "dbus-python" not in pyproject
+    assert "bluezero" not in pyproject
+    assert "pygobject" not in lock
     assert "python3-dbus" in system_packages
+    assert "python3-gi" in system_packages
