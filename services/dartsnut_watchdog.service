@@ -1,0 +1,14 @@
+[Unit]
+Description=Dartsnut Supabase Watchdog
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rpi/dartsnut_rpi
+Environment=DARTSNUT_LOG_LEVEL=INFO
+ExecStart=/home/rpi/dartsnut_rpi/watchdog
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

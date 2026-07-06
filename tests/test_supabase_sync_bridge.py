@@ -4,6 +4,7 @@ import socket
 import time
 
 import supabase_sync_bridge as ssb
+from runtime.game_secret_store import clear_game_secrets, get_pico8_key
 
 
 # Initial-state construction (happy path -> fallback identity)
@@ -41,6 +42,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
         "last_scan_at": "",
     }
     assert state["dim_window"]["dim_window_enabled"] is True
+    assert "time_zone" not in state
     assert state["device_info"] == {
         "id": "AA:BB:CC:DD:EE:FF",
         "sn": "SN123",
@@ -121,6 +123,143 @@ def test_coerce_pages_games_lists_does_not_invent_bluetooth():
     assert "bluetooth" not in out
 
 
+def test_sanitize_firmware_partial_patch_drops_read_only_fields():
+    out = ssb._sanitize_firmware_partial_patch(
+        {
+            "brightness": 70,
+            "time_zone": "Asia/Taipei",
+            "dim_window": {"dim_window_enabled": True},
+            "pages": [{"uuid": "p1"}],
+            "pages_updated_at": "2026-01-01T00:00:00Z",
+            "device_info": {
+                "id": "AA:BB:CC:DD:EE:FF",
+                "sn": "S1",
+                "model": "PixelDart",
+                "hardware_version": "2a",
+                "name": "Kitchen",
+            },
+            "firmware": {"version": "1.2.3", "update": False, "channel": "beta"},
+        }
+    )
+
+    assert out == {
+        "brightness": 70,
+        "pages": [{"uuid": "p1"}],
+        "pages_updated_at": "2026-01-01T00:00:00Z",
+        "device_info": {
+            "id": "AA:BB:CC:DD:EE:FF",
+            "sn": "S1",
+            "model": "PixelDart",
+            "hardware_version": "2a",
+        },
+        "firmware": {"version": "1.2.3", "update": False},
+    }
+
+
+def test_sanitize_firmware_partial_patch_keeps_game_identity_only_for_lookup():
+    out = ssb._sanitize_firmware_partial_patch(
+        {
+            "games": [
+                {
+                    "id": "chess",
+                    "name": "Chess",
+                    "status": "PLAYING",
+                    "version": "1.0.0",
+                    "url": "https://example.test/game.zip",
+                },
+                {"id": "empty-status"},
+                {"status": "ready"},
+            ]
+        }
+    )
+
+    assert out == {
+        "games": [{"id": "chess", "status": "playing", "version": "1.0.0"}]
+    }
+
+
+def test_sanitize_firmware_partial_patch_strips_pico8_key():
+    out = ssb._sanitize_firmware_partial_patch(
+        {
+            "games": [
+                {
+                    "id": "pico8",
+                    "status": "ready",
+                    "version": "1.0.0",
+                    "key": "secret-key",
+                }
+            ]
+        }
+    )
+
+    assert out == {
+        "games": [{"id": "pico8", "status": "ready", "version": "1.0.0"}]
+    }
+
+
+def test_remember_remote_game_ids_stores_inbound_pico8_key():
+    clear_game_secrets()
+
+    ssb._remember_remote_game_ids(
+        {
+            "games": [
+                {"id": "chess", "key": "ignored"},
+                {"id": "pico8", "status": "ready", "key": "secret-key"},
+            ]
+        }
+    )
+
+    assert get_pico8_key() == "secret-key"
+
+
+def test_request_set_game_status_does_not_publish_pico8_key(monkeypatch):
+    clear_game_secrets()
+    ssb._remember_remote_game_ids(
+        {"games": [{"id": "pico8", "version": "1.0.0", "key": "secret-key"}]}
+    )
+    captured = []
+    monkeypatch.setattr(ssb, "publish_device_state_update", lambda payload: captured.append(payload))
+    monkeypatch.setattr(
+        "game_lifecycle.get_games_summary",
+        lambda: [{"id": "pico8", "version": "1.0.0", "status": "ready"}],
+    )
+    monkeypatch.setattr(
+        "game_lifecycle.resolve_game_version_for_sync",
+        lambda _gid, remote_version: remote_version,
+    )
+
+    ssb.request_set_game_status("pico8", "ready")
+
+    assert captured == [
+        {"games": [{"id": "pico8", "version": "1.0.0", "status": "ready"}]}
+    ]
+
+
+def test_publish_device_state_update_sanitizes_partial_payload(monkeypatch):
+    captured = []
+
+    class _Engine:
+        def publish_partial(self, payload, source=None):
+            captured.append((payload, source))
+
+    monkeypatch.setattr(ssb, "_sync_engine", _Engine())
+    ssb.publish_device_state_update(
+        {
+            "volume": 22,
+            "device_info": {"id": "AA:BB:CC:DD:EE:FF", "name": "Kitchen"},
+            "dim_window": {"dim_window_enabled": True},
+        },
+        source="test",
+    )
+
+    assert captured == [
+        (
+            {"volume": 22, "device_info": {"id": "AA:BB:CC:DD:EE:FF"}},
+            "test",
+        )
+    ]
+
+
 def test_merge_remote_and_local_preserves_device_id(monkeypatch):
     monkeypatch.setattr(ssb.os.path, "isfile", lambda _p: False)
     monkeypatch.setattr(ssb, "_build_initial_state", lambda _d: {"device_info": {"id": "AA:BB:CC:DD:EE:FF"}})
@@ -139,12 +278,11 @@ def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_d
         ssb,
         "_build_initial_state",
         lambda _d: {
-            "time_zone": "UTC",
             "volume": 10,
             "brightness": 20,
             "games": [{"id": "local-only", "version": "1.0.0", "status": "ready"}],
             "dim_window": {"dim_window_enabled": False},
-            "device_info": {"id": "AA:BB:CC:DD:EE:FF"},
+            "device_info": {"id": "AA:BB:CC:DD:EE:FF", "name": "Local"},
             "firmware": {"version": "local-fw", "update": False},
         },
     )
@@ -153,6 +291,9 @@ def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_d
 
     remote = {
         "device_updated_at": "2026-04-23T11:00:00",
+        "time_zone": "Asia/Taipei",
+        "dim_window": {"dim_window_enabled": True},
+        "device_info": {"id": "AA:BB:CC:DD:EE:FF", "name": "Remote"},
         "games": [
             {"id": "01dartgame", "version": "1.0.6", "status": "ready"},
             {"id": "cricket", "version": "1.2.0", "status": "ready"},
@@ -165,6 +306,9 @@ def test_merge_remote_and_local_does_not_replace_remote_games_with_local_newer_d
         "cricket",
         "splashgame",
     ]
+    assert merged["time_zone"] == "Asia/Taipei"
+    assert merged["dim_window"] == {"dim_window_enabled": True}
+    assert merged["device_info"]["name"] == "Remote"
 
 
 def test_load_device_json_reads_device_json(tmp_path, monkeypatch):
@@ -237,6 +381,31 @@ def test_sync_client_send_state_includes_source_when_present():
     assert sent["kind"] in ("device_state", "rpc_patch")
     assert sent["payload"]["brightness"] == 70
     assert sent["source"] == "supabase_bridge_init"
+
+
+def test_sync_engine_preserves_remote_user_token(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    engine = __import__(
+        "runtime.sync.engine", fromlist=["SyncEngine"]
+    ).SyncEngine(
+        on_apply_config=lambda _cfg: None,
+        merge_on_first_connect=lambda cfg: cfg,
+        normalize_config=ssb._normalize_config_payload,
+        remember_remote_game_ids=lambda _cfg: None,
+    )
+
+    engine.ingest_remote_row({"user": {"token": "abc"}, "updated_at": "2026-06-01T00:00:00Z"})
+
+    from runtime.api_token_store import get_api_token
+
+    assert get_api_token() == "abc"
+
+    engine.ingest_remote_row({"brightness": 50, "updated_at": "2026-06-01T00:00:01Z"})
+    assert get_api_token() == "abc"
+
+    engine.ingest_remote_row({"user": {"token": ""}, "updated_at": "2026-06-01T00:00:02Z"})
+    assert get_api_token() == ""
 
 
 def test_sync_client_ready_still_sends_initial_state(tmp_path):
@@ -458,3 +627,89 @@ def test_build_initial_state_strips_oversized_pages_from_conf(tmp_path, monkeypa
     assert {p["uuid"] for p in on_disk["pages"]} == uuids
     assert state["pages_updated_at"] == on_disk["pages_updated_at"]
     assert state["pages_updated_at"] != ""
+
+
+# Staleness watchdog: detect a bridge that is alive + flagged connected but silent.
+class _FakeProc:
+    def __init__(self, alive=True):
+        self._alive = alive
+
+    def poll(self):
+        return None if self._alive else 0
+
+
+def test_bridge_not_stale_when_no_process(monkeypatch):
+    with ssb._bridge_lock:
+        ssb._bridge_proc = None
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    assert ssb.is_supabase_bridge_stale() is False
+
+
+def test_bridge_not_stale_with_recent_activity(monkeypatch):
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    with ssb._bridge_lock:
+        ssb._bridge_proc = _FakeProc(alive=True)
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = time.monotonic()
+    try:
+        assert ssb.is_supabase_bridge_stale() is False
+    finally:
+        with ssb._bridge_lock:
+            ssb._bridge_proc = None
+
+
+def test_bridge_stale_when_silent_past_window(monkeypatch):
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    with ssb._bridge_lock:
+        ssb._bridge_proc = _FakeProc(alive=True)
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = (
+            time.monotonic() - ssb._BRIDGE_STALE_SECONDS - 10.0
+        )
+    try:
+        assert ssb.is_supabase_bridge_stale() is True
+    finally:
+        with ssb._bridge_lock:
+            ssb._bridge_proc = None
+
+
+def test_bridge_stale_when_process_exited(monkeypatch):
+    # A dead process while the client still considers the bridge active must be
+    # recycled: nothing else periodically respawns it (the writer thread can force
+    # exit on a stuck write).
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    with ssb._bridge_lock:
+        ssb._bridge_proc = _FakeProc(alive=False)
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = time.monotonic()
+    try:
+        assert ssb.is_supabase_bridge_stale() is True
+    finally:
+        with ssb._bridge_lock:
+            ssb._bridge_proc = None
+
+
+def test_record_bridge_activity_updates_clock():
+    with ssb._bridge_activity_lock:
+        ssb._last_bridge_activity_at = None
+    ssb._record_bridge_activity()
+    assert ssb._seconds_since_bridge_activity() is not None
+    assert ssb._seconds_since_bridge_activity() < 5.0
+
+
+def test_restart_supabase_sync_recycles_stale_bridge(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ssb, "is_supabase_bridge_active", lambda: True)
+    monkeypatch.setattr(ssb, "is_supabase_connected", lambda: True)
+    monkeypatch.setattr(ssb, "is_supabase_bridge_stale", lambda: True)
+    monkeypatch.setattr(ssb, "stop_supabase_sync", lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        ssb,
+        "ensure_supabase_sync_running",
+        lambda *_args, **_kwargs: calls.append("ensure"),
+    )
+
+    ssb.restart_supabase_sync({}, lambda: None, lambda _cfg: None)
+
+    # Stale bridge must be torn down and relaunched even though it reports connected.
+    assert calls == ["stop", "ensure"]

@@ -14,6 +14,18 @@ class _Proc:
         self.signals.append(sig)
 
 
+class _Display:
+    def __init__(self):
+        self.frames = []
+
+    def update_frame_buffer(self, frame):
+        self.frames.append(frame)
+
+
+class _ClosedShm:
+    buf = None
+
+
 class _Ctx:
     def __init__(self, model="PixelDart"):
         self.game_list = [{"id": "g1", "preview": [bytearray(128 * 128 * 3)]}]
@@ -29,6 +41,7 @@ class _Ctx:
         self.status_calls = []
         self.proc = _Proc()
         self.model = model
+        self.display = _Display()
 
         self.term_game_process = lambda _g: None
         self.term_widget_processes = lambda _p: None
@@ -66,3 +79,13 @@ def test_ingame_overlay_resume_requires_a_release():
 
     assert state.is_showing_exit_game_overlay(ctx) is False
     assert signal.SIGCONT in ctx.proc.signals
+
+
+def test_ingame_update_handles_closed_shared_memory_buffer():
+    ctx = _Ctx()
+    state = InGameState()
+    ctx.game = {"process": ctx.proc, "game_id": "g1", "shm": _ClosedShm()}
+
+    state.update(ctx)
+
+    assert len(ctx.display.frames) == 1

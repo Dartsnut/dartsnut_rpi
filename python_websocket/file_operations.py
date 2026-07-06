@@ -5,7 +5,6 @@ import os
 import shutil
 import hashlib
 import requests
-import tarfile
 import threading
 from python_websocket.error_handler import (
     ErrorCode,
@@ -16,7 +15,8 @@ from python_websocket.error_handler import (
 )
 
 from machine_state_service import get_machine_state_service
-from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
+from core.app_env import ensure_app_venv, install_app_tarball
+from runtime.api_token_store import build_api_headers
 
 _log = logging.getLogger(__name__)
 
@@ -359,7 +359,15 @@ def get_file_list(directory):
         )
 
 
-def download_app(url, md5):
+def download_app(url, md5, game_id=None):
+    if not game_id or not url or not md5:
+        return create_error_response(
+            "download_app",
+            ErrorCode.MISSING_PARAMETER,
+            "Required information is missing",
+            game_id=game_id,
+        )
+
     key = (str(url or ""), str(md5 or ""))
     with _DOWNLOAD_KEYS_LOCK:
         if key in _DOWNLOAD_KEYS_IN_FLIGHT:
@@ -416,12 +424,9 @@ def download_app(url, md5):
                 url=url,
             )
 
-        # Extract tar.gz using system console
-        extract_cmd = (
-            f"tar -xzf '{download_path}' -C '{_apps_path()}'"
-        )
-        extract_result = os.system(extract_cmd)
-        if extract_result != 0:
+        try:
+            install_app_tarball(download_path, str(game_id))
+        except Exception:
             if os.path.isfile(download_path):
                 os.remove(download_path)
             return create_error_response(
@@ -434,10 +439,10 @@ def download_app(url, md5):
         if os.path.isfile(download_path):
             os.remove(download_path)
 
-        if not ensure_app_venv_after_extract(None, url=url):
-            _log.warning("download_app: venv setup failed for url=%s", url)
+        if not ensure_app_venv(str(game_id)):
+            _log.warning("download_app: venv setup failed for game_id=%s", game_id)
 
-        return {"action": "download_app", "url": url, "message": "Success"}
+        return {"action": "download_app", "game_id": game_id, "url": url, "message": "Success"}
     except Exception as e:
         return handle_exception("download_app", e, "Download failed", url=url)
     finally:
@@ -458,7 +463,8 @@ def _download_game_worker(game_id):
 
         # Get download info from remote API (same as in main.start_game_process)
         response = requests.get(
-            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}"
+            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}",
+            headers=build_api_headers(),
         )
         if response.status_code != 200:
             _set_download_progress(
@@ -569,14 +575,12 @@ def _download_game_worker(game_id):
                 )
                 return
 
-            # Extract tar.gz using tarfile (Python stdlib)
-            apps_dir = _apps_path()
+            # Extract tar.gz into apps/<game_id>, independent of archive naming.
             if _is_download_cancel_requested(game_id):
                 _mark_download_canceled(game_id)
                 return
             try:
-                with tarfile.open(download_path, "r:gz") as tar:
-                    tar.extractall(apps_dir)
+                install_app_tarball(download_path, str(game_id))
             except Exception as e:
                 _set_download_progress(
                     game_id,
@@ -703,14 +707,12 @@ def _download_game_worker_with_url(game_id, url, md5):
             )
             return
 
-        # Extract tar.gz using tarfile (Python stdlib)
-        apps_dir = _apps_path()
+        # Extract tar.gz into apps/<game_id>, independent of archive naming.
         if _is_download_cancel_requested(game_id):
             _mark_download_canceled(game_id)
             return
         try:
-            with tarfile.open(download_path, "r:gz") as tar:
-                tar.extractall(apps_dir)
+            install_app_tarball(download_path, str(game_id))
         except Exception as e:
             _set_download_progress(
                 game_id,

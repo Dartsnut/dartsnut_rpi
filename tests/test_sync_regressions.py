@@ -139,7 +139,49 @@ def test_outbox_ack_removes_pending():
     outbox.stop()
 
 
-def test_outbox_coalesces_pending_settings_so_latest_value_wins():
+def test_outbox_does_not_resend_successful_send_before_ack():
+    calls = []
+
+    def send_fn(ref, patch, _full, _source):
+        calls.append((ref, patch))
+        return True
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]})
+    outbox._flush_ready()
+
+    assert len(calls) == 1
+    assert outbox.pending_count() == 1
+
+
+def test_outbox_newer_game_status_cancels_older_inflight_retry():
+    calls = []
+
+    def send_fn(ref, patch, _full, _source):
+        calls.append((ref, patch))
+        return True
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    old_ref = outbox.enqueue(
+        {"games": [{"id": "g1", "status": "playing", "version": "1"}]},
+        source="local",
+    )
+    new_ref = outbox.enqueue(
+        {"games": [{"id": "g1", "status": "ready", "version": "1"}]},
+        source="local",
+    )
+    outbox.on_error(old_ref, "late bridge error")
+
+    assert old_ref != new_ref
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].ref == new_ref
+    assert pending[0].patch == {
+        "games": [{"id": "g1", "status": "ready", "version": "1"}]
+    }
+
+
+def test_outbox_coalesces_pending_scalars_so_latest_value_wins():
     def send_fn(_ref, _patch, _full, _source):
         return False
 
@@ -152,7 +194,45 @@ def test_outbox_coalesces_pending_settings_so_latest_value_wins():
     assert pending[0].patch == {"volume": 70}
 
 
-def test_outbox_keeps_different_source_settings_entries_separate():
+def test_outbox_coalesces_pending_network_scalars_so_latest_wifi_wins():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue(
+        {"ssid": "Chessnut-R850-2.4G", "ip_address": "11.8.11.75"},
+        source="local",
+    )
+    outbox.enqueue(
+        {"ssid": "Dartsnut", "ip_address": "192.168.31.3"},
+        source="local",
+    )
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {
+        "ssid": "Dartsnut",
+        "ip_address": "192.168.31.3",
+    }
+
+
+def test_outbox_merges_separate_pending_scalar_keys():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"ssid": "Dartsnut"}, source="local")
+    outbox.enqueue({"ip_address": "192.168.31.3"}, source="local")
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {
+        "ssid": "Dartsnut",
+        "ip_address": "192.168.31.3",
+    }
+
+
+def test_outbox_keeps_different_source_scalar_entries_separate():
     def send_fn(_ref, _patch, _full, _source):
         return False
 
@@ -163,7 +243,7 @@ def test_outbox_keeps_different_source_settings_entries_separate():
     assert outbox.pending_count() == 2
 
 
-def test_outbox_skips_settings_patch_matching_last_ack():
+def test_outbox_skips_scalar_patch_matching_last_ack():
     sent = []
 
     def send_fn(ref, patch, _full, _source):
@@ -179,3 +259,94 @@ def test_outbox_skips_settings_patch_matching_last_ack():
     assert duplicate_ref == ""
     assert outbox.pending_count() == 0
     assert sent == [(ref, {"brightness": 40})]
+
+
+def test_outbox_does_not_coalesce_full_scalar_patch():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"ssid": "Chessnut-R850-2.4G"}, full=True, source="local")
+    outbox.enqueue({"ssid": "Dartsnut"}, source="local")
+
+    assert outbox.pending_count() == 2
+
+
+def test_outbox_does_not_coalesce_structured_patches_as_scalars():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"bluetooth": {"is_scan": True}}, source="local")
+    outbox.enqueue({"firmware": {"update": False}}, source="local")
+    outbox.enqueue({"device_info": {"name": "Kitchen"}}, source="local")
+    outbox.enqueue({"games": [{"id": "g1"}, {"id": "g2"}]}, source="local")
+
+    assert outbox.pending_count() == 4
+
+
+def test_outbox_coalesces_pending_game_status_so_latest_ready_wins():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {
+        "games": [{"id": "g1", "status": "ready", "version": "1"}]
+    }
+
+
+def test_outbox_coalesces_pending_game_status_so_latest_playing_wins():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 1
+    pending = list(outbox._pending.values())
+    assert pending[0].patch == {
+        "games": [{"id": "g1", "status": "playing", "version": "1"}]
+    }
+
+
+def test_outbox_keeps_different_game_status_ids_separate():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g2", "status": "playing", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 2
+
+
+def test_outbox_keeps_different_source_game_status_entries_separate():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue({"games": [{"id": "g1", "status": "ready", "version": "1"}]}, source="local")
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="remote")
+
+    assert outbox.pending_count() == 2
+
+
+def test_outbox_does_not_coalesce_full_patch_with_game_status():
+    def send_fn(_ref, _patch, _full, _source):
+        return False
+
+    outbox = SyncOutbox(send_fn, backoff_seconds=(60.0,))
+    outbox.enqueue(
+        {"games": [{"id": "g1", "status": "ready", "version": "1"}]},
+        full=True,
+        source="local",
+    )
+    outbox.enqueue({"games": [{"id": "g1", "status": "playing", "version": "1"}]}, source="local")
+
+    assert outbox.pending_count() == 2

@@ -9,11 +9,12 @@ import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from core.helpers import app_dir, uv_bin
-from core.retry import retry_with_backoff
+from core.retry import retry_with_backoff, FAST_BACKOFF_SECONDS
 
 _log = logging.getLogger(__name__)
 
@@ -61,6 +62,10 @@ def _pyproject_path(app_id: str) -> str:
 
 def _venv_python(app_id: str) -> str:
     return os.path.join(app_dir(app_id), ".venv", "bin", "python")
+
+
+def _venv_dir(app_id: str) -> str:
+    return os.path.join(app_dir(app_id), ".venv")
 
 
 def _stamp_path(app_id: str) -> str:
@@ -141,7 +146,20 @@ def _uv_sync(app_id: str) -> None:
         succeeded=lambda _result: True,
         reraise=True,
         label=f"uv sync {app_id}",
+        backoff=FAST_BACKOFF_SECONDS,
     )
+
+
+def _remove_invalid_venv(app_id: str) -> None:
+    """Remove a partial app venv that uv refuses to repair in place."""
+    venv_path = _venv_dir(app_id)
+    if not os.path.exists(venv_path) or os.path.isfile(_venv_python(app_id)):
+        return
+    if os.path.isdir(venv_path) and not os.path.islink(venv_path):
+        shutil.rmtree(venv_path)
+    else:
+        os.remove(venv_path)
+    _log.warning("Removed invalid app virtualenv for %s: %s", app_id, venv_path)
 
 
 def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
@@ -160,6 +178,7 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
     started = time.monotonic()
     try:
         _materialize_pyproject(app_id, app_type)
+        _remove_invalid_venv(app_id)
         _uv_sync(app_id)
         _write_stamp(app_id)
         _log.info(
@@ -206,6 +225,76 @@ def infer_app_id_from_url(url: str) -> str | None:
     if name.endswith(".tgz"):
         return name[: -len(".tgz")]
     return None
+
+
+def _validate_tar_member(member: tarfile.TarInfo) -> None:
+    path = PurePosixPath(member.name)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Unsafe archive member path: {member.name!r}")
+    if member.issym() or member.islnk():
+        raise ValueError(f"Archive links are not supported: {member.name!r}")
+
+
+def _payload_source_dir(extract_dir: str) -> str:
+    entries = [
+        entry
+        for entry in os.listdir(extract_dir)
+        if entry != "__MACOSX" and not entry.startswith("._")
+    ]
+    if len(entries) == 1:
+        only_entry = os.path.join(extract_dir, entries[0])
+        if os.path.isdir(only_entry):
+            return only_entry
+    return extract_dir
+
+
+def install_app_tarball(tar_path: str, app_id: str) -> str:
+    """Extract tar_path and install its payload into apps/<app_id>."""
+    if not app_id or os.path.isabs(app_id) or "/" in app_id or "\\" in app_id:
+        raise ValueError(f"Invalid app_id: {app_id!r}")
+
+    apps_dir = os.path.join(os.getcwd(), "apps")
+    os.makedirs(apps_dir, exist_ok=True)
+    target_dir = app_dir(app_id)
+
+    with tempfile.TemporaryDirectory(prefix="dartsnut_app_extract_") as tmp_dir:
+        extract_dir = os.path.join(tmp_dir, "extract")
+        prepared_dir = os.path.join(tmp_dir, "prepared")
+        os.makedirs(extract_dir)
+
+        with tarfile.open(tar_path, "r:gz") as tar:
+            members = tar.getmembers()
+            for member in members:
+                _validate_tar_member(member)
+            try:
+                tar.extractall(extract_dir, members=members, filter="data")
+            except TypeError:
+                tar.extractall(extract_dir, members=members)
+
+        source_dir = _payload_source_dir(extract_dir)
+        shutil.copytree(
+            source_dir,
+            prepared_dir,
+            ignore=shutil.ignore_patterns("._*", "__MACOSX"),
+        )
+
+        backup_dir = None
+        if os.path.exists(target_dir):
+            backup_dir = tempfile.mkdtemp(prefix=f".{app_id}.backup.", dir=apps_dir)
+            os.rmdir(backup_dir)
+            shutil.move(target_dir, backup_dir)
+
+        try:
+            shutil.move(prepared_dir, target_dir)
+        except Exception:
+            if backup_dir and os.path.exists(backup_dir) and not os.path.exists(target_dir):
+                shutil.move(backup_dir, target_dir)
+            raise
+        else:
+            if backup_dir and os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir, ignore_errors=True)
+
+    return target_dir
 
 
 def ensure_app_venv_after_extract(

@@ -778,21 +778,17 @@ Failures are reported with Bluetooth‑specific error codes (5001–5008).
 
 #### 3.4.1 `download_app`
 
-Download and install a game/app. This action supports two modes:
+Download and install a game/app asynchronously with progress tracking by `game_id`.
 
-1. **Async with progress tracking by `game_id`** (recommended).
-2. **Legacy sync download by direct URL/MD5** (not recommended for new clients).
-
-**Async mode (recommended):**
+The installed files are always written under `apps/{game_id}`, even when the
+archive filename or top-level folder has a different name.
 
 - **Request fields:**
   - `game_id` (string, required).
-  - `url` (string, optional).
-  - `md5` (string, optional).
+  - `url` (string, required).
+  - `md5` (string, required).
 
-If you provide `game_id`, `url`, and `md5`, the device starts an async download using the provided URL and MD5 and tracks progress by `game_id`. If you provide only `game_id`, the device fetches download info from `api.dartsnut.com`.
-
-Example (async with URL and MD5):
+Example:
 
 ```json
 {
@@ -819,22 +815,7 @@ The actual download and extraction run in a background thread. Track progress wi
 
 If another download for the same `game_id` or URL/MD5 is in progress, you receive an error with `DOWNLOAD_ALREADY_IN_PROGRESS (2006)`.
 
-**Legacy sync mode (URL + MD5, no game_id):**
-
-- **Request fields:**
-  - `url` (string, required).
-  - `md5` (string, required).
-
-```json
-{
-  "action": "download_app",
-  "req_id": "41",
-  "url": "https://example.com/my_game.tar.gz",
-  "md5": "abc123..."
-}
-```
-
-The server starts the download in a worker task and sends a final response (or error) once complete.
+Requests without `game_id`, including legacy URL + MD5 requests, return `MISSING_PARAMETER (3002)`.
 
 #### 3.4.2 `get_download_progress`
 
@@ -1238,7 +1219,7 @@ If the message is not valid JSON, you receive an error similar to:
 
 ### 4.2 Download and Start a Game
 
-1. Call `download_app` with `game_id` (and optionally `url`/`md5`) to start the download.
+1. Call `download_app` with `game_id`, `url`, and `md5` to start the download.
 2. Poll `get_download_progress` periodically until status becomes `"completed"` or an `"error"` is set.
 3. Once complete, call `start_game` with the same `game_id`.
 4. Use `get_game_playtime` to show total playtime for that game.
@@ -1257,4 +1238,3 @@ If the message is not valid JSON, you receive an error similar to:
 - **Handle long‑running actions gracefully:** `download_app`, `perform_update`, and similar operations can take time; show progress indicators and avoid tight polling loops (e.g. poll `get_download_progress` every 1–3 seconds).
 - **Prefer async workflows:** Use async `download_app` + `get_download_progress` instead of blocking on large downloads.
 - **Security model:** The WebSocket API is intended for use on a trusted local network. Deploy behind your own authentication or transport security if exposing beyond a private LAN.
-

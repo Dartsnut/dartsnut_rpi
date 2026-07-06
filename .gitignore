@@ -16,6 +16,7 @@ coverage.json
 # Ignore all folders under apps
 apps/
 downloads/
+logs/
 
 # Ignore device.json file
 device.json
@@ -24,6 +25,7 @@ device.json
 .DS_Store
 .cursor/
 .agents/
+.dartsnut/
 
 *.swp
 target/

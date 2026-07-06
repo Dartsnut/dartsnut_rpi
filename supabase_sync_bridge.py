@@ -29,6 +29,12 @@ _bridge_proc: Optional[subprocess.Popen] = None
 _bridge_lock = threading.Lock()
 _connected = False
 _connected_lock = threading.Lock()
+# Monotonic timestamp of the last frame received from the bridge over the unix
+# socket (any kind: remote_row, bridge_health, ack, ...). Used by the watchdog to
+# detect a bridge that looks "connected" but has gone silent (the realtime-wedge
+# failure mode), since the bridge emits health updates at least every PROBE_INTERVAL.
+_last_bridge_activity_at: Optional[float] = None
+_bridge_activity_lock = threading.Lock()
 _last_rest_latency_ms: Optional[int] = None
 _last_rest_probe_ok = False
 _rest_probe_lock = threading.Lock()
@@ -38,6 +44,49 @@ _remote_games_by_id: Optional[Dict[str, Dict[str, Any]]] = None
 _remote_game_ids_lock = threading.Lock()
 _sync_engine: Optional[SyncEngine] = None
 _on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None
+
+# Last (status, version) this device published per game_id, used to suppress
+# redundant re-publishes. Without this, every inbound snapshot that still shows
+# a game as "downloading" (because the row hasn't propagated yet) makes the
+# device re-send "ready", and each send broadcasts a new snapshot -> feedback
+# loop that floods the bridge and stalls status convergence.
+_published_game_status: Dict[str, tuple[str, str]] = {}
+_published_game_status_lock = threading.Lock()
+
+_FIRMWARE_WRITABLE_TOP_LEVEL = frozenset(
+    {
+        "ssid",
+        "ip_address",
+        "device_updated_at",
+        "pages",
+        "pages_updated_at",
+        "device_info",
+        "firmware",
+        "volume",
+        "brightness",
+        "games",
+        "bluetooth",
+    }
+)
+_FIRMWARE_WRITABLE_DEVICE_INFO = frozenset(
+    {"id", "sn", "model", "hardware_version"}
+)
+_FIRMWARE_WRITABLE_FIRMWARE = frozenset({"version", "update"})
+
+
+def invalidate_published_game_status(game_id: str) -> None:
+    """Forget the last published status for a game so the next write is sent.
+
+    Called when a genuinely new command for the game arrives (e.g. a fresh
+    "downloading" request), so a later "ready"/"error" is never suppressed by
+    a stale cache entry from a previous install cycle.
+    """
+    gid = str(game_id or "").strip()
+    if not gid:
+        return
+    with _published_game_status_lock:
+        _published_game_status.pop(gid, None)
+
 
 _log = logging.getLogger(__name__)
 
@@ -65,6 +114,48 @@ def _set_connected(connected: bool) -> None:
 def is_supabase_connected() -> bool:
     with _connected_lock:
         return _connected
+
+
+def _record_bridge_activity() -> None:
+    """Mark that a frame was just received from the bridge over the unix socket."""
+    global _last_bridge_activity_at
+    with _bridge_activity_lock:
+        _last_bridge_activity_at = time.monotonic()
+
+
+def _seconds_since_bridge_activity() -> Optional[float]:
+    with _bridge_activity_lock:
+        last = _last_bridge_activity_at
+    if last is None:
+        return None
+    return max(0.0, time.monotonic() - last)
+
+
+# The bridge emits a bridge_health frame at least every PROBE_INTERVAL_SECS (60s).
+# If we've seen nothing for well over that window while the bridge process is still
+# alive, the unix socket / realtime path is wedged: treat it as stale and recycle.
+_BRIDGE_STALE_SECONDS = 150.0
+
+
+def is_supabase_bridge_stale() -> bool:
+    """True when the active bridge needs recycling: process died, or it is alive but
+    has gone silent past the health window (the realtime-wedge failure mode)."""
+    if not is_supabase_bridge_active():
+        return False
+    with _bridge_lock:
+        proc = _bridge_proc
+    if proc is None:
+        # Launch in progress (the _launch thread hasn't set _bridge_proc yet) or a
+        # stop is mid-flight: let it settle rather than racing a restart.
+        return False
+    if proc.poll() is not None:
+        # Process exited (e.g. the writer thread forced exit on a stuck write) while
+        # the client still considers the bridge active -> nothing else respawns it.
+        return True
+    idle = _seconds_since_bridge_activity()
+    if idle is None:
+        return False
+    return idle > _BRIDGE_STALE_SECONDS
 
 
 def _update_rest_probe_cache(payload: Dict[str, Any]) -> None:
@@ -140,6 +231,77 @@ def _coerce_pages_games_lists(payload: Dict[str, Any]) -> Dict[str, Any]:
         if v is None or not isinstance(v, list):
             out[key] = []
     out = _coerce_bluetooth_schema(out)
+    return out
+
+
+def _sanitize_device_info_patch(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    out = {k: value[k] for k in _FIRMWARE_WRITABLE_DEVICE_INFO if k in value}
+    return out or None
+
+
+def _sanitize_firmware_patch(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    out = {k: value[k] for k in _FIRMWARE_WRITABLE_FIRMWARE if k in value}
+    return out or None
+
+
+def _sanitize_games_patch(value: Any) -> Optional[list[Dict[str, Any]]]:
+    if not isinstance(value, list):
+        return None
+    out: list[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        gid = str(item.get("id") or "").strip()
+        if not gid or gid in seen_ids:
+            continue
+        game: Dict[str, Any] = {"id": gid}
+        if "status" in item:
+            game["status"] = str(item.get("status") or "").strip().lower()
+        if "version" in item:
+            game["version"] = str(item.get("version") or "").strip()
+        if len(game) > 1:
+            out.append(game)
+            seen_ids.add(gid)
+    return out or None
+
+
+def _sanitize_firmware_partial_patch(
+    payload: Dict[str, Any], *, source: Optional[str] = None
+) -> Dict[str, Any]:
+    """Keep only fields firmware is allowed to publish in partial remote patches."""
+    if not isinstance(payload, dict):
+        return {}
+    source_value = str(source or "").strip()
+    out: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "dim_window" and source_value == "supabase_bridge_init":
+            out[key] = value
+            continue
+        if key not in _FIRMWARE_WRITABLE_TOP_LEVEL:
+            continue
+        if key == "device_info":
+            cleaned = _sanitize_device_info_patch(value)
+            if cleaned:
+                out[key] = cleaned
+        elif key == "firmware":
+            cleaned = _sanitize_firmware_patch(value)
+            if cleaned:
+                out[key] = cleaned
+        elif key == "games":
+            cleaned = _sanitize_games_patch(value)
+            if cleaned:
+                out[key] = cleaned
+        elif key == "bluetooth":
+            cleaned_payload = _coerce_bluetooth_schema({"bluetooth": value})
+            if "bluetooth" in cleaned_payload:
+                out[key] = cleaned_payload["bluetooth"]
+        else:
+            out[key] = value
     return out
 
 
@@ -252,6 +414,12 @@ def _remember_remote_game_ids(config: Dict[str, Any]) -> None:
     if not isinstance(config, dict) or "games" not in config:
         return
     games = config.get("games")
+    try:
+        from runtime.game_secret_store import remember_game_secrets_from_games
+
+        remember_game_secrets_from_games(games)
+    except Exception:
+        pass
     next_ids: set[str] = set()
     next_games_by_id: Dict[str, Dict[str, Any]] = {}
     if isinstance(games, list):
@@ -472,7 +640,6 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         games = []
 
     state: Dict[str, Any] = {
-        "time_zone": device_info.get("time_zone", ""),
         "volume": volume,
         "brightness": brightness,
         "games": games,
@@ -544,16 +711,22 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
 
     if use_local_device:
         for key in (
-            "time_zone",
             "volume",
             "ip_address",
             "brightness",
-            "dim_window",
             "device_info",
             "firmware",
         ):
             if key in local_initial:
-                merged[key] = local_initial[key]
+                if key == "device_info":
+                    local_info = _sanitize_device_info_patch(local_initial.get(key))
+                    if local_info:
+                        existing_info = merged.get("device_info")
+                        if not isinstance(existing_info, dict):
+                            existing_info = {}
+                        merged[key] = {**existing_info, **local_info}
+                else:
+                    merged[key] = local_initial[key]
         merged["device_updated_at"] = local_device.get("updated_at", "") or ""
 
     use_local_pages = False
@@ -645,6 +818,9 @@ class _SyncClient:
                                 msg = json.loads(line.decode("utf-8"))
                             except Exception:
                                 continue
+                            # Any well-formed frame proves the bridge -> Python pipe
+                            # is alive; feeds the staleness watchdog.
+                            _record_bridge_activity()
                             kind = msg.get("kind")
                             payload = msg.get("payload")
                             if kind == "ready":
@@ -812,13 +988,17 @@ def publish_device_state_update(
         return
     global _sync_engine, _client
     if _sync_engine is not None:
-        _sync_engine.publish_partial(partial_state, source=source)
+        sanitized = _sanitize_firmware_partial_patch(partial_state, source=source)
+        if sanitized:
+            _sync_engine.publish_partial(sanitized, source=source)
         return
     with _bridge_lock:
         client = _client
     if client is None:
         return
-    client.send_state(partial_state, full=False, source=source)
+    sanitized = _sanitize_firmware_partial_patch(partial_state, source=source)
+    if sanitized:
+        client.send_state(sanitized, full=False, source=source)
 
 
 def is_supabase_bridge_active() -> bool:
@@ -834,6 +1014,11 @@ def request_set_game_status(game_id: str, status: str) -> None:
         games = get_games_summary()
         remote_ids = _current_remote_game_ids()
         if remote_ids is not None and str(game_id) not in remote_ids:
+            _log.warning(
+                "supabase sync: request_set_game_status skipped game_id=%s status=%s reason=not_in_remote_list",
+                game_id,
+                status,
+            )
             return
         remote_games = _current_remote_games_by_id() or {}
         remote_entry = remote_games.get(str(game_id), {})
@@ -845,9 +1030,38 @@ def request_set_game_status(game_id: str, status: str) -> None:
                     remote_version = str(g.get("version") or "").strip()
                 break
         game_payload["version"] = resolve_game_version_for_sync(game_id, remote_version)
+
+        # Suppress redundant re-publishes of the same status+version. The outbox
+        # already guarantees delivery+retry of an enqueued patch, so re-sending an
+        # identical status only feeds the inbound-snapshot -> re-affirm loop that
+        # floods the bridge. A fresh "downloading" command clears this cache via
+        # invalidate_published_game_status(), so ready/error always get through.
+        gid = str(game_id)
+        published_key = (str(status), str(game_payload["version"]))
+        with _published_game_status_lock:
+            if _published_game_status.get(gid) == published_key:
+                _log.debug(
+                    "supabase sync: request_set_game_status skipped game_id=%s status=%s reason=already_published",
+                    game_id,
+                    status,
+                )
+                return
+            _published_game_status[gid] = published_key
+
+        _log.info(
+            "supabase sync: request_set_game_status game_id=%s status=%s version=%s",
+            game_id,
+            status,
+            game_payload["version"],
+        )
         publish_device_state_update({"games": [game_payload]})
-    except Exception:
-        pass
+    except Exception as e:
+        _log.error(
+            "supabase sync: request_set_game_status failed game_id=%s status=%s: %s",
+            game_id,
+            status,
+            e,
+        )
 
 
 def request_set_all_games_ready() -> None:
@@ -960,7 +1174,7 @@ def ensure_supabase_sync_running(
         _log.info("supabase sync: unix socket server started path=%s", socket_path)
 
         def _launch() -> None:
-            global _bridge_proc
+            global _bridge_proc, _last_bridge_activity_at
             try:
                 proc = subprocess.Popen(
                     [executable_path, f"--socket-path={socket_path}"],
@@ -968,6 +1182,11 @@ def ensure_supabase_sync_running(
                     stderr=None,
                     env=launch_env,
                 )
+                # Seed the liveness clock so a freshly launched bridge that never
+                # produces a frame still becomes eligible for the staleness watchdog
+                # after the normal window (instead of looking "never active").
+                with _bridge_activity_lock:
+                    _last_bridge_activity_at = time.monotonic()
                 with _bridge_lock:
                     _bridge_proc = proc
             except Exception as e:
@@ -982,9 +1201,16 @@ def restart_supabase_sync(
     on_config_updated: Callable[[Dict[str, Any]], None],
     on_game_ready: Optional[Callable[[ReducedGameReady], None]] = None,
 ) -> None:
-    # Avoid churn when callers request a restart while the bridge is already
-    # active and healthy (common during startup connectivity polling).
-    if is_supabase_bridge_active() and is_supabase_connected():
+    # Avoid churn when callers request a restart while the bridge is already active
+    # and healthy (common during startup connectivity polling). A stale bridge --
+    # alive and flagged connected but silent past the health window -- must NOT be
+    # treated as healthy: that is exactly the realtime-wedge case the watchdog exists
+    # to recover, so fall through to a hard restart.
+    if (
+        is_supabase_bridge_active()
+        and is_supabase_connected()
+        and not is_supabase_bridge_stale()
+    ):
         return
     stop_supabase_sync()
     time.sleep(0.05)
@@ -994,7 +1220,7 @@ def restart_supabase_sync(
 
 
 def stop_supabase_sync() -> None:
-    global _client, _bridge_proc, _remote_game_ids
+    global _client, _bridge_proc, _remote_game_ids, _last_bridge_activity_at
     with _bridge_lock:
         proc = _bridge_proc
         _bridge_proc = None
@@ -1006,4 +1232,6 @@ def stop_supabase_sync() -> None:
     _client = None
     with _remote_game_ids_lock:
         _remote_game_ids = None
+    with _bridge_activity_lock:
+        _last_bridge_activity_at = None
     _set_connected(False)

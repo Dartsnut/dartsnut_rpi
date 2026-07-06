@@ -81,6 +81,19 @@ cleanup_legacy_splash_service() {
     sudo rm -f /usr/local/bin/splash_matrix
 }
 
+cleanup_legacy_watchdog_service() {
+    echo "Cleaning up legacy watchdog service name"
+    local legacy_unit
+    local legacy_bin
+    legacy_unit="$(printf 'dartsnut_%s_worker.service' 'command')"
+    legacy_bin="$(printf '%s_%s' 'command' 'worker')"
+    sudo systemctl disable "${legacy_unit}" >/dev/null 2>&1 || true
+    sudo systemctl stop "${legacy_unit}" >/dev/null 2>&1 || true
+    sudo rm -f "/etc/systemd/system/${legacy_unit}"
+    sudo rm -f "/etc/systemd/system/multi-user.target.wants/${legacy_unit}"
+    sudo rm -f "${REPO_DIR}/${legacy_bin}"
+}
+
 echo "== Boot configuration (Bookworm) =="
 
 # Ensure CPU isolation.
@@ -162,15 +175,20 @@ install_boot_assets_if_present
 
 install_or_update_service_unit "dartsnut_matrix.service"
 install_or_update_service_unit "dartsnut_python.service"
+install_or_update_service_unit "dartsnut_mcp.service"
+install_or_update_service_unit "dartsnut_watchdog.service"
 
 if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
     sudo systemctl daemon-reload
 fi
 
 cleanup_legacy_splash_service
+cleanup_legacy_watchdog_service
 sudo systemctl daemon-reload
 sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
+sudo systemctl enable dartsnut_mcp.service
+sudo systemctl enable dartsnut_watchdog.service
 
 echo "Service setup steps complete."
 

@@ -7,11 +7,9 @@ import io
 import json
 import logging
 import os
-import struct
 import subprocess
 import threading
 import time
-import glob
 import urllib.request
 
 # Optional legacy startup path: Python can still start matrix service explicitly.
@@ -52,6 +50,7 @@ from widget_lifecycle import (
 from game_lifecycle import (
     load_menu_game_list,
     refresh_menu_game_list_if_requested,
+    shutdown_preview_worker,
     start_game_process,
     term_game_process,
     ensure_game_downloaded,
@@ -80,6 +79,7 @@ from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
+from runtime.controller_input import ControllerInputManager
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
@@ -115,6 +115,7 @@ _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
     debounce_seconds=SETTING_SYNC_DEBOUNCE_SECONDS,
 )
+_controller_input_manager = ControllerInputManager()
 
 _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     scan_builder=machine_api.build_remote_bluetooth_list,
@@ -612,96 +613,34 @@ def reload_pages_from_conf(context: AppContext) -> None:
     context.page_tick = time.time()
 
 
-# Linux joystick button index -> app button name (Bluetooth gamepads).
-_JS_BUTTON_TO_APP = {
-    0: "btn_a",
-    1: "btn_b",
-    8: "btn_home",
-    9: "btn_home",
-    10: "btn_home",
-}
+# -----------------------------------------------------------------------------
+# Buttons: GPIO + controller input (skip app controls in_game so games receive input)
+# -----------------------------------------------------------------------------
+def _should_consume_controller_button(context: AppContext, button: str) -> bool:
+    if button != "btn_home":
+        return True
+    game = getattr(context, "game", None)
+    if isinstance(game, dict) and str(game.get("game_id") or "") == "pico8":
+        return False
+    return True
 
 
-# -----------------------------------------------------------------------------
-# Buttons: GPIO + joystick (skip joystick when in_game so game receives input)
-# -----------------------------------------------------------------------------
 def get_buttons_pressed(context: AppContext):
-    consume_joystick = True
+    consume_app_controls = True
     if context is not None and context.current_state is not None:
-        # In in_game without overlay, game gets joystick; with overlay, app handles A/B
-        consume_joystick = (
+        # In in_game without overlay, game gets controller controls; HOME still opens UI overlay.
+        consume_app_controls = (
             context.current_state.name() != "in_game"
             or context.current_state.is_showing_exit_game_overlay(context)
         )
-
-    if not hasattr(get_buttons_pressed, "old_buttons"):
-        get_buttons_pressed.old_buttons = {
-            "btn_a": False,
-            "btn_b": False,
-            "btn_left": False,
-            "btn_up": False,
-            "btn_right": False,
-            "btn_down": False,
-            "btn_home": False,
-            "btn_reserved": False,
-        }
-    button_states = dartsnut.get_buttons()
-    button_pressed = {k: False for k in get_buttons_pressed.old_buttons}
-    for i, key in enumerate(button_states):
-        if button_states[key] != get_buttons_pressed.old_buttons[key]:
-            get_buttons_pressed.old_buttons[key] = button_states[key]
-            if button_states[key]:
-                button_pressed[key] = True
-    if not hasattr(get_buttons_pressed, "js_files"):
-        get_buttons_pressed.js_files = {}
-    for js_path in glob.glob("/dev/input/js*"):
-        if js_path not in get_buttons_pressed.js_files:
-            try:
-                f = open(js_path, "rb")
-                os.set_blocking(f.fileno(), False)
-                get_buttons_pressed.js_files[js_path] = f
-            except OSError:
-                pass
-    if get_buttons_pressed.js_files:
-        for js_path in list(get_buttons_pressed.js_files.keys()):
-            js_file = get_buttons_pressed.js_files[js_path]
-            while True:
-                try:
-                    event_data = js_file.read(8)
-                    if event_data is None:
-                        break
-                    if not event_data:
-                        raise OSError("Device disconnected")
-                    _time_ms, value, type_, number = struct.unpack("Ihbb", event_data)
-                    event_kind = type_ & 0x7F  # JS_EVENT_* (ignore JS_EVENT_INIT)
-                    if event_kind == 0x01:
-                        app_btn = _JS_BUTTON_TO_APP.get(number)
-                        if value != 0 and app_btn and (
-                            consume_joystick or app_btn == "btn_home"
-                        ):
-                            button_pressed[app_btn] = True
-                    elif consume_joystick and event_kind == 0x02:
-                        if number == 6:
-                            if value < -16000:
-                                button_pressed["btn_left"] = True
-                            elif value > 16000:
-                                button_pressed["btn_right"] = True
-                        elif number == 7:
-                            if value < -16000:
-                                button_pressed["btn_up"] = True
-                            elif value > 16000:
-                                button_pressed["btn_down"] = True
-                except (BlockingIOError, InterruptedError):
-                    break
-                except Exception:
-                    try:
-                        js_file.close()
-                    except Exception:
-                        pass
-                    if js_path in get_buttons_pressed.js_files:
-                        del get_buttons_pressed.js_files[js_path]
-                    break
-    return button_pressed
+    result = _controller_input_manager.poll(
+        dartsnut,
+        consume_app_controls=consume_app_controls,
+        should_consume_button=lambda button: consume_app_controls
+        or _should_consume_controller_button(context, button),
+    )
+    get_buttons_pressed.old_buttons = result.current
+    return result.pressed
 
 
 def check_connection_loop():
@@ -753,6 +692,26 @@ def check_connection_loop():
                     _log.warning(
                         "Error restarting remote sync after connectivity established: %s", e
                     )
+
+            # Recover a wedged bridge: alive and flagged connected but silent past the
+            # health window (the realtime CLOSE-WAIT failure mode). restart_sync only
+            # acts when the bridge is genuinely stale, so this is a no-op when healthy.
+            if _app_ctx.internet_connected:
+                try:
+                    if get_remote_sync().is_bridge_stale():
+                        _log.warning(
+                            "remote sync: bridge stale (silent past health window); restarting"
+                        )
+                        di = get_device_info()
+                        get_remote_sync().restart_sync(
+                            di or {},
+                            reload_config,
+                            _apply_remote_config,
+                            _on_sync_game_ready,
+                        )
+                        request_network_state_refresh()
+                except Exception as e:
+                    _log.warning("Error checking/restarting stale remote sync: %s", e)
         except Exception as e:
             _log.warning("Error checking connection: %s", e)
             _app_ctx.wifi_connected = False
@@ -865,22 +824,25 @@ init_machine_state_service(
 init_widgets(ctx)
 
 
-run_main_loop(
-    dim_rt=dim_rt,
-    dartsnut=dartsnut,
-    ctx=ctx,
-    assets=assets,
-    get_device_info=get_device_info,
-    parse_hhmm=machine_api.parse_hhmm,
-    update_brightness_transition=_update_brightness_transition,
-    start_brightness_transition=_start_brightness_transition,
-    init_widgets=init_widgets,
-    reload_pages_from_conf=reload_pages_from_conf,
-    term_game_process=term_game_process,
-    start_game_process=start_game_process,
-    term_widget_processes=term_widget_processes,
-    get_buttons_pressed=get_buttons_pressed,
-    check_widget_ready=check_widget_ready,
-    in_game_state_cls=InGameState,
-    get_remote_sync=get_remote_sync,
-)
+try:
+    run_main_loop(
+        dim_rt=dim_rt,
+        dartsnut=dartsnut,
+        ctx=ctx,
+        assets=assets,
+        get_device_info=get_device_info,
+        parse_hhmm=machine_api.parse_hhmm,
+        update_brightness_transition=_update_brightness_transition,
+        start_brightness_transition=_start_brightness_transition,
+        init_widgets=init_widgets,
+        reload_pages_from_conf=reload_pages_from_conf,
+        term_game_process=term_game_process,
+        start_game_process=start_game_process,
+        term_widget_processes=term_widget_processes,
+        get_buttons_pressed=get_buttons_pressed,
+        check_widget_ready=check_widget_ready,
+        in_game_state_cls=InGameState,
+        get_remote_sync=get_remote_sync,
+    )
+finally:
+    shutdown_preview_worker()

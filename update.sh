@@ -53,6 +53,19 @@ cleanup_legacy_splash_service() {
     sudo rm -f /usr/local/bin/splash_matrix
 }
 
+cleanup_legacy_watchdog_service() {
+    echo "Cleaning up legacy watchdog service name"
+    local legacy_unit
+    local legacy_bin
+    legacy_unit="$(printf 'dartsnut_%s_worker.service' 'command')"
+    legacy_bin="$(printf '%s_%s' 'command' 'worker')"
+    sudo systemctl disable "${legacy_unit}" >/dev/null 2>&1 || true
+    sudo systemctl stop "${legacy_unit}" >/dev/null 2>&1 || true
+    sudo rm -f "/etc/systemd/system/${legacy_unit}"
+    sudo rm -f "/etc/systemd/system/multi-user.target.wants/${legacy_unit}"
+    sudo rm -f "${REPO_DIR}/${legacy_bin}"
+}
+
 echo "== Boot configuration (Bookworm) =="
 
 if ! grep -q "^disable_splash=1" /boot/firmware/config.txt; then
@@ -81,6 +94,8 @@ echo "== Services and boot assets =="
 if [ -d "${SERVICES_DIR}" ]; then
     install_or_update_service_unit "dartsnut_matrix.service"
     install_or_update_service_unit "dartsnut_python.service"
+    install_or_update_service_unit "dartsnut_mcp.service"
+    install_or_update_service_unit "dartsnut_watchdog.service"
 
     SPLASH_DEST_PPM="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
@@ -120,8 +135,11 @@ if [ -d "${SERVICES_DIR}" ]; then
     fi
 
     cleanup_legacy_splash_service
+    cleanup_legacy_watchdog_service
     sudo systemctl daemon-reload
     sudo systemctl enable dartsnut_matrix.service
+    sudo systemctl enable dartsnut_mcp.service
+    sudo systemctl enable dartsnut_watchdog.service
 else
     echo "Warning: services directory not found at ${SERVICES_DIR}; skipping boot asset update."
 fi
@@ -189,3 +207,7 @@ echo "== Restart =="
 
 sudo systemctl restart dartsnut_python.service
 echo "Restarted dartsnut_python.service"
+sudo systemctl restart dartsnut_mcp.service
+echo "Restarted dartsnut_mcp.service"
+sudo systemctl restart dartsnut_watchdog.service
+echo "Restarted dartsnut_watchdog.service"
