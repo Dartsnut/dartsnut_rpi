@@ -7,7 +7,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=oneshot
 WorkingDirectory=/home/rpi/dartsnut_rpi
-ExecStart=/bin/sh -c 'set -eu; found=0; for marker in /boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending; do [ -f "$$marker" ] && found=1; done; [ "$$found" = "1" ] || exit 0; python3 ./check_and_update.py && rm -f /boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending'
+ExecStart=/bin/sh -c 'set -eu; found=0; for marker in /boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending; do [ -f "$$marker" ] && found=1; done; [ "$$found" = "1" ] || exit 0; ./update.sh && rm -f /boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending'
 Restart=on-failure
 RestartSec=60s
 
