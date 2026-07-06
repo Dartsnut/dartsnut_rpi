@@ -17,6 +17,7 @@ def _write_fake_project(tmp_path: Path, uv_script: str) -> Path:
             [
                 "[project]",
                 "dependencies = [",
+                '    "bluezero==0.9.1",',
                 '    "pygame-ce==2.5.7",',
                 '    "pybluez-dartsnut==0.30",',
                 "]",
@@ -262,12 +263,11 @@ printf '%s\\n' "$*" >> "$UV_CALL_LOG"
 [ "$1" = "sync" ] && exit 0
 [ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
 if [ "$1" = "run" ]; then
-    [ "$*" = "run python -c import bluezero" ] && [ -f "$REPO_DIR/bluezero_installed" ] && exit 0
+    [ "$*" = "run python -c import bluezero" ] && exit 0
     [ -f "$REPO_DIR/pygame_installed" ] && exit 0
     exit 1
 fi
 if [ "$1" = "pip" ]; then
-    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
     [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$5" = "pygame-ce==2.5.7" ] && exit 9
 fi
 exit 3
@@ -281,8 +281,6 @@ exit 3
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
         "sync --inexact",
-        "run python -c import bluezero",
-        "pip install --force-reinstall --no-deps bluezero==0.9.1",
         "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "pip install --force-reinstall --no-deps pygame-ce==2.5.7",
@@ -322,7 +320,7 @@ exit 3
     ]
 
 
-def test_refresh_uv_project_installs_bluezero_without_pygobject_deps(
+def test_refresh_uv_project_verifies_uv_managed_bluezero(
     tmp_path: Path,
 ) -> None:
     repo = _write_fake_project(
@@ -331,13 +329,8 @@ def test_refresh_uv_project_installs_bluezero_without_pygobject_deps(
 printf '%s\\n' "$*" >> "$UV_CALL_LOG"
 [ "$1" = "venv" ] && [ "$2" = "--system-site-packages" ] && exit 0
 [ "$1" = "sync" ] && exit 0
-if [ "$1" = "run" ]; then
-    [ "$*" = "run python -c import bluezero" ] && [ ! -f "$REPO_DIR/bluezero_installed" ] && exit 1
-    exit 0
-fi
-if [ "$1" = "pip" ]; then
-    [ "$2" = "install" ] && [ "$3" = "--force-reinstall" ] && [ "$4" = "--no-deps" ] && [ "$5" = "bluezero==0.9.1" ] && touch "$REPO_DIR/bluezero_installed" && exit 0
-fi
+[ "$1" = "run" ] && exit 0
+[ "$1" = "pip" ] && exit 9
 exit 3
 """,
     )
@@ -349,8 +342,6 @@ exit 3
     assert log.read_text(encoding="utf-8").splitlines() == [
         "venv --system-site-packages",
         "sync --inexact",
-        "run python -c import bluezero",
-        "pip install --force-reinstall --no-deps bluezero==0.9.1",
         "run python -c import bluezero",
         "run python -c import pygame; pygame.Surface",
         "run python -c import bluetooth; import bluetooth._bluetooth",
@@ -371,13 +362,11 @@ def test_setup_script_stops_when_uv_setup_fails() -> None:
     assert 'setup_uv_project || exit $?' in script
 
 
-def test_native_dbus_and_gi_come_from_system_packages_not_pypi_build() -> None:
+def test_native_dbus_comes_from_system_package_and_bluezero_is_uv_managed() -> None:
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
     system_packages = (REPO_ROOT / "system-packages.txt").read_text(encoding="utf-8")
 
     assert "dbus-python" not in pyproject
-    assert "bluezero" not in pyproject
-    assert "pygobject" not in lock
+    assert "bluezero==0.9.1" in pyproject
     assert "python3-dbus" in system_packages
     assert "python3-gi" in system_packages

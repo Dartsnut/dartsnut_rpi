@@ -2,7 +2,6 @@
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 UV_BIN="${REPO_DIR}/uv"
-BLUEZERO_REQ="${BLUEZERO_REQ:-bluezero==0.9.1}"
 FORCEFSCK_PATH="${FORCEFSCK_PATH:-/forcefsck}"
 DARTSNUT_UPDATE_PENDING_MARKERS="${DARTSNUT_UPDATE_PENDING_MARKERS:-/boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending}"
 
@@ -45,13 +44,8 @@ _verify_pybluez_dartsnut() {
     "${UV_BIN}" run python -c "import bluetooth; import bluetooth._bluetooth"
 }
 
-_ensure_bluezero_no_deps() {
+_verify_bluezero() {
     echo "Verifying bluezero module..."
-    if "${UV_BIN}" run python -c "import bluezero" 2>/dev/null; then
-        return 0
-    fi
-    echo "bluezero import failed; installing bluezero without PyPI native deps..."
-    _run_uv_with_root_cache_repair pip install --force-reinstall --no-deps "${BLUEZERO_REQ}" || return $?
     "${UV_BIN}" run python -c "import bluezero"
 }
 
@@ -74,7 +68,7 @@ _verify_system_gi() {
 }
 
 verify_uv_python_packages() {
-    _ensure_bluezero_no_deps || return $?
+    _verify_bluezero || return $?
     _verify_pygame_ce || return $?
     _verify_pybluez_dartsnut || return $?
     _verify_system_dbus || return $?

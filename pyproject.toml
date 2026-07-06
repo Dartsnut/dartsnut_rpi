@@ -3,6 +3,7 @@ name = "dartsnut-rpi"
 version = "2.0.21"
 requires-python = ">=3.11"
 dependencies = [
+    "bluezero==0.9.1",
     "fastapi==0.135.1",
     "numpy==2.4.2",
     "pillow==12.1.1",
