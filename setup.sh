@@ -177,6 +177,7 @@ install_or_update_service_unit "dartsnut_matrix.service"
 install_or_update_service_unit "dartsnut_python.service"
 install_or_update_service_unit "dartsnut_mcp.service"
 install_or_update_service_unit "dartsnut_watchdog.service"
+install_or_update_service_unit "dartsnut_update_repair.service"
 
 if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
     sudo systemctl daemon-reload
@@ -189,6 +190,7 @@ sudo systemctl enable dartsnut_matrix.service
 sudo systemctl enable dartsnut_python.service
 sudo systemctl enable dartsnut_mcp.service
 sudo systemctl enable dartsnut_watchdog.service
+sudo systemctl enable dartsnut_update_repair.service
 
 echo "Service setup steps complete."
 

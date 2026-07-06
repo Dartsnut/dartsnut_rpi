@@ -199,3 +199,85 @@ def test_check_update_release_falls_back_current_version_when_no_tag(monkeypatch
     assert result["current_version"] == "v100.0.abcdef0"
     assert result["latest_version"] == "v1.2.3"
     assert result["needs_update"] is True
+
+
+def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
+    calls = []
+    repair_markers = []
+
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+    monkeypatch.setattr(
+        git_operations,
+        "mark_update_repair_pending",
+        lambda: repair_markers.append("mark"),
+    )
+    monkeypatch.setattr(
+        git_operations,
+        "clear_update_repair_pending",
+        lambda: repair_markers.append("clear"),
+    )
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("oldsha\n")
+        if cmd == ["sudo", "./update.sh"] and calls.count(cmd) == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update()
+
+    assert result["error_code"] == "6004"
+    assert repair_markers == ["mark", "clear"]
+    assert calls == [
+        ["git", "rev-parse", "HEAD"],
+        ["git", "reset", "--hard"],
+        ["git", "fetch", "origin"],
+        ["git", "reset", "--hard", "origin/master"],
+        ["sudo", "./update.sh"],
+        ["git", "reset", "--hard", "oldsha"],
+        ["sudo", "./update.sh"],
+    ]
+
+
+def test_perform_update_leaves_pending_repair_when_rollback_update_fails(monkeypatch):
+    calls = []
+    repair_markers = []
+
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+    monkeypatch.setattr(
+        git_operations,
+        "mark_update_repair_pending",
+        lambda: repair_markers.append("mark"),
+    )
+    monkeypatch.setattr(
+        git_operations,
+        "clear_update_repair_pending",
+        lambda: repair_markers.append("clear"),
+    )
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("oldsha\n")
+        if cmd == ["sudo", "./update.sh"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update()
+
+    assert result["error_code"] == "6005"
+    assert repair_markers == ["mark"]
+    assert calls == [
+        ["git", "rev-parse", "HEAD"],
+        ["git", "reset", "--hard"],
+        ["git", "fetch", "origin"],
+        ["git", "reset", "--hard", "origin/master"],
+        ["sudo", "./update.sh"],
+        ["git", "reset", "--hard", "oldsha"],
+        ["sudo", "./update.sh"],
+    ]

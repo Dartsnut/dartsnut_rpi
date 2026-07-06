@@ -126,10 +126,15 @@ def test_service_install_scripts_reference_mcp_service():
     setup = open("setup.sh", encoding="utf-8").read()
     update = open("update.sh", encoding="utf-8").read()
     service = open("services/dartsnut_mcp.service", encoding="utf-8").read()
+    repair_service = open("services/dartsnut_update_repair.service", encoding="utf-8").read()
     mcp_definition = json.load(open("mcp/dartsnut-firmware.mcp.json", encoding="utf-8"))
 
     assert "dartsnut_mcp.service" in setup
     assert "dartsnut_mcp.service" in update
+    assert "dartsnut_update_repair.service" in setup
+    assert "dartsnut_update_repair.service" in update
+    assert "check_and_update.py" in repair_service
+    assert "dartsnut_update_pending" in repair_service
     assert "--port 9252" in service
     assert "SuccessExitStatus=143" in service
     assert update.index("refresh_uv_project") < update.index("restart dartsnut_mcp.service")

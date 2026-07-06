@@ -96,6 +96,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     install_or_update_service_unit "dartsnut_python.service"
     install_or_update_service_unit "dartsnut_mcp.service"
     install_or_update_service_unit "dartsnut_watchdog.service"
+    install_or_update_service_unit "dartsnut_update_repair.service"
 
     SPLASH_DEST_PPM="/boot/logo.ppm"
     if [ ! -d "/boot" ] && [ -d "/boot/firmware" ]; then
@@ -140,6 +141,7 @@ if [ -d "${SERVICES_DIR}" ]; then
     sudo systemctl enable dartsnut_matrix.service
     sudo systemctl enable dartsnut_mcp.service
     sudo systemctl enable dartsnut_watchdog.service
+    sudo systemctl enable dartsnut_update_repair.service
 else
     echo "Warning: services directory not found at ${SERVICES_DIR}; skipping boot asset update."
 fi
