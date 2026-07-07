@@ -137,6 +137,8 @@ def test_service_install_scripts_reference_mcp_service():
     assert "rollback_rpi_kernel_6_12.sh" in update
     assert "repair_device_json.sh" in setup
     assert "repair_device_json.sh" in update
+    assert 'git -C "${REPO_DIR}" diff --quiet "${before_ref}" HEAD -- DartsnutRGBMatrix' in update
+    assert update.index("restart dartsnut_matrix.service") < update.index("restart dartsnut_python.service")
     assert "./update.sh" in repair_service
     assert "check_and_update.py" not in repair_service
     assert "dartsnut_update_pending" in repair_service

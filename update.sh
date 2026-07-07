@@ -193,6 +193,20 @@ fi
 
 echo "== Restart =="
 
+MATRIX_BINARY_CHANGED=0
+before_ref=""
+if before_ref="$(git -C "${REPO_DIR}" rev-parse --verify HEAD@{1} 2>/dev/null)"; then
+    if ! git -C "${REPO_DIR}" diff --quiet "${before_ref}" HEAD -- DartsnutRGBMatrix; then
+        MATRIX_BINARY_CHANGED=1
+    fi
+fi
+
+if [ "${MATRIX_BINARY_CHANGED}" -eq 1 ]; then
+    sudo systemctl restart dartsnut_matrix.service
+    echo "Restarted dartsnut_matrix.service"
+else
+    echo "DartsnutRGBMatrix unchanged, skipping dartsnut_matrix.service restart"
+fi
 sudo systemctl restart dartsnut_python.service
 echo "Restarted dartsnut_python.service"
 sudo systemctl restart dartsnut_mcp.service

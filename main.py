@@ -807,7 +807,6 @@ start_background_subsystems(
     remote_config_runtime=_remote_config_runtime,
     websocket_service_registry=_websocket_service_registry,
     set_startup_volume=_set_volume_local_only,
-    set_startup_brightness=_set_brightness_hardware,
 )
 
 ctx.reload_conf = False
