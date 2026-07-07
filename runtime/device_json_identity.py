@@ -1,9 +1,9 @@
 """
-Canonical serial/model identity for ./device.json.
+Canonical serial identity for ./device.json.
 
 Factory values live on the Pi at /boot/device.json. After any write to the
-workspace copy we re-read and align serial + model with boot so identity cannot
-be accidentally dropped or drift from the machine.
+workspace copy we re-read and align serial with boot so identity cannot be
+accidentally dropped or drift from the machine.
 """
 
 from __future__ import annotations
@@ -62,12 +62,12 @@ def apply_factory_serial_if_needed(
 
 def verify_and_repair_device_json(path: Optional[str] = None) -> bool:
     """
-    Re-read device.json and ensure serial + model match boot when boot defines them.
+    Re-read device.json and ensure serial matches boot when boot defines it.
 
-    Call after every write to device.json. If boot has a value for a key, it is
-    the source of truth and overwrites the workspace file when missing or wrong.
+    Call after every write to device.json. If boot has a serial, it is the
+    source of truth and overwrites the workspace file when missing or wrong.
 
-    Returns True when both serial and model are non-empty after repair; otherwise False.
+    Returns True when serial is non-empty after repair; otherwise False.
     """
     resolved = path or os.path.join(os.getcwd(), "device.json")
     data: Dict[str, Any]
@@ -81,6 +81,7 @@ def verify_and_repair_device_json(path: Optional[str] = None) -> bool:
 
     boot = load_boot_device_identity()
     changed = False
+    # Keep legacy model aligned when boot still defines it, but do not require it.
     for key in ("serial", "model"):
         disk_val = str(data.get(key, "")).strip()
         boot_val = str(boot.get(key, "")).strip()
@@ -117,7 +118,7 @@ def verify_and_repair_device_json(path: Optional[str] = None) -> bool:
     except Exception:
         check = {}
 
-    for key in ("serial", "model"):
+    for key in ("serial",):
         if not str(check.get(key, "")).strip():
             ok = False
             boot_hint = str(boot.get(key, "")).strip()
