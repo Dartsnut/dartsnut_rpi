@@ -6,6 +6,7 @@ UV_ENV_SCRIPT="${REPO_DIR}/scripts/uv_env.sh"
 SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
 INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 REPAIR_DEVICE_JSON_SCRIPT="${REPO_DIR}/scripts/repair_device_json.sh"
+KERNEL_ROLLBACK_SCRIPT="${REPO_DIR}/scripts/rollback_rpi_kernel_6_12.sh"
 
 # shellcheck source=scripts/uv_env.sh
 source "${UV_ENV_SCRIPT}"
@@ -207,4 +208,12 @@ else
     sudo crontab /tmp/new_crontab.txt
     rm -f /tmp/new_crontab.txt
     echo "Added cron job for automatic git updates"
+fi
+
+echo "== Final kernel compatibility check =="
+
+if [ -x "${KERNEL_ROLLBACK_SCRIPT}" ]; then
+    "${KERNEL_ROLLBACK_SCRIPT}" || exit $?
+else
+    echo "Warning: ${KERNEL_ROLLBACK_SCRIPT} not found or not executable; skipping kernel compatibility check."
 fi

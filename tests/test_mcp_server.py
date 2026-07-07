@@ -133,6 +133,8 @@ def test_service_install_scripts_reference_mcp_service():
     assert "dartsnut_mcp.service" in update
     assert "dartsnut_update_repair.service" in setup
     assert "dartsnut_update_repair.service" in update
+    assert "rollback_rpi_kernel_6_12.sh" in setup
+    assert "rollback_rpi_kernel_6_12.sh" in update
     assert "repair_device_json.sh" in setup
     assert "repair_device_json.sh" in update
     assert "./update.sh" in repair_service
@@ -152,3 +154,19 @@ def test_service_install_scripts_reference_mcp_service():
             }
         }
     }
+
+
+def test_kernel_rollback_check_is_final_install_step():
+    setup = open("setup.sh", encoding="utf-8").read().strip()
+    update = open("update.sh", encoding="utf-8").read().strip()
+
+    final_check = """echo "== Final kernel compatibility check =="
+
+if [ -x "${KERNEL_ROLLBACK_SCRIPT}" ]; then
+    "${KERNEL_ROLLBACK_SCRIPT}" || exit $?
+else
+    echo "Warning: ${KERNEL_ROLLBACK_SCRIPT} not found or not executable; skipping kernel compatibility check."
+fi"""
+
+    assert setup.endswith(final_check)
+    assert update.endswith(final_check)
