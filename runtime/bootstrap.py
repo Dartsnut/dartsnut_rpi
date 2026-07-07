@@ -128,7 +128,6 @@ def start_background_subsystems(
     remote_config_runtime: Any,
     websocket_service_registry: Any = None,
     set_startup_volume: Optional[Callable[[int], None]] = None,
-    set_startup_brightness: Optional[Callable[[int], None]] = None,
 ) -> None:
     # Keep UDP discovery broadcasts disabled in this branch.
     # IP/SSID reads still come from machine_api -> udp_broadcast helpers.
@@ -156,12 +155,6 @@ def start_background_subsystems(
         (set_startup_volume or set_volume)(int(device_info.get("volume", "50")))
     except Exception as e:
         _log.warning("Error applying startup volume: %s", e)
-    try:
-        (set_startup_brightness or set_brightness)(
-            int(device_info.get("brightness", "100"))
-        )
-    except Exception as e:
-        _log.warning("Error applying startup brightness: %s", e)
 
     threading.Thread(
         target=start_ble_server, args=(locate_device,), daemon=True
