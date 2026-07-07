@@ -19,7 +19,7 @@ try:
 except (OSError, json.JSONDecodeError):
     raise SystemExit(1)
 
-if not isinstance(data, dict) or not str(data.get("model") or "").strip():
+if not isinstance(data, dict) or not str(data.get("serial") or "").strip():
     raise SystemExit(1)
 PY
 }

@@ -11,6 +11,7 @@ import subprocess
 _log = logging.getLogger(__name__)
 
 _CACHE_FILENAME = ".hardware_version.json"
+_PIXELDARTS_DEVICE_CACHE: bool | None = None
 _PID_RE = re.compile(
     r"\bID\s+[0-9a-fA-F]{4}:([0-9a-fA-F]{4})\b.*\bPIXELDARTS\b",
     flags=re.IGNORECASE,
@@ -57,6 +58,31 @@ def probe_lsusb_hardware_version() -> str:
         return extract_pixeldarts_pid(output)
     except Exception:
         return ""
+
+
+def is_pixeldart_device() -> bool:
+    """Return True only when live USB enumeration shows a PIXELDARTS device."""
+    global _PIXELDARTS_DEVICE_CACHE
+    if _PIXELDARTS_DEVICE_CACHE is not None:
+        return _PIXELDARTS_DEVICE_CACHE
+    try:
+        output = subprocess.check_output(["lsusb"]).decode("utf-8", errors="ignore")
+    except Exception:
+        _PIXELDARTS_DEVICE_CACHE = False
+        return _PIXELDARTS_DEVICE_CACHE
+    _PIXELDARTS_DEVICE_CACHE = any(
+        "PIXELDARTS" in line.upper() for line in output.splitlines()
+    )
+    return _PIXELDARTS_DEVICE_CACHE
+
+
+def is_pixelboard_device() -> bool:
+    return not is_pixeldart_device()
+
+
+def clear_device_type_cache() -> None:
+    global _PIXELDARTS_DEVICE_CACHE
+    _PIXELDARTS_DEVICE_CACHE = None
 
 
 def resolve_pixeldarts_hardware_version() -> str:

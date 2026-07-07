@@ -6,6 +6,7 @@ import time
 from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
+from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
 import assets
 import runtime.machine_api as machine_api
@@ -210,9 +211,8 @@ class InGameState(BaseState):
         if buttons.get("btn_b"):
             pass  # B in game: only overlay B ends the game
         elif buttons.get("btn_home"):
-            device_info = ctx.get_device_info()
             ctx.trigger_dim_check = True
-            if device_info.get("model") == "PixelBoard":
+            if is_pixelboard_device():
                 ctx.reload_conf = True
                 ctx.transition_to(WidgetState())
             else:

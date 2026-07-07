@@ -1,4 +1,5 @@
 import json
+import logging
 
 from runtime import device_json_identity
 
@@ -41,7 +42,7 @@ def test_verify_overwrites_wrong_model_with_boot(tmp_path, monkeypatch):
     assert data["volume"] == "10"
 
 
-def test_verify_returns_false_when_no_boot_and_missing_model(tmp_path, monkeypatch):
+def test_verify_accepts_serial_only_without_model_error(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "device.json"
     path.write_text(json.dumps({"serial": "S1"}), encoding="utf-8")
@@ -52,9 +53,11 @@ def test_verify_returns_false_when_no_boot_and_missing_model(tmp_path, monkeypat
         lambda: {},
     )
 
-    assert device_json_identity.verify_and_repair_device_json(str(path)) is False
+    with caplog.at_level(logging.ERROR):
+        assert device_json_identity.verify_and_repair_device_json(str(path)) is True
     data = json.loads(path.read_text(encoding="utf-8"))
     assert "model" not in data
+    assert "model" not in caplog.text
 
 
 def test_apply_factory_serial_assigns_unassigned_when_missing(monkeypatch):
