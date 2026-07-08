@@ -4,6 +4,7 @@ import time
 from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
+from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
 from states.settings import should_show_bridge_disconnect_icon
 
@@ -49,8 +50,7 @@ class MenuState(BaseState):
         return "menu"
 
     def update(self, ctx: AppContext) -> None:
-        device_info = ctx.get_device_info()
-        if device_info.get("model") == "PixelBoard":
+        if is_pixelboard_device():
             ctx.reload_conf = True
             ctx.pending_state = "widget"
             return
@@ -131,8 +131,7 @@ class MenuState(BaseState):
             if ctx.menu_select_index > 2:
                 ctx.menu_select_index = 0
         elif buttons.get("btn_home"):
-            device_info = ctx.get_device_info()
-            if device_info.get("model") == "PixelBoard":
+            if is_pixelboard_device():
                 pass  # toggle freeze handled in widget state
             else:
                 # In menu: go to widget if we have pages, else no-op

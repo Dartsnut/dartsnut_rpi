@@ -6,6 +6,7 @@ UV_ENV_SCRIPT="${REPO_DIR}/scripts/uv_env.sh"
 SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
 INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 REPAIR_DEVICE_JSON_SCRIPT="${REPO_DIR}/scripts/repair_device_json.sh"
+KERNEL_ROLLBACK_SCRIPT="${REPO_DIR}/scripts/rollback_rpi_kernel_6_12.sh"
 
 # shellcheck source=scripts/uv_env.sh
 source "${UV_ENV_SCRIPT}"
@@ -192,9 +193,31 @@ fi
 
 echo "== Restart =="
 
+MATRIX_BINARY_CHANGED=0
+before_ref=""
+if before_ref="$(git -C "${REPO_DIR}" rev-parse --verify HEAD@{1} 2>/dev/null)"; then
+    if ! git -C "${REPO_DIR}" diff --quiet "${before_ref}" HEAD -- DartsnutRGBMatrix; then
+        MATRIX_BINARY_CHANGED=1
+    fi
+fi
+
+if [ "${MATRIX_BINARY_CHANGED}" -eq 1 ]; then
+    sudo systemctl restart dartsnut_matrix.service
+    echo "Restarted dartsnut_matrix.service"
+else
+    echo "DartsnutRGBMatrix unchanged, skipping dartsnut_matrix.service restart"
+fi
 sudo systemctl restart dartsnut_python.service
 echo "Restarted dartsnut_python.service"
 sudo systemctl restart dartsnut_mcp.service
 echo "Restarted dartsnut_mcp.service"
 sudo systemctl restart dartsnut_watchdog.service
 echo "Restarted dartsnut_watchdog.service"
+
+echo "== Final kernel compatibility check =="
+
+if [ -x "${KERNEL_ROLLBACK_SCRIPT}" ]; then
+    "${KERNEL_ROLLBACK_SCRIPT}" || exit $?
+else
+    echo "Warning: ${KERNEL_ROLLBACK_SCRIPT} not found or not executable; skipping kernel compatibility check."
+fi

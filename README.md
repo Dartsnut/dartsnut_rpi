@@ -26,7 +26,8 @@ the [Dartsnut docs](https://dartsnut.github.io/docs/).
 - `mcp/` and `mcp_server/` provide the local firmware MCP integration.
 - `assets_media/` stores fonts and images used by the runtime UI.
 - `services/` contains the systemd units and Raspberry Pi service configuration.
-- `scripts/` contains release, dependency, bridge-build, and local test helpers.
+- `scripts/` contains scripts kept on the release branch for device setup,
+  update, and repair operations.
 - `setup.sh`, `update.sh`, `uv`, `uv.lock`, and `system-packages.txt` support
   installation and updates on the device.
 
