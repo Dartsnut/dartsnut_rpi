@@ -191,6 +191,19 @@ else
     echo "Added cron job for automatic git updates"
 fi
 
+if [ "${DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS:-0}" = "1" ]; then
+    echo "Terminal update actions deferred; caller will handle kernel rollback and service restarts."
+    exit 0
+fi
+
+echo "== Final kernel compatibility check =="
+
+if [ -x "${KERNEL_ROLLBACK_SCRIPT}" ]; then
+    "${KERNEL_ROLLBACK_SCRIPT}" || exit $?
+else
+    echo "Warning: ${KERNEL_ROLLBACK_SCRIPT} not found or not executable; skipping kernel compatibility check."
+fi
+
 echo "== Restart =="
 
 MATRIX_BINARY_CHANGED=0
@@ -213,11 +226,3 @@ sudo systemctl restart dartsnut_mcp.service
 echo "Restarted dartsnut_mcp.service"
 sudo systemctl restart dartsnut_watchdog.service
 echo "Restarted dartsnut_watchdog.service"
-
-echo "== Final kernel compatibility check =="
-
-if [ -x "${KERNEL_ROLLBACK_SCRIPT}" ]; then
-    "${KERNEL_ROLLBACK_SCRIPT}" || exit $?
-else
-    echo "Warning: ${KERNEL_ROLLBACK_SCRIPT} not found or not executable; skipping kernel compatibility check."
-fi

@@ -119,3 +119,70 @@ def test_kernel_rollback_installs_versioned_kernel_updates_firmware_files_and_re
         "sync",
         "reboot",
     ]
+
+
+def test_kernel_rollback_can_defer_reboot_after_staging(tmp_path: Path) -> None:
+    boot = tmp_path / "boot"
+    firmware = tmp_path / "firmware"
+    bin_dir = tmp_path / "bin"
+    log = tmp_path / "commands.log"
+    boot.mkdir()
+    firmware.mkdir()
+    bin_dir.mkdir()
+    (boot / "vmlinuz-6.12.47+rpt-rpi-v8").write_text("kernel-6.12", encoding="utf-8")
+    (boot / "initrd.img-6.12.47+rpt-rpi-v8").write_text("initrd-6.12", encoding="utf-8")
+    (firmware / "kernel8.img").write_text("kernel-6.18", encoding="utf-8")
+    (firmware / "initramfs8").write_text("initrd-6.18", encoding="utf-8")
+
+    _write_stub(
+        bin_dir,
+        "apt-get",
+        'printf "apt-get %s\\n" "$*" >> "$DARTSNUT_TEST_LOG"\nexit 0\n',
+    )
+    _write_stub(
+        bin_dir,
+        "apt-cache",
+        'printf "apt-cache %s\\n" "$*" >> "$DARTSNUT_TEST_LOG"\nexit 0\n',
+    )
+    _write_stub(
+        bin_dir,
+        "apt-mark",
+        'printf "apt-mark %s\\n" "$*" >> "$DARTSNUT_TEST_LOG"\nexit 0\n',
+    )
+    _write_stub(
+        bin_dir,
+        "dpkg-query",
+        'printf "install ok installed"\nexit 0\n',
+    )
+    _write_stub(
+        bin_dir,
+        "sync",
+        'printf "sync\\n" >> "$DARTSNUT_TEST_LOG"\nexit 0\n',
+    )
+    _write_stub(
+        bin_dir,
+        "reboot",
+        'printf "reboot\\n" >> "$DARTSNUT_TEST_LOG"\nexit 0\n',
+    )
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "DARTSNUT_TEST_LOG": str(log),
+            "DARTSNUT_KERNEL_ROLLBACK_NO_SUDO": "1",
+            "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT": "1",
+            "DARTSNUT_CURRENT_KERNEL": "6.18.34+rpt-rpi-v8",
+            "DARTSNUT_BOOT_DIR": str(boot),
+            "DARTSNUT_FIRMWARE_DIR": str(firmware),
+        },
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 77
+    assert (firmware / "kernel8.img").read_text(encoding="utf-8") == "kernel-6.12"
+    assert "Kernel rollback staged. Reboot deferred to caller." in result.stdout
+    assert log.read_text(encoding="utf-8").splitlines()[-1] == "sync"
+    assert "reboot" not in log.read_text(encoding="utf-8").splitlines()

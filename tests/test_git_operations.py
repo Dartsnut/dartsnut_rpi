@@ -8,8 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import python_websocket.git_operations as git_operations
 
 
-def _cp(stdout: str = ""):
-    return SimpleNamespace(stdout=stdout)
+def _cp(stdout: str = "", returncode: int = 0):
+    return SimpleNamespace(stdout=stdout, returncode=returncode)
 
 
 def test_get_current_branch_uses_origin_head_when_detached(monkeypatch):
@@ -201,9 +201,149 @@ def test_check_update_release_falls_back_current_version_when_no_tag(monkeypatch
     assert result["needs_update"] is True
 
 
+def test_perform_update_defers_terminal_actions_and_calls_callback_before_restart(monkeypatch):
+    calls = []
+    callback_calls = []
+
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs.get("env")))
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("oldsha\n")
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update(
+        before_terminal_action=lambda: callback_calls.append(len(calls))
+    )
+
+    assert result["action"] == "perform_update"
+    assert callback_calls == [7]
+    assert calls[3][0] == ["git", "rev-parse", "origin/master"]
+    assert calls[4][0] == ["git", "reset", "--hard", "origin/master"]
+    assert calls[5][0] == [
+        "sudo",
+        "env",
+        "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1",
+        "./update.sh",
+    ]
+    assert calls[5][1] is None
+    assert calls[6][0] == [
+        "env",
+        "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
+        "scripts/rollback_rpi_kernel_6_12.sh",
+    ]
+    assert calls[7][0] == ["sudo", "systemctl", "restart", "dartsnut_matrix.service"]
+    assert calls[8][0] == ["sudo", "systemctl", "restart", "dartsnut_mcp.service"]
+    assert calls[9][0] == ["sudo", "systemctl", "restart", "dartsnut_watchdog.service"]
+    assert calls[10][0] == ["sudo", "systemctl", "restart", "dartsnut_python.service"]
+
+
+def test_perform_update_calls_callback_right_before_reboot(monkeypatch):
+    calls = []
+    callback_calls = []
+
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs.get("check")))
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("oldsha\n")
+        if cmd == [
+            "env",
+            "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
+            "scripts/rollback_rpi_kernel_6_12.sh",
+        ]:
+            return _cp("", returncode=git_operations.KERNEL_ROLLBACK_REBOOT_DEFERRED)
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update(
+        before_terminal_action=lambda: callback_calls.append(len(calls))
+    )
+
+    assert result["action"] == "perform_update"
+    assert callback_calls == [7]
+    assert calls[6][0] == [
+        "env",
+        "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
+        "scripts/rollback_rpi_kernel_6_12.sh",
+    ]
+    assert calls[7][0] == ["sudo", "reboot"]
+    assert not any(
+        cmd[:3] == ["sudo", "systemctl", "restart"] for cmd, _check in calls
+    )
+
+
+def test_perform_update_without_callback_uses_direct_update_script(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("oldsha\n")
+        if cmd == ["git", "rev-parse", "origin/master"]:
+            return _cp("newsha\n")
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update()
+
+    assert result["action"] == "perform_update"
+    assert calls == [
+        ["git", "rev-parse", "HEAD"],
+        ["git", "reset", "--hard"],
+        ["git", "fetch", "origin"],
+        ["git", "rev-parse", "origin/master"],
+        ["git", "reset", "--hard", "origin/master"],
+        ["sudo", "./update.sh"],
+    ]
+
+
+def test_perform_update_skips_install_when_already_at_remote_head(monkeypatch):
+    calls = []
+    callback_calls = []
+
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("same-sha\n")
+        if cmd == ["git", "rev-parse", "origin/master"]:
+            return _cp("same-sha\n")
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update(
+        before_terminal_action=lambda: callback_calls.append(len(calls))
+    )
+
+    assert result == {
+        "action": "perform_update",
+        "message": "Already up to date",
+        "updated": False,
+    }
+    assert callback_calls == []
+    assert calls == [
+        ["git", "rev-parse", "HEAD"],
+        ["git", "reset", "--hard"],
+        ["git", "fetch", "origin"],
+        ["git", "rev-parse", "origin/master"],
+    ]
+
+
 def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
     calls = []
     repair_markers = []
+    callback_calls = []
 
     monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
     monkeypatch.setattr(
@@ -218,33 +358,51 @@ def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
     )
 
     def fake_run(cmd, **kwargs):
-        calls.append(cmd)
+        calls.append((cmd, kwargs.get("env")))
         if cmd == ["git", "rev-parse", "HEAD"]:
             return _cp("oldsha\n")
-        if cmd == ["sudo", "./update.sh"] and calls.count(cmd) == 1:
+        if (
+            cmd
+            == ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"]
+            and sum(c[0] == cmd for c in calls) == 1
+        ):
             raise subprocess.CalledProcessError(1, cmd)
         return _cp("")
 
     monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
 
-    result = git_operations.perform_update()
+    result = git_operations.perform_update(
+        before_terminal_action=lambda: callback_calls.append(len(calls))
+    )
 
     assert result["error_code"] == "6004"
+    assert callback_calls == [9]
     assert repair_markers == ["mark", "clear"]
-    assert calls == [
+    assert [cmd for cmd, _env in calls] == [
         ["git", "rev-parse", "HEAD"],
         ["git", "reset", "--hard"],
         ["git", "fetch", "origin"],
+        ["git", "rev-parse", "origin/master"],
         ["git", "reset", "--hard", "origin/master"],
-        ["sudo", "./update.sh"],
+        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
         ["git", "reset", "--hard", "oldsha"],
-        ["sudo", "./update.sh"],
+        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
+        [
+            "env",
+            "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
+            "scripts/rollback_rpi_kernel_6_12.sh",
+        ],
+        ["sudo", "systemctl", "restart", "dartsnut_matrix.service"],
+        ["sudo", "systemctl", "restart", "dartsnut_mcp.service"],
+        ["sudo", "systemctl", "restart", "dartsnut_watchdog.service"],
+        ["sudo", "systemctl", "restart", "dartsnut_python.service"],
     ]
 
 
 def test_perform_update_leaves_pending_repair_when_rollback_update_fails(monkeypatch):
     calls = []
     repair_markers = []
+    callback_calls = []
 
     monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
     monkeypatch.setattr(
@@ -259,25 +417,34 @@ def test_perform_update_leaves_pending_repair_when_rollback_update_fails(monkeyp
     )
 
     def fake_run(cmd, **kwargs):
-        calls.append(cmd)
+        calls.append((cmd, kwargs.get("env")))
         if cmd == ["git", "rev-parse", "HEAD"]:
             return _cp("oldsha\n")
-        if cmd == ["sudo", "./update.sh"]:
+        if cmd == [
+            "sudo",
+            "env",
+            "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1",
+            "./update.sh",
+        ]:
             raise subprocess.CalledProcessError(1, cmd)
         return _cp("")
 
     monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
 
-    result = git_operations.perform_update()
+    result = git_operations.perform_update(
+        before_terminal_action=lambda: callback_calls.append(len(calls))
+    )
 
     assert result["error_code"] == "6005"
+    assert callback_calls == [8]
     assert repair_markers == ["mark"]
-    assert calls == [
+    assert [cmd for cmd, _env in calls] == [
         ["git", "rev-parse", "HEAD"],
         ["git", "reset", "--hard"],
         ["git", "fetch", "origin"],
+        ["git", "rev-parse", "origin/master"],
         ["git", "reset", "--hard", "origin/master"],
-        ["sudo", "./update.sh"],
+        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
         ["git", "reset", "--hard", "oldsha"],
-        ["sudo", "./update.sh"],
+        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
     ]

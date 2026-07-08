@@ -41,10 +41,12 @@ def get_version():
     return gitops.get_version()
 
 
-def perform_update():
+def perform_update(before_terminal_action=None):
     gitops = importlib.import_module("python_websocket.git_operations")
 
-    return gitops.perform_update()
+    if before_terminal_action is None:
+        return gitops.perform_update()
+    return gitops.perform_update(before_terminal_action=before_terminal_action)
 
 
 def build_remote_bluetooth_list():
