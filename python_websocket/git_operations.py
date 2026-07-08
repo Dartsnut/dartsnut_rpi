@@ -10,6 +10,72 @@ from update_repair import clear_update_repair_pending, mark_update_repair_pendin
 
 # Repo root = parent of python_websocket/ so git matches this install, not a hardcoded path.
 GIT_REPO_CWD = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+KERNEL_ROLLBACK_SCRIPT = os.path.join("scripts", "rollback_rpi_kernel_6_12.sh")
+KERNEL_ROLLBACK_REBOOT_DEFERRED = 77
+
+
+def _run_update_script(*, defer_terminal_actions=False):
+    if defer_terminal_actions:
+        cmd = [
+            "sudo",
+            "env",
+            "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1",
+            "./update.sh",
+        ]
+    else:
+        cmd = ["sudo", "./update.sh"]
+    return subprocess.run(cmd, cwd=GIT_REPO_CWD, check=True)
+
+
+def _run_terminal_update_actions(before_terminal_action=None):
+    if before_terminal_action is None:
+        before_terminal_action = lambda: None
+
+    rollback_result = subprocess.run(
+        [
+            "env",
+            "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
+            KERNEL_ROLLBACK_SCRIPT,
+        ],
+        cwd=GIT_REPO_CWD,
+        check=False,
+    )
+    if rollback_result.returncode == KERNEL_ROLLBACK_REBOOT_DEFERRED:
+        before_terminal_action()
+        subprocess.run(["sudo", "reboot"], cwd=GIT_REPO_CWD, check=True)
+        return
+    if rollback_result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            rollback_result.returncode,
+            [KERNEL_ROLLBACK_SCRIPT],
+        )
+
+    before_terminal_action()
+    for service in (
+        "dartsnut_matrix.service",
+        "dartsnut_mcp.service",
+        "dartsnut_watchdog.service",
+        "dartsnut_python.service",
+    ):
+        subprocess.run(
+            ["sudo", "systemctl", "restart", service],
+            cwd=GIT_REPO_CWD,
+            check=True,
+        )
+
+
+def _call_once(callback):
+    called = False
+
+    def _wrapped():
+        nonlocal called
+        if called:
+            return
+        called = True
+        if callback is not None:
+            callback()
+
+    return _wrapped
 
 
 def _get_current_branch():
@@ -181,8 +247,10 @@ def check_update():
         return handle_exception("check_update", e, "Failed to check for updates")
 
 
-def perform_update():
+def perform_update(before_terminal_action=None):
     old_commit = None
+    defer_terminal_actions = before_terminal_action is not None
+    before_terminal = _call_once(before_terminal_action)
 
     try:
         # Save current commit hash
@@ -203,6 +271,19 @@ def perform_update():
         )
         branch = _get_current_branch()
         reset_ref = "origin/release" if branch == "release" else f"origin/{branch}"
+        remote_result = subprocess.run(
+            ["git", "rev-parse", reset_ref],
+            cwd=GIT_REPO_CWD,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        if old_commit == remote_result.stdout.strip():
+            return {
+                "action": "perform_update",
+                "message": "Already up to date",
+                "updated": False,
+            }
         subprocess.run(
             ["git", "reset", "--hard", reset_ref],
             cwd=GIT_REPO_CWD,
@@ -211,9 +292,9 @@ def perform_update():
 
         # Always run update.sh for git-based updates.
         # setup.sh is reserved for first-time machine provisioning.
-        subprocess.run(
-            ["sudo", "./update.sh"], cwd=GIT_REPO_CWD, check=True
-        )
+        _run_update_script(defer_terminal_actions=defer_terminal_actions)
+        if defer_terminal_actions:
+            _run_terminal_update_actions(before_terminal)
 
         # Create flag file to indicate successful update
         flag_path = "/tmp/firmware_updated.flag"
@@ -232,18 +313,17 @@ def perform_update():
                 cwd=GIT_REPO_CWD,
                 check=True,
             )
-            subprocess.run(
-                ["sudo", "./update.sh"],
-                cwd=GIT_REPO_CWD,
-                check=True,
-            )
+            _run_update_script(defer_terminal_actions=defer_terminal_actions)
             clear_update_repair_pending()
+            if defer_terminal_actions:
+                _run_terminal_update_actions(before_terminal)
             return create_error_response(
                 "perform_update",
                 ErrorCode.GIT_UPDATE_FAILED,
                 "Unable to update the system. The system has been restored to the previous version",
             )
         except subprocess.CalledProcessError as rollback_error:
+            before_terminal()
             return create_error_response(
                 "perform_update",
                 ErrorCode.GIT_ROLLBACK_FAILED,

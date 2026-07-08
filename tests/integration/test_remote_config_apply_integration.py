@@ -179,11 +179,60 @@ def test_remote_config_firmware_update_publishes_completion_and_persists(remote_
     apply = remote_config_harness["apply"]
     machine_state = remote_config_harness["machine_state"]
     events = remote_config_harness["events"]
+    call_order = []
+    remote_config_harness["deps"].publish_partial_state = lambda p: call_order.append(
+        ("publish", dict(p))
+    ) or events["published"].append(dict(p))
+
+    def _perform_update(before_terminal_action=None):
+        call_order.append(("perform_update", None))
+        assert not events["published"]
+        before_terminal_action()
+        call_order.append(("terminal", None))
+        return {"error": False}
+
+    remote_config_harness["deps"].perform_update = _perform_update
 
     apply({"firmware": {"update": True}})
 
+    assert call_order[:3] == [
+        ("perform_update", None),
+        ("publish", {"firmware": {"update": False}}),
+        ("terminal", None),
+    ]
     assert {"firmware": {"version": "9.9.9", "update": False}} in events["published"]
     assert machine_state.firmware_info == {"version": "9.9.9", "update": False}
+    assert runtime.firmware_update_in_progress is False
+
+
+@pytest.mark.integration
+def test_remote_config_firmware_update_clears_flag_on_update_failure(remote_config_harness):
+    runtime = remote_config_harness["runtime"]
+    runtime.startup_firmware_version = None
+    apply = remote_config_harness["apply"]
+    machine_state = remote_config_harness["machine_state"]
+    events = remote_config_harness["events"]
+    call_order = []
+    remote_config_harness["deps"].publish_partial_state = lambda p: call_order.append(
+        ("publish", dict(p))
+    ) or events["published"].append(dict(p))
+
+    def _perform_update(before_terminal_action=None):
+        call_order.append(("perform_update", None))
+        assert not events["published"]
+        before_terminal_action()
+        return {"error": True}
+
+    remote_config_harness["deps"].perform_update = _perform_update
+
+    apply({"firmware": {"update": True}})
+
+    assert call_order == [
+        ("perform_update", None),
+        ("publish", {"firmware": {"update": False}}),
+    ]
+    assert {"firmware": {"version": "9.9.9", "update": False}} not in events["published"]
+    assert machine_state.firmware_info == {"version": "", "update": False}
     assert runtime.firmware_update_in_progress is False
 
 

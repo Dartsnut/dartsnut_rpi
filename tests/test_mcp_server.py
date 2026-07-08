@@ -158,7 +158,7 @@ def test_service_install_scripts_reference_mcp_service():
     }
 
 
-def test_kernel_rollback_check_is_final_install_step():
+def test_kernel_rollback_check_order_matches_calling_context():
     setup = open("setup.sh", encoding="utf-8").read().strip()
     update = open("update.sh", encoding="utf-8").read().strip()
 
@@ -171,4 +171,17 @@ else
 fi"""
 
     assert setup.endswith(final_check)
-    assert update.endswith(final_check)
+    assert update.index(final_check) < update.index("restart dartsnut_python.service")
+
+
+def test_update_script_can_defer_terminal_actions_for_python_orchestration():
+    update = open("update.sh", encoding="utf-8").read()
+    defer_block = """if [ "${DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS:-0}" = "1" ]; then
+    echo "Terminal update actions deferred; caller will handle kernel rollback and service restarts."
+    exit 0
+fi"""
+    final_check = 'echo "== Final kernel compatibility check =="'
+
+    assert defer_block in update
+    assert update.index(defer_block) < update.index(final_check)
+    assert update.index(defer_block) < update.index("restart dartsnut_python.service")

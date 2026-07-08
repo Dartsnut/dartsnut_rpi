@@ -372,7 +372,7 @@ class RemoteDeviceConfigDependencies:
     ensure_game_downloaded: Callable[[str, str], bool]
     cancel_game_download: Callable[[str], None]
     local_game_version_matches: Callable[[str, str], bool]
-    perform_update: Callable[[], dict]
+    perform_update: Callable[..., dict]
     get_version: Callable[[], dict]
     is_reset_in_progress: Callable[[], bool]
     on_reset_confirmed: Callable[[], None]
@@ -1165,7 +1165,22 @@ class RemoteDeviceConfigApplier:
             rt.firmware_update_in_progress = True
             _log.info("remote config: firmware update (git) starting")
 
-            update_result = deps.perform_update()
+            def _clear_update_request() -> None:
+                try:
+                    deps.publish_partial_state({"firmware": {"update": False}})
+                except Exception as e:
+                    _log.warning("Error clearing remote firmware update request: %s", e)
+
+                try:
+                    service.set_firmware_info(
+                        str(firmware_cfg.get("version") or ""), False
+                    )
+                except Exception as e:
+                    _log.warning("Error persisting firmware update completion locally: %s", e)
+
+            update_result = deps.perform_update(
+                before_terminal_action=_clear_update_request
+            )
             if isinstance(update_result, dict) and not update_result.get("error"):
                 new_version = "dev"
                 try:

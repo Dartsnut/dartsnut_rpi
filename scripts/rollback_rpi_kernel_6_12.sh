@@ -87,6 +87,11 @@ done
 sync
 
 echo
+if [ "${DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT:-0}" = "1" ]; then
+    echo "Kernel rollback staged. Reboot deferred to caller."
+    exit 77
+fi
+
 echo "Kernel rollback staged. Rebooting now to boot ${TARGET_KERNEL}."
 echo "After reconnecting, verify with:"
 echo "  uname -r"
