@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "release_squash_merge.sh"
+SCRIPT = REPO_ROOT / "dev_scripts" / "release_squash_merge.sh"
 
 
 def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -35,9 +35,9 @@ def test_dry_run_ignores_always_stripped_folders(tmp_path: Path) -> None:
     run_git(repo, "config", "user.email", "test@example.com")
     run_git(repo, "config", "user.name", "Test User")
 
-    scripts_dir = repo / "scripts"
-    scripts_dir.mkdir()
-    shutil.copy2(SCRIPT, scripts_dir / "release_squash_merge.sh")
+    dev_scripts_dir = repo / "dev_scripts"
+    dev_scripts_dir.mkdir()
+    shutil.copy2(SCRIPT, dev_scripts_dir / "release_squash_merge.sh")
     write_file(repo / "README.md")
     commit_all(repo, "initial")
     run_git(repo, "branch", "release")
@@ -46,7 +46,8 @@ def test_dry_run_ignores_always_stripped_folders(tmp_path: Path) -> None:
     for ignored_path in (
         "docs/release.md",
         "openspec/spec.md",
-        "scripts/dev_only.sh",
+        "dev_scripts/dev_only.sh",
+        "scripts/release_helper.sh",
         "supabase/migrations/001.sql",
         "supabase_bridge/src/main.rs",
         "tests/test_release.py",
@@ -56,7 +57,7 @@ def test_dry_run_ignores_always_stripped_folders(tmp_path: Path) -> None:
     commit_all(repo, "add dry-run candidates")
 
     result = subprocess.run(
-        ["bash", "scripts/release_squash_merge.sh", "--dry-run", "v1.2.3"],
+        ["bash", "dev_scripts/release_squash_merge.sh", "--dry-run", "v1.2.3"],
         cwd=repo,
         env={**os.environ, "SKIP_GIT_FETCH": "1"},
         check=True,
@@ -68,7 +69,8 @@ def test_dry_run_ignores_always_stripped_folders(tmp_path: Path) -> None:
     for ignored_path in (
         "docs/release.md",
         "openspec/spec.md",
-        "scripts/dev_only.sh",
+        "dev_scripts/dev_only.sh",
+        "scripts/release_helper.sh",
         "supabase/migrations/001.sql",
         "supabase_bridge/src/main.rs",
         "tests/test_release.py",

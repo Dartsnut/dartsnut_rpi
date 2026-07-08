@@ -5,10 +5,10 @@
 # Pi layout (see setup.sh / update.sh): repo lives at /home/rpi/dartsnut_rpi.
 # Release branch carries only what is needed to run main.py, setup.sh, update.sh,
 # systemd units, assets, Python trees (including core/app_defaults and runtime/sync),
-# vendored ./uv + uv.sha256, pyproject.toml, uv.lock, scripts/uv_env.sh,
+# vendored ./uv + uv.sha256, pyproject.toml, uv.lock, scripts/,
 # system-packages, and the compiled Supabase binaries at ./bridge and
-# ./watchdog (no supabase/, supabase_bridge/, tests/, docs/, or legacy
-# requirements.txt in the release commit).
+# ./watchdog (no dev_scripts/, supabase/, supabase_bridge/, tests/, docs/,
+# or legacy requirements.txt in the release commit).
 #
 # Flow: resolve version -> dry-run report if requested, otherwise bump
 # pyproject.toml and uv.lock on master and commit -> checkout release ->
@@ -16,7 +16,7 @@
 # clear index -> stage allowlist only -> verify -> single commit -> tag vX.Y.Z.
 #
 # Environment:
-#   BUILD_BRIDGE=1        — run scripts/compile_supabase_bridge.sh after squash
+#   BUILD_BRIDGE=1        — run dev_scripts/compile_supabase_bridge.sh after squash
 #                           (default: skip build and reuse existing ./bridge and
 #                           ./watchdog).
 #   DRY_RUN=1             — inspect release inputs without changing branches,
@@ -25,7 +25,7 @@
 #   RELEASE_PUSH=1        — git push origin release and the version tag after commit.
 #
 # Usage:
-#   scripts/release_squash_merge.sh [--dry-run] [vX.Y.Z|X.Y.Z]
+#   dev_scripts/release_squash_merge.sh [--dry-run] [vX.Y.Z|X.Y.Z]
 #
 set -euo pipefail
 
@@ -79,16 +79,15 @@ ALLOWLIST=(
   pyproject.toml
   uv.lock
   system-packages.txt
-  scripts/install_system_packages.sh
-  scripts/uv_env.sh
+  scripts
 )
 
 # Top-level folders intentionally stripped from release commits. Dry-run warnings
 # focus on added files that might belong on the device, so these stay quiet.
 STRIPPED_RELEASE_FOLDERS=(
   docs
+  dev_scripts
   openspec
-  scripts
   supabase
   supabase_bridge
   tests
@@ -109,7 +108,7 @@ fail() {
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  scripts/release_squash_merge.sh [--dry-run] [vX.Y.Z|X.Y.Z]
+  dev_scripts/release_squash_merge.sh [--dry-run] [vX.Y.Z|X.Y.Z]
 
 Environment:
   BUILD_BRIDGE=1    Build bridge before staging release allowlist.
@@ -212,8 +211,8 @@ build_bridge_if_enabled() {
   if [[ ! -d "${REPO_ROOT}/supabase_bridge" ]]; then
     fail "supabase_bridge/ missing in working tree; cannot compile bridge"
   fi
-  log "BUILD_BRIDGE=1: building bridge (scripts/compile_supabase_bridge.sh)"
-  "${REPO_ROOT}/scripts/compile_supabase_bridge.sh"
+  log "BUILD_BRIDGE=1: building bridge (dev_scripts/compile_supabase_bridge.sh)"
+  "${REPO_ROOT}/dev_scripts/compile_supabase_bridge.sh"
 }
 
 require_allowlist_paths_exist() {
@@ -310,16 +309,14 @@ assert_index_excludes_supabase_trees() {
   fi
 }
 
-assert_scripts_allowlist_only() {
-  local extra
-  extra="$(git diff --cached --name-only | awk '
-    /^scripts\// &&
-      $0 != "scripts/install_system_packages.sh" &&
-      $0 != "scripts/uv_env.sh" { print }
+assert_index_excludes_dev_scripts() {
+  local bad
+  bad="$(git diff --cached --name-only | awk '
+    /^dev_scripts\// { print }
   ' || true)"
-  if [[ -n "${extra}" ]]; then
-    printf '%s\n' "${extra}" >&2
-    fail "unexpected scripts/ paths staged (only scripts/install_system_packages.sh and scripts/uv_env.sh allowed)"
+  if [[ -n "${bad}" ]]; then
+    printf '%s\n' "${bad}" >&2
+    fail "staged changes include dev_scripts/ (forbidden)"
   fi
 }
 
@@ -537,7 +534,7 @@ main() {
   stage_allowlist_only
 
   assert_index_excludes_supabase_trees
-  assert_scripts_allowlist_only
+  assert_index_excludes_dev_scripts
   assert_index_excludes_legacy_requirements
   assert_release_imports_resolve
 

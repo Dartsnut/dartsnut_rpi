@@ -5,7 +5,7 @@ This branch uses Supabase for remote sync and disables legacy remote-sync runtim
 ## Local development
 
 ```bash
-./scripts/supabase_bootstrap.sh
+./dev_scripts/supabase_bootstrap.sh
 ```
 
 The script starts local Supabase and applies migrations from `supabase/migrations`.
@@ -65,7 +65,7 @@ through `public.apply_remote_device_patch`.
 Run full local bridge E2E tests (opt-in):
 
 ```bash
-./scripts/supabase_bootstrap.sh
+./dev_scripts/supabase_bootstrap.sh
 cd supabase_bridge && cargo build --release && cp target/release/dartsnut-supabase-bridge ./bridge && chmod +x ./bridge
 cd ..
 RUN_SUPABASE_LOCAL_E2E=1 \
@@ -81,7 +81,7 @@ Python callbacks.
 One-command helper:
 
 ```bash
-SUPABASE_KEY="<supabase-key>" ./scripts/run_local_supabase_e2e.sh
+SUPABASE_KEY="<supabase-key>" ./dev_scripts/run_local_supabase_e2e.sh
 ```
 
 ## Sync architecture (Python-owned)
