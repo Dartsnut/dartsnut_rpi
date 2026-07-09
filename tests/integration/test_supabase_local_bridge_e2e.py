@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import threading
 import time
@@ -54,6 +55,67 @@ def _wait_until(predicate, timeout: float = 20.0, interval: float = 0.2, desc: s
     if last_err:
         raise AssertionError(f"Timed out waiting for {desc}: {last_err}")
     raise AssertionError(f"Timed out waiting for {desc}")
+
+
+def _start_upload_server(file_url: str):
+    upload_seen = threading.Event()
+
+    class UploadHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            upload_seen.set()
+            length = int(self.headers.get("content-length", "0"))
+            if length:
+                self.rfile.read(length)
+            body = json.dumps({"code": 1001, "data": {"file_url": file_url}}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    upload_url = f"http://127.0.0.1:{server.server_port}/v1/mobile/device-log/upload"
+    return server, upload_url, upload_seen
+
+
+def _start_watchdog(
+    watchdog_bin: str,
+    *,
+    base_url: str,
+    api_key: str,
+    device_id: str,
+    upload_url: str,
+    log_dir,
+) -> subprocess.Popen:
+    env = {
+        **os.environ,
+        "SUPABASE_URL": base_url,
+        "SUPABASE_KEY": api_key,
+        "DARTSNUT_SUPABASE_DEVICE_ID": device_id,
+        "DARTSNUT_LOG_UPLOAD_URL": upload_url,
+        "DARTSNUT_WATCHDOG_LOG_DIR": str(log_dir),
+    }
+    return subprocess.Popen(
+        [watchdog_bin],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _stop_proc(proc: subprocess.Popen):
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 @pytest.fixture()
@@ -198,47 +260,16 @@ def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
     }
     row_url = f"{base_url}/rest/v1/remote_device_commands"
     completion_written = threading.Event()
-    upload_seen = threading.Event()
-
-    class UploadHandler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            upload_seen.set()
-            length = int(self.headers.get("content-length", "0"))
-            if length:
-                self.rfile.read(length)
-            body = (
-                b'{"code":1001,"data":{"file_url":'
-                b'"https://oss.example.com/e2e-watchdog.tar.gz"}}'
-            )
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *_args):
-            return
-
-    upload_server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
-    upload_thread = threading.Thread(target=upload_server.serve_forever, daemon=True)
-    upload_thread.start()
-    upload_url = f"http://127.0.0.1:{upload_server.server_port}/v1/mobile/device-log/upload"
-
-    env = {
-        **os.environ,
-        "SUPABASE_URL": base_url,
-        "SUPABASE_KEY": api_key,
-        "DARTSNUT_SUPABASE_DEVICE_ID": device_id,
-        "DARTSNUT_LOG_UPLOAD_URL": upload_url,
-        "DARTSNUT_WATCHDOG_TIMEOUT_SECONDS": "5",
-        "DARTSNUT_WATCHDOG_LOG_DIR": str(tmp_path / "watchdog-logs"),
-    }
-    watchdog_proc = subprocess.Popen(
-        [watchdog_bin],
-        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    upload_server, upload_url, upload_seen = _start_upload_server(
+        "https://oss.example.com/e2e-watchdog.tar.gz"
+    )
+    watchdog_proc = _start_watchdog(
+        watchdog_bin,
+        base_url=base_url,
+        api_key=api_key,
+        device_id=device_id,
+        upload_url=upload_url,
+        log_dir=tmp_path / "watchdog-logs",
     )
 
     try:
@@ -248,6 +279,7 @@ def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
             json={
                 "device_id": device_id,
                 "command": "printf e2e",
+                "command_token": "e2e-token",
                 "last_update_source": "integration_test",
             },
             timeout=15,
@@ -260,7 +292,7 @@ def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
                 headers=headers,
                 params={
                     "device_id": f"eq.{device_id}",
-                    "select": "command,status_code,log_filename,last_update_source",
+                    "select": "command,command_token,running_command_token,status_code,log_filename,last_update_source",
                 },
                 timeout=10,
             )
@@ -272,6 +304,7 @@ def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
             row = rows[0]
             ok = (
                 row.get("command") == ""
+                and row.get("running_command_token") == ""
                 and row.get("status_code") == 0
                 and row.get("log_filename") == "https://oss.example.com/e2e-watchdog.tar.gz"
                 and row.get("last_update_source")
@@ -285,11 +318,343 @@ def test_local_bridge_e2e_task_row_reaches_watchdog_and_is_cleared(
         assert completion_written.is_set()
         assert upload_seen.is_set()
     finally:
-        watchdog_proc.terminate()
-        try:
-            watchdog_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            watchdog_proc.kill()
-            watchdog_proc.wait(timeout=5)
+        _stop_proc(watchdog_proc)
+        upload_server.shutdown()
+        upload_server.server_close()
+
+
+def test_local_bridge_e2e_offline_task_runs_when_watchdog_starts(
+    local_bridge_runtime, tmp_path
+):
+    base_url = local_bridge_runtime["base_url"]
+    api_key = local_bridge_runtime["api_key"]
+    device_id = local_bridge_runtime["device_id"]
+    watchdog_bin = _watchdog_bin()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+    upload_server, upload_url, upload_seen = _start_upload_server(
+        "https://oss.example.com/offline-watchdog.tar.gz"
+    )
+
+    inserted = requests.post(
+        row_url,
+        headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+        json={
+            "device_id": device_id,
+            "command": "printf offline",
+            "command_token": "offline-token",
+            "last_update_source": "integration_test",
+        },
+        timeout=15,
+    )
+    assert inserted.status_code in (200, 201), inserted.text
+
+    watchdog_proc = _start_watchdog(
+        watchdog_bin,
+        base_url=base_url,
+        api_key=api_key,
+        device_id=device_id,
+        upload_url=upload_url,
+        log_dir=tmp_path / "watchdog-logs",
+    )
+
+    try:
+        def _row_cleared() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "command,status_code,log_filename,last_update_source",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200 or not r.json():
+                return False
+            row = r.json()[0]
+            return (
+                row.get("command") == ""
+                and row.get("status_code") == 0
+                and row.get("log_filename") == "https://oss.example.com/offline-watchdog.tar.gz"
+                and row.get("last_update_source") == f"dartsnut_watchdog:{device_id}"
+            )
+
+        _wait_until(_row_cleared, desc="offline task completion")
+        assert upload_seen.is_set()
+    finally:
+        _stop_proc(watchdog_proc)
+        upload_server.shutdown()
+        upload_server.server_close()
+
+
+def test_local_bridge_e2e_claimed_task_is_cleared_after_watchdog_start(
+    local_bridge_runtime, tmp_path
+):
+    base_url = local_bridge_runtime["base_url"]
+    api_key = local_bridge_runtime["api_key"]
+    device_id = local_bridge_runtime["device_id"]
+    watchdog_bin = _watchdog_bin()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+    upload_server, upload_url, upload_seen = _start_upload_server(
+        "https://oss.example.com/claimed-watchdog.tar.gz"
+    )
+
+    inserted = requests.post(
+        row_url,
+        headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+        json={
+            "device_id": device_id,
+            "command": "printf claimed",
+            "command_token": "claimed-token",
+            "running_command_token": "claimed-token",
+            "started_at": "2026-07-08T01:02:03Z",
+            "last_update_source": f"dartsnut_watchdog:{device_id}",
+        },
+        timeout=15,
+    )
+    assert inserted.status_code in (200, 201), inserted.text
+
+    watchdog_proc = _start_watchdog(
+        watchdog_bin,
+        base_url=base_url,
+        api_key=api_key,
+        device_id=device_id,
+        upload_url=upload_url,
+        log_dir=tmp_path / "watchdog-logs",
+    )
+
+    try:
+        def _claimed_cleared() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "command,command_token,running_command_token,status_code,log_filename",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200 or not r.json():
+                return False
+            row = r.json()[0]
+            return (
+                row["command"] == ""
+                and row["command_token"] == "claimed-token"
+                and row["running_command_token"] == ""
+                and row["status_code"] == 130
+                and row["log_filename"] == "https://oss.example.com/claimed-watchdog.tar.gz"
+            )
+
+        _wait_until(_claimed_cleared, desc="claimed command cleanup")
+        assert upload_seen.is_set()
+    finally:
+        _stop_proc(watchdog_proc)
+        upload_server.shutdown()
+        upload_server.server_close()
+
+
+def test_local_bridge_e2e_new_command_replaces_running_command(
+    local_bridge_runtime, tmp_path
+):
+    base_url = local_bridge_runtime["base_url"]
+    api_key = local_bridge_runtime["api_key"]
+    device_id = local_bridge_runtime["device_id"]
+    watchdog_bin = _watchdog_bin()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+    upload_server, upload_url, upload_seen = _start_upload_server(
+        "https://oss.example.com/replaced-watchdog.tar.gz"
+    )
+    watchdog_proc = _start_watchdog(
+        watchdog_bin,
+        base_url=base_url,
+        api_key=api_key,
+        device_id=device_id,
+        upload_url=upload_url,
+        log_dir=tmp_path / "watchdog-logs",
+    )
+
+    try:
+        first = requests.post(
+            row_url,
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            json={
+                "device_id": device_id,
+                "command": "sleep 30",
+                "command_token": "long-token",
+                "last_update_source": "integration_test",
+            },
+            timeout=15,
+        )
+        assert first.status_code in (200, 201), first.text
+
+        def _first_claimed() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "running_command_token",
+                },
+                timeout=10,
+            )
+            return r.status_code == 200 and r.json() and r.json()[0].get("running_command_token") == "long-token"
+
+        _wait_until(_first_claimed, desc="first command claim")
+
+        second = requests.patch(
+            row_url,
+            headers={**headers, "Prefer": "return=representation"},
+            params={"device_id": f"eq.{device_id}"},
+            json={
+                "command": "printf replacement",
+                "command_token": "replacement-token",
+                "last_update_source": "integration_test",
+            },
+            timeout=15,
+        )
+        assert second.status_code in (200, 204), second.text
+
+        def _replacement_done() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "command,command_token,running_command_token,status_code,log_filename",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200 or not r.json():
+                return False
+            row = r.json()[0]
+            return (
+                row.get("command") == ""
+                and row.get("command_token") == "replacement-token"
+                and row.get("running_command_token") == ""
+                and row.get("status_code") == 0
+                and row.get("log_filename") == "https://oss.example.com/replaced-watchdog.tar.gz"
+            )
+
+        _wait_until(_replacement_done, desc="replacement command completion")
+        assert upload_seen.is_set()
+    finally:
+        _stop_proc(watchdog_proc)
+        upload_server.shutdown()
+        upload_server.server_close()
+
+
+def test_local_bridge_e2e_stop_requested_at_stops_running_command(
+    local_bridge_runtime, tmp_path
+):
+    base_url = local_bridge_runtime["base_url"]
+    api_key = local_bridge_runtime["api_key"]
+    device_id = local_bridge_runtime["device_id"]
+    watchdog_bin = _watchdog_bin()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    row_url = f"{base_url}/rest/v1/remote_device_commands"
+    upload_server, upload_url, upload_seen = _start_upload_server(
+        "https://oss.example.com/stopped-watchdog.tar.gz"
+    )
+    watchdog_proc = _start_watchdog(
+        watchdog_bin,
+        base_url=base_url,
+        api_key=api_key,
+        device_id=device_id,
+        upload_url=upload_url,
+        log_dir=tmp_path / "watchdog-logs",
+    )
+
+    try:
+        inserted = requests.post(
+            row_url,
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            json={
+                "device_id": device_id,
+                "command": "sleep 30",
+                "command_token": "stop-token",
+                "last_update_source": "integration_test",
+            },
+            timeout=15,
+        )
+        assert inserted.status_code in (200, 201), inserted.text
+
+        def _claimed_started_at():
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "running_command_token,started_at",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200 or not r.json():
+                return None
+            row = r.json()[0]
+            if row.get("running_command_token") == "stop-token" and row.get("started_at"):
+                return row["started_at"]
+            return None
+
+        started = {"value": None}
+
+        def _capture_started() -> bool:
+            started["value"] = _claimed_started_at()
+            return bool(started["value"])
+
+        _wait_until(_capture_started, desc="stop command claim")
+        stopped = requests.patch(
+            row_url,
+            headers={**headers, "Prefer": "return=representation"},
+            params={"device_id": f"eq.{device_id}"},
+            json={
+                "stop_requested_at": "2999-01-01T00:00:00Z",
+                "last_update_source": "integration_test",
+            },
+            timeout=15,
+        )
+        assert stopped.status_code in (200, 204), stopped.text
+
+        def _stopped_done() -> bool:
+            r = requests.get(
+                row_url,
+                headers=headers,
+                params={
+                    "device_id": f"eq.{device_id}",
+                    "select": "command,running_command_token,status_code,log_filename",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200 or not r.json():
+                return False
+            row = r.json()[0]
+            return (
+                row.get("command") == ""
+                and row.get("running_command_token") == ""
+                and row.get("status_code") == 130
+                and row.get("log_filename") == "https://oss.example.com/stopped-watchdog.tar.gz"
+            )
+
+        _wait_until(_stopped_done, desc="stopped command completion")
+        assert upload_seen.is_set()
+    finally:
+        _stop_proc(watchdog_proc)
         upload_server.shutdown()
         upload_server.server_close()

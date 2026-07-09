@@ -120,6 +120,17 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 - All v2 patch RPCs (socket thread and idle probe) share one mutex so concurrent writes cannot race.
 - Read-only `remote_devices` GET (row existence during initial connect) does not update latency.
 
+## Watchdog command control
+
+- The `remote_device_commands` row is a latest-wins command slot for shell commands.
+- App-issued commands should set `command`, a unique `command_token`, and `last_update_source`.
+- The watchdog fetches the current command row after each Realtime reconnect before waiting for events, so commands written while the device was offline run after the device comes back online.
+- Before executing a command, the watchdog claims it with `running_command_token = command_token` and `started_at`. Claimed commands are not rerun after watchdog reboot or crash; if no local process owns the claim, the watchdog clears it with status `130`.
+- Legacy rows without `command_token` use the pre-claim `updated_at` value as a fallback token; the watchdog writes that fallback into `command_token` during claim.
+- Shell execution has no watchdog timeout. Setting `stop_requested_at` later than `started_at` stops the current process group and records status `130`.
+- A newer command with a different token stops the running process group, records the stopped command log, then claims and runs the new command.
+- Completion clears `command` and `running_command_token`, writes `status_code` and `log_filename`, and sets `last_update_source = dartsnut_watchdog:<device_id>`.
+
 ## Device ID behavior
 
 - Supabase bridge resolves `device_id` from BLE adapter MAC in Rust.

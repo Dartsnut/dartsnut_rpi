@@ -41,7 +41,6 @@ Do not commit real credential values into source files or documentation.
 - `DARTSNUT_SUPABASE_SOCKET` (optional; overrides socket path)
 - `DARTSNUT_SUPABASE_DEVICE_ID` (optional; override `device_id` when BLE MAC is unavailable)
 - `DARTSNUT_LOG_UPLOAD_URL` (optional; watchdog upload endpoint)
-- `DARTSNUT_WATCHDOG_TIMEOUT_SECONDS` (optional; watchdog task timeout, default `20`)
 - `DARTSNUT_WATCHDOG_LOG_DIR` (optional; watchdog archive directory)
 
 ## Device ID source
@@ -58,10 +57,13 @@ Do not commit real credential values into source files or documentation.
 
 ## Watchdog Tasks
 
-- `dartsnut-watchdog` subscribes to the task queue table.
-- Tasks time out after 20 seconds by default and return status `124`.
+- `dartsnut-watchdog` subscribes to `remote_device_commands` and also fetches the current row on every Realtime reconnect, so commands written while the device was offline are picked up when connectivity returns.
+- New tasks should set `command`, a unique `command_token`, and `last_update_source`.
+- Before shell execution starts, the watchdog claims the row by setting `running_command_token = command_token` and `started_at`. Claimed rows are not rerun after watchdog restart; if no local process owns the claim, the watchdog clears it with status `130`.
+- Shell commands have no watchdog timeout. Set `stop_requested_at = now()` to stop the current process group; stopped commands return status `130`.
+- A new command with a different `command_token` stops the running command, then runs the new command.
 - Logs are written as `.tar.gz`, uploaded to the device-log API, and the returned `file_url` is saved.
-- Completion clears the pending task and sets `last_update_source = dartsnut_watchdog:<device_id>`.
+- Completion clears `command` and `running_command_token`, stores `status_code` / `log_filename`, and sets `last_update_source = dartsnut_watchdog:<device_id>`.
 
 ## Notes
 
