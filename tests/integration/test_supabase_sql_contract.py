@@ -290,6 +290,10 @@ def test_remote_device_commands_table_contract():
     row = inserted.json()[0]
     assert row["device_id"] == device_id
     assert row["command"] == ""
+    assert row["command_token"] == ""
+    assert row["running_command_token"] == ""
+    assert row["started_at"] is None
+    assert row["stop_requested_at"] is None
     assert row["status_code"] is None
     assert row["log_filename"] == ""
     assert row["last_update_source"] == ""
@@ -301,6 +305,8 @@ def test_remote_device_commands_table_contract():
         params={"device_id": f"eq.{device_id}"},
         json={
             "command": "ls",
+            "command_token": "cmd-token-1",
+            "stop_requested_at": "2026-07-08T01:02:03Z",
             "last_update_source": "integration_test",
         },
         timeout=15,
@@ -312,7 +318,7 @@ def test_remote_device_commands_table_contract():
         headers=headers,
         params={
             "device_id": f"eq.{device_id}",
-            "select": "command,status_code,log_filename,last_update_source,updated_at",
+            "select": "command,command_token,running_command_token,started_at,stop_requested_at,status_code,log_filename,last_update_source,updated_at",
         },
         timeout=15,
     )
@@ -320,4 +326,8 @@ def test_remote_device_commands_table_contract():
     rows = query.json()
     assert len(rows) == 1
     assert rows[0]["command"] == "ls"
+    assert rows[0]["command_token"] == "cmd-token-1"
+    assert rows[0]["running_command_token"] == ""
+    assert rows[0]["started_at"] is None
+    assert rows[0]["stop_requested_at"].startswith("2026-07-08T01:02:03")
     assert rows[0]["last_update_source"] == "integration_test"

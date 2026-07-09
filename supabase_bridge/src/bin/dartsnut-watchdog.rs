@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use reqwest::blocking::{multipart, Client};
@@ -11,8 +11,9 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tar::Builder;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Message};
@@ -21,9 +22,8 @@ use url::Url;
 const EMBEDDED_SUPABASE_URL: Option<&str> = option_env!("DARTSNUT_EMBEDDED_SUPABASE_URL");
 const EMBEDDED_SUPABASE_KEY: Option<&str> = option_env!("DARTSNUT_EMBEDDED_SUPABASE_KEY");
 const DEFAULT_UPLOAD_URL: &str = "https://api.dartsnut.com/v1/mobile/device-log/upload";
-const DEFAULT_TIMEOUT_SECONDS: u64 = 20;
 const DEFAULT_LOG_DIR: &str = "logs/supabase_watchdog";
-const TIMEOUT_STATUS_CODE: i32 = 124;
+const STOPPED_STATUS_CODE: i32 = 130;
 
 #[derive(Clone, Debug)]
 struct SupabaseConfig {
@@ -32,20 +32,20 @@ struct SupabaseConfig {
     device_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct WorkerConfig {
     supabase: SupabaseConfig,
     upload_url: String,
-    timeout: Duration,
     log_dir: PathBuf,
     repo_root: PathBuf,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct WatchdogTask {
     command_id: String,
     device_id: String,
     command: String,
+    command_token: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,9 +54,27 @@ struct WatchdogResult {
     status_code: i32,
     stdout: String,
     stderr: String,
-    timed_out: bool,
+    stopped: bool,
     started_at: String,
     finished_at: String,
+}
+
+#[derive(Clone, Debug)]
+enum WorkerMessage {
+    Record(Value),
+}
+
+#[derive(Debug)]
+enum TaskInterrupt {
+    Stop,
+}
+
+#[derive(Debug)]
+struct RunningTask {
+    task: WatchdogTask,
+    started_at: String,
+    stop_tx: mpsc::Sender<TaskInterrupt>,
+    result_rx: mpsc::Receiver<WatchdogResult>,
 }
 
 #[derive(Debug)]
@@ -113,11 +131,6 @@ fn load_supabase_config() -> Result<SupabaseConfig> {
 }
 
 fn load_worker_config() -> Result<WorkerConfig> {
-    let timeout_secs = env::var("DARTSNUT_WATCHDOG_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(DEFAULT_TIMEOUT_SECONDS);
     let repo_root = env::current_dir().context("failed to resolve current directory")?;
     Ok(WorkerConfig {
         supabase: load_supabase_config()?,
@@ -125,7 +138,6 @@ fn load_worker_config() -> Result<WorkerConfig> {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_UPLOAD_URL.to_string()),
-        timeout: Duration::from_secs(timeout_secs),
         log_dir: env::var("DARTSNUT_WATCHDOG_LOG_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_LOG_DIR)),
@@ -210,21 +222,85 @@ fn watchdog_row_url(cfg: &SupabaseConfig) -> Result<Url> {
     Ok(url)
 }
 
-fn watchdog_completion_patch(device_id: &str, status_code: i32, log_filename: &str) -> Value {
+fn watchdog_claim_patch(device_id: &str, command_token: &str, started_at: &str) -> Value {
+    json!({
+        "command_token": command_token,
+        "running_command_token": command_token,
+        "started_at": started_at,
+        "stop_requested_at": Value::Null,
+        "last_update_source": watchdog_source(device_id),
+    })
+}
+
+fn watchdog_completion_patch(
+    device_id: &str,
+    _command_token: &str,
+    status_code: i32,
+    log_filename: &str,
+) -> Value {
     json!({
         "command": "",
+        "running_command_token": "",
+        "stop_requested_at": Value::Null,
         "status_code": status_code,
         "log_filename": log_filename,
         "last_update_source": watchdog_source(device_id),
     })
 }
 
-fn update_watchdog_completion(
+fn update_watchdog_claim(
     client: &Client,
     cfg: &SupabaseConfig,
+    task: &WatchdogTask,
+    started_at: &str,
+) -> Result<()> {
+    client
+        .patch(watchdog_row_url(cfg)?)
+        .header("apikey", &cfg.key)
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .header("Content-Type", "application/json")
+        .header("Prefer", "return=minimal")
+        .json(&watchdog_claim_patch(
+            &cfg.device_id,
+            &task.command_token,
+            started_at,
+        ))
+        .send()?
+        .error_for_status()?;
+    Ok(())
+}
+
+fn update_watchdog_completion_guarded(
+    client: &Client,
+    cfg: &SupabaseConfig,
+    task: &WatchdogTask,
     status_code: i32,
     log_filename: &str,
 ) -> Result<()> {
+    let Some(record) = fetch_current_watchdog_record(client, cfg)? else {
+        return Ok(());
+    };
+    let running_token = record
+        .get("running_command_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let current_command_token = record
+        .get("command_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let current_command = record
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if running_token != task.command_token
+        || current_command_token != task.command_token
+        || current_command != task.command
+    {
+        return Ok(());
+    }
     client
         .patch(watchdog_row_url(cfg)?)
         .header("apikey", &cfg.key)
@@ -233,6 +309,7 @@ fn update_watchdog_completion(
         .header("Prefer", "return=minimal")
         .json(&watchdog_completion_patch(
             &cfg.device_id,
+            &task.command_token,
             status_code,
             log_filename,
         ))
@@ -278,34 +355,80 @@ fn extract_record_from_payload(payload: &Value) -> Option<&Value> {
         .or_else(|| payload.get("data").and_then(|d| d.get("new")))
 }
 
-fn build_watchdog_task(record: &Value) -> Option<WatchdogTask> {
-    let command = record.get("command").and_then(|v| v.as_str())?.trim();
-    if command.is_empty() {
-        return None;
-    }
-    let device_id = record
-        .get("device_id")
+fn record_text<'a>(record: &'a Value, key: &str) -> &'a str {
+    record
+        .get(key)
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
-        .to_string();
-    let updated_at = record
-        .get("updated_at")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    let command_id = if !device_id.is_empty() && !updated_at.is_empty() {
-        format!("{device_id}:{updated_at}")
+}
+
+fn build_watchdog_task(record: &Value) -> Option<WatchdogTask> {
+    let command = record_text(record, "command");
+    if command.is_empty() {
+        return None;
+    }
+    let device_id = record_text(record, "device_id").to_string();
+    let explicit_token = record_text(record, "command_token");
+    let updated_at = record_text(record, "updated_at");
+    let command_token = if !explicit_token.is_empty() {
+        explicit_token
     } else if !updated_at.is_empty() {
-        updated_at.to_string()
+        updated_at
     } else {
-        command.to_string()
+        command
+    };
+    if record_text(record, "running_command_token") == command_token {
+        return None;
+    }
+    let command_id = if !device_id.is_empty() {
+        format!("{device_id}:{command_token}")
+    } else {
+        command_token.to_string()
     };
     Some(WatchdogTask {
         command_id,
         device_id,
         command: command.to_string(),
+        command_token: command_token.to_string(),
     })
+}
+
+fn build_claimed_watchdog_task(record: &Value) -> Option<WatchdogTask> {
+    let command = record_text(record, "command");
+    if command.is_empty() {
+        return None;
+    }
+    let running_token = record_text(record, "running_command_token");
+    if running_token.is_empty() {
+        return None;
+    }
+    let device_id = record_text(record, "device_id").to_string();
+    let command_id = if !device_id.is_empty() {
+        format!("{device_id}:{running_token}")
+    } else {
+        running_token.to_string()
+    };
+    Some(WatchdogTask {
+        command_id,
+        device_id,
+        command: command.to_string(),
+        command_token: running_token.to_string(),
+    })
+}
+
+fn record_requests_stop(record: &Value, active_started_at: &str) -> bool {
+    let stop_requested_at = record_text(record, "stop_requested_at");
+    if stop_requested_at.is_empty() || active_started_at.trim().is_empty() {
+        return false;
+    }
+    let Ok(stop_at) = DateTime::parse_from_rfc3339(stop_requested_at) else {
+        return false;
+    };
+    let Ok(started_at) = DateTime::parse_from_rfc3339(active_started_at) else {
+        return false;
+    };
+    stop_at > started_at
 }
 
 fn prepare_shell_task(command: &str, euid: u32) -> String {
@@ -344,7 +467,11 @@ fn read_pipe_to_string<R: Read + Send + 'static>(mut reader: R) -> thread::JoinH
     })
 }
 
-fn execute_task(command: &str, cwd: &Path, timeout: Duration) -> Result<WatchdogResult> {
+fn execute_task_until_stopped(
+    command: &str,
+    cwd: &Path,
+    stop_rx: &mpsc::Receiver<TaskInterrupt>,
+) -> Result<WatchdogResult> {
     let started_at = utc_now_iso();
     let shell_command = prepare_shell_task(command, current_euid());
     let mut child = unsafe {
@@ -362,21 +489,23 @@ fn execute_task(command: &str, cwd: &Path, timeout: Duration) -> Result<Watchdog
 
     let stdout_thread = child.stdout.take().map(read_pipe_to_string);
     let stderr_thread = child.stderr.take().map(read_pipe_to_string);
-    let deadline = Instant::now() + timeout;
-    let mut timed_out = false;
+    let mut stopped = false;
     let status_code;
     loop {
         if let Some(status) = child.try_wait()? {
             status_code = status.code().unwrap_or(1);
             break;
         }
-        if Instant::now() >= deadline {
-            timed_out = true;
-            kill_process_group(child.id());
-            let _ = child.kill();
-            let _ = child.wait();
-            status_code = TIMEOUT_STATUS_CODE;
-            break;
+        match stop_rx.try_recv() {
+            Ok(TaskInterrupt::Stop) | Err(mpsc::TryRecvError::Disconnected) => {
+                stopped = true;
+                kill_process_group(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                status_code = STOPPED_STATUS_CODE;
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -393,10 +522,202 @@ fn execute_task(command: &str, cwd: &Path, timeout: Duration) -> Result<Watchdog
         status_code,
         stdout,
         stderr,
-        timed_out,
+        stopped,
         started_at,
         finished_at: utc_now_iso(),
     })
+}
+
+fn spawn_task_executor(
+    task: WatchdogTask,
+    cwd: PathBuf,
+) -> (mpsc::Sender<TaskInterrupt>, mpsc::Receiver<WatchdogResult>) {
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = match execute_task_until_stopped(&task.command, &cwd, &stop_rx) {
+            Ok(v) => v,
+            Err(e) => WatchdogResult {
+                command: task.command.clone(),
+                status_code: 1,
+                stdout: String::new(),
+                stderr: e.to_string(),
+                stopped: false,
+                started_at: utc_now_iso(),
+                finished_at: utc_now_iso(),
+            },
+        };
+        let _ = result_tx.send(result);
+    });
+    (stop_tx, result_rx)
+}
+
+fn fetch_current_watchdog_record(client: &Client, cfg: &SupabaseConfig) -> Result<Option<Value>> {
+    let mut url = watchdog_row_url(cfg)?;
+    url.query_pairs_mut().append_pair(
+        "select",
+        "device_id,command,command_token,running_command_token,started_at,stop_requested_at,updated_at,last_update_source",
+    );
+    let rows: Vec<Value> = client
+        .get(url)
+        .header("apikey", &cfg.key)
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .send()?
+        .error_for_status()?
+        .json()?;
+    Ok(rows.into_iter().next())
+}
+
+fn start_task(client: &Client, cfg: &WorkerConfig, task: WatchdogTask) -> Option<RunningTask> {
+    let started_at = utc_now_iso();
+    if let Err(e) = update_watchdog_claim(client, &cfg.supabase, &task, &started_at) {
+        eprintln!("watchdog: task claim failed: {e}");
+        return None;
+    }
+    let (stop_tx, result_rx) = spawn_task_executor(task.clone(), cfg.repo_root.clone());
+    Some(RunningTask {
+        task,
+        started_at,
+        stop_tx,
+        result_rx,
+    })
+}
+
+fn upload_result_log(
+    client: &Client,
+    cfg: &WorkerConfig,
+    task: &WatchdogTask,
+    result: &WatchdogResult,
+) -> String {
+    let archive = match write_log_archive(result, &cfg.log_dir, &task.command_id, &task.device_id) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("watchdog: failed to write log archive: {e}");
+            return String::new();
+        }
+    };
+    let fallback = archive
+        .path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or(&archive.log_name)
+        .to_string();
+    let log_id = log_id_for_archive(&archive.path);
+    match upload_archive(
+        client,
+        &archive.path,
+        &cfg.upload_url,
+        &log_id,
+        &task.device_id,
+        &task.command_id,
+    ) {
+        Ok(file_url) if !file_url.is_empty() => file_url,
+        Ok(_) => fallback,
+        Err(e) => {
+            eprintln!("watchdog: log upload failed: {e}");
+            fallback
+        }
+    }
+}
+
+fn finish_task(client: &Client, cfg: &WorkerConfig, running: RunningTask, result: WatchdogResult) {
+    let status_code = result.status_code;
+    let log_filename = upload_result_log(client, cfg, &running.task, &result);
+    if let Err(e) = update_watchdog_completion_guarded(
+        client,
+        &cfg.supabase,
+        &running.task,
+        status_code,
+        &log_filename,
+    ) {
+        eprintln!("watchdog: task completion update failed: {e}");
+    }
+}
+
+fn clear_abandoned_claim(client: &Client, cfg: &WorkerConfig, task: WatchdogTask) {
+    let now = utc_now_iso();
+    let result = WatchdogResult {
+        command: task.command.clone(),
+        status_code: STOPPED_STATUS_CODE,
+        stdout: String::new(),
+        stderr: "watchdog restarted while command was already claimed; command not rerun"
+            .to_string(),
+        stopped: true,
+        started_at: now.clone(),
+        finished_at: now,
+    };
+    let running = RunningTask {
+        task,
+        started_at: result.started_at.clone(),
+        stop_tx: mpsc::channel().0,
+        result_rx: mpsc::channel().1,
+    };
+    finish_task(client, cfg, running, result);
+}
+
+fn process_worker_message(
+    client: &Client,
+    cfg: &WorkerConfig,
+    message: WorkerMessage,
+    running: &mut Option<RunningTask>,
+    pending: &mut Option<WatchdogTask>,
+) {
+    let WorkerMessage::Record(record) = message;
+    let source = record_text(&record, "last_update_source");
+    if running.is_none() && pending.is_none() {
+        if let Some(task) = build_claimed_watchdog_task(&record) {
+            clear_abandoned_claim(client, cfg, task);
+            return;
+        }
+    }
+    if should_filter_watchdog_echo(source, &cfg.supabase.device_id) {
+        return;
+    }
+    if let Some(current) = running.as_ref() {
+        if record_requests_stop(&record, &current.started_at) {
+            let _ = current.stop_tx.send(TaskInterrupt::Stop);
+            return;
+        }
+    }
+    let Some(task) = build_watchdog_task(&record) else {
+        return;
+    };
+    if let Some(current) = running.as_ref() {
+        if current.task.command_token != task.command_token {
+            let _ = current.stop_tx.send(TaskInterrupt::Stop);
+            *pending = Some(task);
+        }
+        return;
+    }
+    *running = start_task(client, cfg, task);
+}
+
+fn run_task_worker(rx: mpsc::Receiver<WorkerMessage>, client: Client, cfg: WorkerConfig) {
+    let mut running: Option<RunningTask> = None;
+    let mut pending: Option<WatchdogTask> = None;
+    loop {
+        if let Some(current) = running.take() {
+            match current.result_rx.try_recv() {
+                Ok(result) => {
+                    finish_task(&client, &cfg, current, result);
+                    if let Some(task) = pending.take() {
+                        running = start_task(&client, &cfg, task);
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    running = Some(current);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+        match rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(message) => {
+                process_worker_message(&client, &cfg, message, &mut running, &mut pending);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
 }
 
 fn safe_name(value: &str) -> String {
@@ -434,7 +755,7 @@ fn write_log_archive(
         "command_id": command_id,
         "command": result.command,
         "status_code": result.status_code,
-        "timed_out": result.timed_out,
+        "stopped": result.stopped,
         "started_at": result.started_at,
         "finished_at": result.finished_at,
     });
@@ -535,82 +856,17 @@ fn upload_archive(
     parse_upload_file_url(&text)
 }
 
-fn handle_task(client: &Client, cfg: &WorkerConfig, request: WatchdogTask) -> (i32, String) {
-    let result = match execute_task(&request.command, &cfg.repo_root, cfg.timeout) {
-        Ok(v) => v,
-        Err(e) => WatchdogResult {
-            command: request.command.clone(),
-            status_code: 1,
-            stdout: String::new(),
-            stderr: e.to_string(),
-            timed_out: false,
-            started_at: utc_now_iso(),
-            finished_at: utc_now_iso(),
-        },
-    };
-    let status_code = result.status_code;
-    let archive = match write_log_archive(
-        &result,
-        &cfg.log_dir,
-        &request.command_id,
-        &request.device_id,
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("watchdog: failed to write log archive: {e}");
-            return (status_code, String::new());
-        }
-    };
-    let fallback = archive
-        .path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or(&archive.log_name)
-        .to_string();
-    let log_id = log_id_for_archive(&archive.path);
-    let log_reference = match upload_archive(
-        client,
-        &archive.path,
-        &cfg.upload_url,
-        &log_id,
-        &request.device_id,
-        &request.command_id,
-    ) {
-        Ok(file_url) if !file_url.is_empty() => file_url,
-        Ok(_) => fallback,
-        Err(e) => {
-            eprintln!("watchdog: log upload failed: {e}");
-            fallback
-        }
-    };
-    (status_code, log_reference)
-}
-
-fn handle_realtime_record(client: &Client, worker_cfg: &WorkerConfig, record: &Value) {
-    let source = record
-        .get("last_update_source")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if should_filter_watchdog_echo(source, &worker_cfg.supabase.device_id) {
-        return;
-    }
-    let Some(request) = build_watchdog_task(record) else {
-        return;
-    };
-    let (status_code, log_filename) = handle_task(client, worker_cfg, request);
-    if let Err(e) =
-        update_watchdog_completion(client, &worker_cfg.supabase, status_code, &log_filename)
-    {
-        eprintln!("watchdog: task completion update failed: {e}");
-    }
-}
-
 fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to build http client")?;
     let ws_url = build_realtime_ws_url(&worker_cfg.supabase)?;
+    let (worker_tx, worker_rx) = mpsc::channel();
+    let worker_client = client.clone();
+    let worker_cfg = worker_cfg;
+    let worker_loop_cfg = worker_cfg.clone();
+    thread::spawn(move || run_task_worker(worker_rx, worker_client, worker_loop_cfg));
     let mut backoff_seconds = 1u64;
     loop {
         let (mut socket, _) = match connect(ws_url.as_str()) {
@@ -623,6 +879,13 @@ fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
             }
         };
         backoff_seconds = 1;
+        match fetch_current_watchdog_record(&client, &worker_cfg.supabase) {
+            Ok(Some(record)) => {
+                let _ = worker_tx.send(WorkerMessage::Record(record));
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("watchdog: current row fetch failed: {e}"),
+        }
         set_ws_read_timeout(&mut socket, Some(Duration::from_secs(10)));
         let topic = "realtime:public:dartsnut_watchdog";
         let join_payload = json!({
@@ -669,7 +932,7 @@ fn run_realtime_loop(worker_cfg: WorkerConfig) -> Result<()> {
                         continue;
                     };
                     if let Some(record) = extract_record_from_payload(payload) {
-                        handle_realtime_record(&client, &worker_cfg, record);
+                        let _ = worker_tx.send(WorkerMessage::Record(record.clone()));
                     }
                 }
                 Ok(_) => {}
@@ -752,6 +1015,7 @@ mod tests {
     fn watchdog_completion_patch_shape_stores_file_url() {
         let patch = watchdog_completion_patch(
             "AA:BB:CC:DD:EE:FF",
+            "cmd-token-1",
             0,
             "https://oss.example.com/device.log.gz",
         );
@@ -759,6 +1023,8 @@ mod tests {
             patch,
             json!({
                 "command": "",
+                "running_command_token": "",
+                "stop_requested_at": Value::Null,
                 "status_code": 0,
                 "log_filename": "https://oss.example.com/device.log.gz",
                 "last_update_source": "dartsnut_watchdog:AA:BB:CC:DD:EE:FF"
@@ -767,16 +1033,96 @@ mod tests {
     }
 
     #[test]
-    fn watchdog_task_requires_non_empty_payload() {
+    fn watchdog_claim_patch_marks_running_token() {
+        let patch =
+            watchdog_claim_patch("AA:BB:CC:DD:EE:FF", "cmd-token-1", "2026-07-08T01:02:03Z");
+        assert_eq!(
+            patch,
+            json!({
+                "running_command_token": "cmd-token-1",
+                "command_token": "cmd-token-1",
+                "started_at": "2026-07-08T01:02:03Z",
+                "stop_requested_at": Value::Null,
+                "last_update_source": "dartsnut_watchdog:AA:BB:CC:DD:EE:FF"
+            })
+        );
+    }
+
+    #[test]
+    fn watchdog_task_requires_non_empty_payload_and_uses_token() {
         let record = json!({
             "device_id": "AA:BB:CC:DD:EE:FF",
             "command": "  ls  ",
+            "command_token": "cmd-token-1",
             "updated_at": "2026-07-02T00:00:00Z"
         });
         let request = build_watchdog_task(&record).expect("request");
         assert_eq!(request.command, "ls");
-        assert_eq!(request.command_id, "AA:BB:CC:DD:EE:FF:2026-07-02T00:00:00Z");
+        assert_eq!(request.command_token, "cmd-token-1");
+        assert_eq!(request.command_id, "AA:BB:CC:DD:EE:FF:cmd-token-1");
         assert!(build_watchdog_task(&json!({"command": "   "})).is_none());
+    }
+
+    #[test]
+    fn watchdog_task_uses_updated_at_fallback_token_for_legacy_rows() {
+        let record = json!({
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "command": "printf legacy",
+            "command_token": "",
+            "updated_at": "2026-07-02T00:00:00Z"
+        });
+        let request = build_watchdog_task(&record).expect("request");
+        assert_eq!(request.command_token, "2026-07-02T00:00:00Z");
+    }
+
+    #[test]
+    fn watchdog_task_skips_already_claimed_rows() {
+        let record = json!({
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "command": "printf old",
+            "command_token": "cmd-token-1",
+            "running_command_token": "cmd-token-1",
+            "updated_at": "2026-07-02T00:00:00Z"
+        });
+        assert!(build_watchdog_task(&record).is_none());
+    }
+
+    #[test]
+    fn claimed_watchdog_task_can_be_cleared_without_rerun() {
+        let record = json!({
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "command": "printf old",
+            "command_token": "cmd-token-1",
+            "running_command_token": "cmd-token-1",
+            "updated_at": "2026-07-02T00:00:00Z"
+        });
+        let request = build_claimed_watchdog_task(&record).expect("request");
+        assert_eq!(request.command, "printf old");
+        assert_eq!(request.command_token, "cmd-token-1");
+        assert_eq!(request.command_id, "AA:BB:CC:DD:EE:FF:cmd-token-1");
+    }
+
+    #[test]
+    fn stop_request_applies_only_after_started_at() {
+        let record = json!({
+            "device_id": "AA:BB:CC:DD:EE:FF",
+            "stop_requested_at": "2026-07-08T01:02:04Z"
+        });
+        assert!(record_requests_stop(&record, "2026-07-08T01:02:03Z"));
+        assert!(!record_requests_stop(&record, "2026-07-08T01:02:05Z"));
+    }
+
+    #[test]
+    fn stoppable_task_kills_process_group_and_returns_130() {
+        let tmp = env::temp_dir();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle =
+            thread::spawn(move || execute_task_until_stopped("sleep 5", &tmp, &rx).expect("run"));
+        thread::sleep(Duration::from_millis(100));
+        tx.send(TaskInterrupt::Stop).expect("stop");
+        let result = handle.join().expect("join");
+        assert_eq!(result.status_code, STOPPED_STATUS_CODE);
+        assert!(result.stopped);
     }
 
     #[test]
@@ -796,30 +1142,23 @@ mod tests {
     #[test]
     fn successful_task_captures_stdout() {
         let tmp = env::temp_dir();
-        let result = execute_task("printf hello", &tmp, Duration::from_secs(20)).expect("run");
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let result = execute_task_until_stopped("printf hello", &tmp, &rx).expect("run");
         assert_eq!(result.status_code, 0);
         assert_eq!(result.stdout, "hello");
         assert_eq!(result.stderr, "");
-        assert!(!result.timed_out);
+        assert!(!result.stopped);
     }
 
     #[test]
     fn failed_task_captures_stderr_and_status() {
         let tmp = env::temp_dir();
-        let result =
-            execute_task("printf nope >&2; exit 7", &tmp, Duration::from_secs(20)).expect("run");
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let result = execute_task_until_stopped("printf nope >&2; exit 7", &tmp, &rx).expect("run");
         assert_eq!(result.status_code, 7);
         assert_eq!(result.stdout, "");
         assert_eq!(result.stderr, "nope");
-        assert!(!result.timed_out);
-    }
-
-    #[test]
-    fn timeout_kills_process_group_and_returns_124() {
-        let tmp = env::temp_dir();
-        let result = execute_task("sleep 5", &tmp, Duration::from_millis(100)).expect("run");
-        assert_eq!(result.status_code, TIMEOUT_STATUS_CODE);
-        assert!(result.timed_out);
+        assert!(!result.stopped);
     }
 
     #[test]
@@ -834,7 +1173,7 @@ mod tests {
             status_code: 0,
             stdout: "hello".to_string(),
             stderr: String::new(),
-            timed_out: false,
+            stopped: false,
             started_at: "2026-07-02T00:00:00Z".to_string(),
             finished_at: "2026-07-02T00:00:01Z".to_string(),
         };
