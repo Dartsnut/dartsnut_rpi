@@ -5,6 +5,7 @@ import json
 import tarfile
 
 from python_websocket import file_operations as fops
+from core.app_metadata import read_app_metadata
 
 
 def test_get_download_progress_single_and_list():
@@ -106,6 +107,32 @@ def test_download_app_requires_game_id():
     assert result["error_code"] == "3002"
 
 
+def test_download_app_rejects_url_not_matching_backend(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class _InfoResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_id": "chess",
+                    "version": "2.0.0",
+                    "game_download_url": "https://example.com/backend.tar.gz",
+                    "game_download_md5": "backend-md5",
+                }
+            }
+
+    monkeypatch.setattr(fops.requests, "get", lambda *_a, **_k: _InfoResp())
+    monkeypatch.setattr(fops.os, "system", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("wget should not run")))
+    fops._DOWNLOAD_KEYS_IN_FLIGHT.clear()
+
+    result = fops.download_app("https://example.com/caller.tar.gz", "caller-md5", game_id="chess")
+
+    assert result["error_code"] == "3001"
+
+
 def test_download_game_worker_with_url_installs_archive_into_game_id_folder(
     tmp_path, monkeypatch
 ):
@@ -115,7 +142,7 @@ def test_download_game_worker_with_url_installs_archive_into_game_id_folder(
     with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
         for name, content in {
             "not-chess/conf.json": json.dumps(
-                {"id": "not-chess", "type": "game", "version": "1.2.3"}
+                {"id": "not-chess", "type": "game", "version": "1.2.3", "preview": ["packaged"]}
             ),
             "not-chess/main.py": "print('ok')\n",
         }.items():
@@ -140,7 +167,28 @@ def test_download_game_worker_with_url_installs_archive_into_game_id_folder(
         def iter_content(chunk_size=8192):
             yield payload
 
-    monkeypatch.setattr(fops.requests, "get", lambda *_a, **_k: _DownloadResp())
+    class _InfoResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "game_id": "chess",
+                    "game_name": "Backend Chess",
+                    "version": "2.0.0",
+                    "game_download_url": "https://example.com/not-chess.tar.gz",
+                    "game_download_md5": checksum,
+                    "main_cover": "covers/chess.png",
+                }
+            }
+
+    def _get(url, **kwargs):
+        if "api.dartsnut.com" in url:
+            return _InfoResp()
+        return _DownloadResp()
+
+    monkeypatch.setattr(fops.requests, "get", _get)
     monkeypatch.setattr(fops, "ensure_app_venv", lambda game_id: game_id == "chess")
     fops.DOWNLOAD_PROGRESS.clear()
     fops._DOWNLOAD_CANCEL_REQUESTED.clear()
@@ -153,4 +201,5 @@ def test_download_game_worker_with_url_installs_archive_into_game_id_folder(
     assert (tmp_path / "apps" / "chess" / "conf.json").is_file()
     assert not (tmp_path / "apps" / "not-chess").exists()
     assert fops.DOWNLOAD_PROGRESS["chess"]["status"] == "completed"
-    assert fops.DOWNLOAD_PROGRESS["chess"]["version"] == "1.2.3"
+    assert fops.DOWNLOAD_PROGRESS["chess"]["version"] == "2.0.0"
+    assert read_app_metadata("chess")["preview_urls"] == ["covers/chess.png"]

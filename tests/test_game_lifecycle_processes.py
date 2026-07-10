@@ -8,6 +8,7 @@ import signal
 from PIL import Image
 
 import game_lifecycle as gl
+from core.app_metadata import write_app_metadata
 
 
 class _Proc:
@@ -184,7 +185,7 @@ def test_term_game_process_kills_running_process_and_cleans_resources(monkeypatc
     assert g == {}
 
 
-def test_load_game_list_decodes_preview_and_get_games_summary(monkeypatch, tmp_path):
+def test_load_game_list_uses_backend_metadata_and_ignores_packaged_preview(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     app_dir = tmp_path / "apps" / "chess"
     app_dir.mkdir(parents=True)
@@ -194,17 +195,35 @@ def test_load_game_list_decodes_preview_and_get_games_summary(monkeypatch, tmp_p
     img.save(buf, format="PNG")
     preview_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     (app_dir / "conf.json").write_text(
-        json.dumps({"id": "chess", "name": "Chess", "type": "game", "version": "1.2.0", "preview": [preview_b64]}),
+        json.dumps({"id": "not-chess", "name": "Packaged", "type": "game", "version": "1.2.0", "preview": [preview_b64]}),
         encoding="utf-8",
     )
+    write_app_metadata(
+        "chess",
+        {"id": "chess", "type": "game", "name": "Chess", "version": "2.0.0", "preview_urls": ["covers/chess.png"]},
+    )
+    cached_preview = [bytearray(b"\x01" * (128 * 160 * 3))]
+    cache = type(
+        "Cache",
+        (),
+        {
+            "get_cached_preview": lambda self, gid: cached_preview if gid == "chess" else None,
+            "is_cache_expired": lambda self, gid: False,
+        },
+    )()
+    worker = type("Worker", (), {"submit": lambda *a, **k: None})()
+    monkeypatch.setattr(gl, "_preview_cache", cache)
+    monkeypatch.setattr(gl, "_validation_worker", worker)
 
     game_list = gl.load_game_list()
     summary = gl.get_games_summary()
 
     assert game_list[0]["id"] == "chess"
+    assert game_list[0]["name"] == "Chess"
+    assert game_list[0]["version"] == "2.0.0"
     assert game_list[0]["status"] == "ready"
-    assert isinstance(game_list[0]["preview"][0], bytearray)
-    assert summary == [{"id": "chess", "version": "1.2.0", "status": "ready"}]
+    assert game_list[0]["preview"] == cached_preview
+    assert summary == [{"id": "chess", "version": "2.0.0", "status": "ready"}]
 
 
 def test_load_game_list_bad_preview_still_includes_game_and_summary(monkeypatch, tmp_path):
@@ -224,16 +243,20 @@ def test_load_game_list_bad_preview_still_includes_game_and_summary(monkeypatch,
         ),
         encoding="utf-8",
     )
+    write_app_metadata(
+        "dart_checker",
+        {"id": "dart_checker", "type": "game", "name": "Dart Checker", "version": "2.1.0"},
+    )
 
     game_list = gl.load_game_list()
     summary = gl.get_games_summary()
 
     assert len(game_list) == 1
     assert game_list[0]["id"] == "dart_checker"
-    assert game_list[0]["version"] == "2.0.0"
+    assert game_list[0]["version"] == "2.1.0"
     assert isinstance(game_list[0]["preview"][0], bytearray)
     assert len(game_list[0]["preview"][0]) == 128 * 160 * 3
-    assert summary == [{"id": "dart_checker", "version": "2.0.0", "status": "ready"}]
+    assert summary == [{"id": "dart_checker", "version": "2.1.0", "status": "ready"}]
 
 
 def test_bad_preview_decode_warning_is_deduped(caplog):
@@ -262,9 +285,10 @@ def test_local_game_index_maps_valid_game_ids_to_folders(monkeypatch, tmp_path):
         app_dir = tmp_path / "apps" / gid
         app_dir.mkdir(parents=True)
         (app_dir / "conf.json").write_text(
-            json.dumps({"id": gid, "name": gid, "type": "game", "version": "1.0.0"}),
+            json.dumps({"id": f"packaged-{gid}", "name": gid, "type": "game", "version": "1.0.0"}),
             encoding="utf-8",
         )
+        write_app_metadata(gid, {"id": gid, "type": "game", "version": "2.0.0"})
     widget_dir = tmp_path / "apps" / "widget"
     widget_dir.mkdir()
     (widget_dir / "conf.json").write_text(
@@ -292,6 +316,8 @@ def test_remove_local_game_folder_deletes_only_indexed_game(monkeypatch, tmp_pat
         json.dumps({"id": "keep-me", "type": "game", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    write_app_metadata("remove-me", {"id": "remove-me", "type": "game", "version": "2.0.0"})
+    write_app_metadata("keep-me", {"id": "keep-me", "type": "game", "version": "2.0.0"})
 
     assert gl.remove_local_game_folder("remove-me") is True
     assert not game_dir.exists()

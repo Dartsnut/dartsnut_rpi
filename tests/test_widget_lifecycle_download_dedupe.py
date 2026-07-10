@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 
 import widget_lifecycle as wl
+from core.app_metadata import write_app_metadata
 
 
 def test_download_widget_async_second_call_skipped_while_inflight(monkeypatch):
@@ -20,7 +21,7 @@ def test_download_widget_async_second_call_skipped_while_inflight(monkeypatch):
 
     release = threading.Event()
 
-    def blocking_download(url, md5):
+    def blocking_download(widget_id, url, md5, download_info=None):
         release.wait(timeout=5.0)
         return False
 
@@ -58,3 +59,25 @@ def test_check_and_update_widget_version_sends_token_header(tmp_path, monkeypatc
 
     assert wl.check_and_update_widget_version("clock") == (True, {"version": "1.0.0"})
     assert calls["headers"] == {"Token": "abc"}
+
+
+def test_check_and_update_widget_version_uses_backend_metadata_not_conf(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "clock"
+    app_dir.mkdir(parents=True)
+    (app_dir / "conf.json").write_text(
+        '{"id":"packaged-clock","type":"widget","version":"0.1.0"}',
+        encoding="utf-8",
+    )
+    write_app_metadata("clock", {"id": "clock", "type": "widget", "version": "2.0.0"})
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {"widget_id": "clock", "version": "2.0.0"}}
+
+    monkeypatch.setattr(wl.requests, "get", lambda *_a, **_k: _Resp())
+
+    assert wl.check_and_update_widget_version("clock") == (False, {"widget_id": "clock", "version": "2.0.0"})

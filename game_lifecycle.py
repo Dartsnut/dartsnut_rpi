@@ -19,6 +19,7 @@ from core.helpers import (
     terminate_process_group,
 )
 from core.app_env import ensure_app_venv, install_app_tarball
+from core.app_metadata import read_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
 from runtime.api_token_store import build_api_headers
 from runtime.game_secret_store import get_pico8_key
@@ -192,19 +193,29 @@ def _is_blank_frame(frame: bytearray) -> bool:
 
 
 def get_local_game_version(gameid: str) -> str:
-    """Read local game version from ./apps/<gameid>/conf.json."""
+    """Read local game version from backend metadata."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     if not os.path.isdir(game_path):
         return ""
-    conf_path = os.path.join(game_path, "conf.json")
-    if not os.path.isfile(conf_path):
-        return ""
-    try:
-        with open(conf_path, "r") as f:
-            conf = json.load(f)
-        return str(conf.get("version") or "").strip()
-    except Exception:
-        return ""
+    return str(read_app_metadata(gameid).get("version") or "").strip()
+
+
+def _game_metadata_from_download_info(game_id: str, data: dict) -> dict:
+    cover = str(data.get("main_cover") or data.get("cover") or "").strip()
+    preview_urls = data.get("preview_urls") or data.get("preview") or []
+    if not isinstance(preview_urls, list):
+        preview_urls = []
+    if cover and not preview_urls:
+        preview_urls = [cover]
+    return {
+        "id": str(data.get("game_id") or data.get("id") or game_id),
+        "type": "game",
+        "version": str(data.get("version") or ""),
+        "name": str(data.get("game_name") or data.get("name") or ""),
+        "preview_urls": preview_urls,
+        "download_url": str(data.get("game_download_url") or ""),
+        "download_md5": str(data.get("game_download_md5") or ""),
+    }
 
 
 def compare_game_versions(left: str, right: str) -> int:
@@ -403,6 +414,15 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         if response is not None and response.status_code == 200:
             data = response.json().get("data")
             if data:
+                metadata = _game_metadata_from_download_info(gameid, data)
+                backend_id = metadata.get("id") or gameid
+                if backend_id != gameid:
+                    _log.error(
+                        "game: backend id mismatch requested=%s backend=%s",
+                        gameid,
+                        backend_id,
+                    )
+                    return False
                 u = data.get("game_download_url")
                 m = data.get("game_download_md5")
                 if u and m:
@@ -414,6 +434,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                     if not success:
                         _log.error("game: download failed after retries game_id=%s", gameid)
                         return False
+                    write_app_metadata(gameid, metadata)
                 else:
                     _log.error("game: missing download URL or MD5 game_id=%s", gameid)
                     return False
@@ -600,36 +621,36 @@ def load_game_list() -> list:
                 conf = json.load(f)
             if conf.get("type") != "game":
                 continue
-            # Ensure core fields exist for downstream consumers.
-            conf_has_explicit_id = "id" in conf
-            conf_id = conf.get("id", name)
-            conf_version = conf.get("version", "")
-            conf["id"] = conf_id
-            conf["version"] = conf_version
+            metadata = read_app_metadata(name)
+            backend_id = str(metadata.get("id") or name).strip()
+            if not metadata.get("id"):
+                _log.debug(
+                    "[Preview] Game '%s' has no backend metadata id; using folder name %s",
+                    conf.get("name", name),
+                    backend_id,
+                )
+            conf["id"] = backend_id or name
+            conf["version"] = str(metadata.get("version") or "")
+            if metadata.get("name"):
+                conf["name"] = metadata["name"]
             # Default status for on-device list; more specific statuses (e.g. playing,
             # downloading) can be layered on top where appropriate.
             conf.setdefault("status", "ready")
-            if "preview" in conf:
-                preview = _decode_game_preview_frames(conf.get("preview"), name)
-            else:
-                preview = []
+            preview = []
 
-            # Fall back to cache/API if preview is missing or blank
-            if not preview or (len(preview) == 1 and _is_blank_frame(preview[0])):
+            # Preview always comes from backend/cache; packaged conf.json preview is legacy.
+            if backend_id:
                 _ensure_worker_started()
-                game_id = conf.get("community_id") or (conf_id if conf_has_explicit_id else None)
-                if not game_id:
-                    _log.warning("[Preview] Game '%s' has no community_id or id, skipping API fetch", conf.get("name", name))
-                    preview = generate_placeholder_preview(conf.get("name", name), "Preview unavailable")
+                cached = _preview_cache.get_cached_preview(backend_id)
+                if cached:
+                    preview = cached
+                    if _preview_cache.is_cache_expired(backend_id):
+                        _validation_worker.submit(backend_id, priority=VALIDATE_EXPIRED, callback=_on_preview_updated)
                 else:
-                    cached = _preview_cache.get_cached_preview(game_id)
-                    if cached:
-                        preview = cached
-                        if _preview_cache.is_cache_expired(game_id):
-                            _validation_worker.submit(game_id, priority=VALIDATE_EXPIRED, callback=_on_preview_updated)
-                    else:
-                        preview = generate_placeholder_preview(conf.get("name", name), "Loading Preview")
-                        _validation_worker.submit(game_id, priority=FETCH_MISSING, callback=_on_preview_updated)
+                    preview = generate_placeholder_preview(conf.get("name", name), "Loading Preview")
+                    _validation_worker.submit(backend_id, priority=FETCH_MISSING, callback=_on_preview_updated)
+            else:
+                preview = generate_placeholder_preview(conf.get("name", name), "Preview unavailable")
 
             conf["preview"] = preview
             game_list.append(conf)
@@ -642,7 +663,7 @@ def load_game_list() -> list:
 
 
 def local_game_index() -> dict[str, str]:
-    """Map locally installed game ids to their app folder paths."""
+    """Map locally installed backend game ids to their app folder paths."""
     games: dict[str, str] = {}
     apps_dir = os.path.abspath(os.path.join(os.getcwd(), "apps"))
     try:
@@ -661,7 +682,7 @@ def local_game_index() -> dict[str, str]:
                 conf = json.load(f)
             if conf.get("type") != "game":
                 continue
-            game_id = str(conf.get("id") or name).strip()
+            game_id = str(read_app_metadata(name).get("id") or "").strip()
             if game_id:
                 games[game_id] = os.path.abspath(path)
         except Exception as e:
@@ -752,8 +773,8 @@ def get_games_summary() -> list:
     Build a lightweight games summary list for configuration / syncing.
 
     Each entry has the shape:
-    - id: game identifier from apps/{game}/conf.json
-    - version: version string from conf.json (or empty string if missing)
+    - id: game identifier from backend metadata
+    - version: version string from backend metadata (or empty string if missing)
     - status: one of \"ready\", \"downloading\", \"playing\". This helper only
       sets \"ready\" based on local presence; higher layers can refine status
       when they have download/runtime context.
