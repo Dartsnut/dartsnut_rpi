@@ -16,6 +16,7 @@ from python_websocket.error_handler import (
 
 from machine_state_service import get_machine_state_service
 from core.app_env import ensure_app_venv, install_app_tarball
+from core.app_metadata import write_app_metadata
 from runtime.api_token_store import build_api_headers
 
 _log = logging.getLogger(__name__)
@@ -60,17 +61,38 @@ def _is_game_download_active(game_id):
     return entry is not None and entry.get("status") in _DOWNLOAD_ACTIVE_STATUSES
 
 
-def _read_version_from_conf(game_id):
-    """Read conf.json["version"] from apps_dir/{game_id}/conf.json. Returns None on any error."""
-    try:
-        path = _apps_path(game_id, "conf.json")
-        if not os.path.isfile(path):
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("version")
-    except Exception:
-        return None
+def _game_metadata_from_download_info(game_id, data):
+    cover = str(data.get("main_cover") or data.get("cover") or "").strip()
+    preview_urls = data.get("preview_urls") or data.get("preview") or []
+    if not isinstance(preview_urls, list):
+        preview_urls = []
+    if cover and not preview_urls:
+        preview_urls = [cover]
+    return {
+        "id": str(data.get("game_id") or data.get("id") or game_id),
+        "type": "game",
+        "version": str(data.get("version") or ""),
+        "name": str(data.get("game_name") or data.get("name") or ""),
+        "preview_urls": preview_urls,
+        "download_url": str(data.get("game_download_url") or ""),
+        "download_md5": str(data.get("game_download_md5") or ""),
+    }
+
+
+def _fetch_game_download_info(game_id):
+    response = requests.get(
+        f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}",
+        headers=build_api_headers(),
+    )
+    if response.status_code != 200:
+        return None, f"Failed to get download info: {response.status_code}"
+    data = response.json().get("data")
+    if not data:
+        return None, "Download info missing in response"
+    metadata = _game_metadata_from_download_info(game_id, data)
+    if metadata.get("id") != str(game_id):
+        return None, "Backend game id mismatch"
+    return metadata, None
 
 
 def _set_download_progress(
@@ -387,6 +409,23 @@ def download_app(url, md5, game_id=None):
                 url=url,
             )
 
+        metadata, error = _fetch_game_download_info(game_id)
+        if error:
+            return create_error_response(
+                "download_app",
+                ErrorCode.INVALID_INPUT,
+                error,
+                game_id=game_id,
+            )
+        if metadata.get("download_url") != str(url) or metadata.get("download_md5") != str(md5):
+            return create_error_response(
+                "download_app",
+                ErrorCode.INVALID_INPUT,
+                "Download info does not match backend metadata",
+                game_id=game_id,
+                url=url,
+            )
+
         # Ensure the download directory exists
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         file_name = url.split("/")[-1]
@@ -442,6 +481,8 @@ def download_app(url, md5, game_id=None):
         if not ensure_app_venv(str(game_id)):
             _log.warning("download_app: venv setup failed for game_id=%s", game_id)
 
+        write_app_metadata(str(game_id), metadata)
+
         return {"action": "download_app", "game_id": game_id, "url": url, "message": "Success"}
     except Exception as e:
         return handle_exception("download_app", e, "Download failed", url=url)
@@ -461,30 +502,13 @@ def _download_game_worker(game_id):
             return
         _set_download_progress(game_id, progress=0, status="initializing", error=None)
 
-        # Get download info from remote API (same as in main.start_game_process)
-        response = requests.get(
-            f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}",
-            headers=build_api_headers(),
-        )
-        if response.status_code != 200:
-            _set_download_progress(
-                game_id,
-                status="error",
-                error=f"Failed to get download info: {response.status_code}",
-            )
+        metadata, error = _fetch_game_download_info(game_id)
+        if error:
+            _set_download_progress(game_id, status="error", error=error)
             return
 
-        download_info = response.json().get("data")
-        if not download_info:
-            _set_download_progress(
-                game_id,
-                status="error",
-                error="Download info missing in response",
-            )
-            return
-
-        game_download_url = download_info.get("game_download_url")
-        game_download_md5 = download_info.get("game_download_md5")
+        game_download_url = metadata.get("download_url")
+        game_download_md5 = metadata.get("download_md5")
 
         if not game_download_url or not game_download_md5:
             _set_download_progress(
@@ -600,7 +624,8 @@ def _download_game_worker(game_id):
                 )
                 return
 
-            version = _read_version_from_conf(game_id)
+            write_app_metadata(game_id, metadata)
+            version = metadata.get("version")
             _set_download_progress(
                 game_id, progress=100, status="completed", error=None, version=version
             )
@@ -646,6 +671,18 @@ def _download_game_worker_with_url(game_id, url, md5):
                 game_id,
                 status="error",
                 error="File type not support",
+            )
+            return
+
+        metadata, error = _fetch_game_download_info(game_id)
+        if error:
+            _set_download_progress(game_id, status="error", error=error)
+            return
+        if metadata.get("download_url") != str(url) or metadata.get("download_md5") != str(md5):
+            _set_download_progress(
+                game_id,
+                status="error",
+                error="Download info does not match backend metadata",
             )
             return
 
@@ -732,7 +769,8 @@ def _download_game_worker_with_url(game_id, url, md5):
             )
             return
 
-        version = _read_version_from_conf(game_id)
+        write_app_metadata(game_id, metadata)
+        version = metadata.get("version")
         _set_download_progress(
             game_id, progress=100, status="completed", error=None, version=version
         )
