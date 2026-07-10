@@ -26,17 +26,17 @@ def test_load_config_does_not_create_file_when_missing(tmp_path):
     assert cfg.image_base_url == ""
 
 
-def test_load_config_migrates_legacy_default_hosts(tmp_path):
+def test_load_config_reads_configured_hosts_verbatim(tmp_path):
     conf_path = tmp_path / "community_api.conf"
     conf_path.write_text(
         "[community_api]\n"
-        "base_url = https://api.dartsnut.community\n"
-        "image_base_url = https://images.dartsnut.community\n"
+        "base_url = https://api.example.test\n"
+        "image_base_url = https://images.example.test\n"
         "timeout = 5\n"
     )
     cfg = CommunityApiConfig.load(path=str(conf_path))
-    assert cfg.base_url == "https://api.dartsnut.com"
-    assert cfg.image_base_url == ""
+    assert cfg.base_url == "https://api.example.test"
+    assert cfg.image_base_url == "https://images.example.test"
 
 
 def test_load_config_reads_image_base_url(tmp_path):
@@ -195,7 +195,7 @@ def test_fetch_preview_image_does_not_send_token_to_cdn(tmp_path, monkeypatch):
     assert mock_get.call_args[1]["headers"] == {}
 
 
-def test_fetch_game_metadata_uses_main_cover_for_preview_url():
+def test_fetch_game_metadata_uses_pic_128_url_for_preview_url():
     client = _make_client()
 
     mock_response = MagicMock()
@@ -205,6 +205,7 @@ def test_fetch_game_metadata_uses_main_cover_for_preview_url():
             "game_id": "01dartgame",
             "game_name": "01 Darts Game",
             "main_cover": "cover.png",
+            "pic_128_url": "pic-128.png",
             "preview": ["preview-1.png", "preview-2.png"],
         }
     }
@@ -215,6 +216,28 @@ def test_fetch_game_metadata_uses_main_cover_for_preview_url():
 
     assert meta["id"] == "01dartgame"
     assert meta["name"] == "01 Darts Game"
+    assert meta["main_cover"] == "pic-128.png"
+    assert meta["preview_urls"] == ["pic-128.png"]
+
+
+def test_fetch_game_metadata_falls_back_to_main_cover_when_pic_128_url_empty():
+    client = _make_client()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "game_id": "01dartgame",
+            "game_name": "01 Darts Game",
+            "main_cover": "cover.png",
+            "pic_128_url": "",
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client._session, "get", return_value=mock_response):
+        meta = client.fetch_game_metadata("01dartgame")
+
     assert meta["main_cover"] == "cover.png"
     assert meta["preview_urls"] == ["cover.png"]
 
