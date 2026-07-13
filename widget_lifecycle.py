@@ -25,7 +25,8 @@ from core.helpers import (
     signal_process_group,
     terminate_process_group,
 )
-from core.app_env import ensure_app_venv, ensure_app_venv_after_extract
+from core.app_env import ensure_app_venv, ensure_app_venv_after_extract, install_app_tarball
+from core.app_metadata import read_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
 from domain.app_context import AppContext
 from runtime.api_token_store import build_api_headers
@@ -101,17 +102,28 @@ def process_widget_fields(widget_id: str, widget_fields_parameter: dict) -> dict
     return params
 
 
+def _widget_metadata_from_download_info(widget_id: str, data: dict) -> dict:
+    cover = str(data.get("main_cover") or data.get("cover") or "").strip()
+    preview_urls = data.get("preview_urls") or data.get("preview") or []
+    if not isinstance(preview_urls, list):
+        preview_urls = []
+    if cover and not preview_urls:
+        preview_urls = [cover]
+    return {
+        "id": str(data.get("widget_id") or data.get("id") or widget_id),
+        "type": "widget",
+        "version": str(data.get("version") or ""),
+        "name": str(data.get("widget_name") or data.get("name") or ""),
+        "preview_urls": preview_urls,
+        "download_url": str(data.get("widget_download_url") or ""),
+        "download_md5": str(data.get("widget_download_md5") or ""),
+    }
+
+
 def check_and_update_widget_version(widget_id: str):
     """Return (needs_update: bool, download_info: dict or None)."""
     try:
-        conf_path = os.path.join(os.getcwd(), "apps", widget_id, "conf.json")
-        local_version = None
-        if os.path.isfile(conf_path):
-            try:
-                with open(conf_path, "r") as f:
-                    local_version = json.load(f).get("version")
-            except Exception as e:
-                _log.warning("Error reading conf.json for widget %s: %s", widget_id, e)
+        local_version = str(read_app_metadata(widget_id).get("version") or "") or None
         try:
             response = requests.get(
                 f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}",
@@ -128,7 +140,15 @@ def check_and_update_widget_version(widget_id: str):
             download_info = response.json().get("data")
             if download_info is None:
                 return (False, None)
-            api_version = download_info.get("version")
+            metadata = _widget_metadata_from_download_info(widget_id, download_info)
+            if metadata.get("id") != str(widget_id):
+                _log.warning(
+                    "Widget backend id mismatch requested=%s backend=%s",
+                    widget_id,
+                    metadata.get("id"),
+                )
+                return (False, None)
+            api_version = metadata.get("version")
             if local_version is None:
                 return (True, download_info)
             if api_version is None:
@@ -144,7 +164,7 @@ def check_and_update_widget_version(widget_id: str):
         return (False, None)
 
 
-def _download_app_once(url: str, md5: str) -> bool:
+def _download_app_once(widget_id: str, url: str, md5: str, download_info: dict | None = None) -> bool:
     """Single attempt: download and extract .tar.gz app; verify MD5."""
     try:
         os.makedirs("downloads", exist_ok=True)
@@ -169,27 +189,34 @@ def _download_app_once(url: str, md5: str) -> bool:
             os.remove(download_path)
             return False
         try:
-            subprocess.run(
-                ["tar", "-xzf", download_path, "-C", os.path.join(os.getcwd(), "apps")],
-                check=True,
-            )
-        except subprocess.CalledProcessError:
+            install_app_tarball(download_path, str(widget_id))
+        except Exception:
             return False
-        if not ensure_app_venv_after_extract(download_path, url=url):
+        if not ensure_app_venv_after_extract(download_path, url=url, app_id=str(widget_id)):
             _log.warning("download_app: venv setup failed for url=%s", url)
+        if isinstance(download_info, dict):
+            write_app_metadata(widget_id, _widget_metadata_from_download_info(widget_id, download_info))
         return True
     except Exception as e:
         _log.error("Error downloading app: %s", e)
         return False
 
 
-def download_app(url: str, md5: str) -> bool:
+def download_app(widget_id: str, url: str, md5: str, download_info: dict | None = None) -> bool:
     """Download and extract .tar.gz app; verify MD5. Retries on transient failure."""
-    if not url.endswith(".tar.gz"):
+    if not widget_id or not url.endswith(".tar.gz"):
         return False
+    if isinstance(download_info, dict):
+        metadata = _widget_metadata_from_download_info(widget_id, download_info)
+        if metadata.get("id") != str(widget_id):
+            return False
+        if metadata.get("download_url") and metadata.get("download_url") != str(url):
+            return False
+        if metadata.get("download_md5") and metadata.get("download_md5") != str(md5):
+            return False
     return bool(
         retry_with_backoff(
-            lambda: _download_app_once(url, md5),
+            lambda: _download_app_once(widget_id, url, md5, download_info=download_info),
             succeeded=bool,
             label=f"download {url}",
         )
@@ -273,7 +300,12 @@ def flush_deferred_widget_processes_on_leave_widget_mode(ctx: AppContext) -> Non
 
 
 def download_widget_async(
-    widget_id: str, url: str, md5: str, get_context=None, on_complete=None
+    widget_id: str,
+    url: str,
+    md5: str,
+    get_context=None,
+    on_complete=None,
+    download_info: dict | None = None,
 ) -> None:
     """Download widget in background; on success call kill_widget_if_page_inactive."""
     if widget_id in _widget_background_download_inflight:
@@ -287,7 +319,7 @@ def download_widget_async(
     def worker():
         try:
             _log.info("widget: background download started id=%s", widget_id)
-            if download_app(url, md5):
+            if download_app(widget_id, url, md5, download_info=download_info):
                 _log.info("widget: background download finished id=%s", widget_id)
                 if get_context is not None:
                     kill_widget_if_page_inactive(widget_id, get_context)
@@ -332,7 +364,7 @@ def _request_missing_widget_download(widget_id: str, *, force: bool = False) -> 
     if not url or not md5:
         return
 
-    download_widget_async(widget_id, url, md5, get_context=None)
+    download_widget_async(widget_id, url, md5, get_context=None, download_info=download_info)
 
 
 def restart_widget_process(
@@ -526,7 +558,7 @@ def check_page_widget_updates(page: dict, get_context) -> None:
                 url = download_info.get("widget_download_url")
                 md5 = download_info.get("widget_download_md5")
                 if url and md5:
-                    download_widget_async(widget_id, url, md5, get_context)
+                    download_widget_async(widget_id, url, md5, get_context, download_info=download_info)
         except Exception as e:
             _log.warning("Error checking widget version for %s: %s", widget_id, e)
 

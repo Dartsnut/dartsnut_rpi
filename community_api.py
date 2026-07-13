@@ -12,8 +12,6 @@ from runtime.api_token_store import build_api_headers
 _log = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dartsnut/community_api.conf")
-_LEGACY_BASE_URL = "https://api.dartsnut.community"
-_LEGACY_IMAGE_BASE_URL = "https://images.dartsnut.community"
 
 
 class PreviewNotFound(Exception):
@@ -51,10 +49,6 @@ class CommunityApiConfig:
                     instance.image_base_url = parser.get(section, "image_base_url").rstrip("/")
                 if parser.has_option(section, "timeout"):
                     instance.timeout = parser.getint(section, "timeout")
-                if instance.base_url == _LEGACY_BASE_URL:
-                    instance.base_url = cls().base_url
-                if instance.image_base_url == _LEGACY_IMAGE_BASE_URL:
-                    instance.image_base_url = cls().image_base_url
         except (configparser.Error, ValueError, OSError) as e:
             _log.warning("[CommunityAPI] Failed to load config from %s: %s", config_path, e)
         return instance
@@ -123,7 +117,9 @@ class CommunityApiClient:
         if not isinstance(data, dict):
             raise PreviewNotFound(f"No game found for {game_id!r}")
 
-        cover = str(data.get("main_cover") or "").strip()
+        cover = str(data.get("pic_128_url") or "").strip()
+        if not cover:
+            cover = str(data.get("main_cover") or "").strip()
         return {
             "id": str(data.get("game_id") or game_id),
             "name": data.get("game_name") or game_id,

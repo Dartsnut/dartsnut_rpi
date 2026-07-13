@@ -1,0 +1,79 @@
+"""Backend-derived metadata for installed apps."""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
+from typing import Any
+
+from core.helpers import app_dir
+
+METADATA_FILENAME = ".dartsnut_backend.json"
+
+
+def _validate_app_id(app_id: str) -> str:
+    value = str(app_id or "").strip()
+    if not value or value.startswith(".") or "/" in value or "\\" in value:
+        raise ValueError(f"Invalid app_id: {app_id!r}")
+    return value
+
+
+def _metadata_path(app_id: str) -> str:
+    return os.path.join(app_dir(_validate_app_id(app_id)), METADATA_FILENAME)
+
+
+def read_app_metadata(app_id: str) -> dict[str, Any]:
+    """Return backend metadata for app_id, or {} when missing/unreadable."""
+    path = _metadata_path(app_id)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_app_metadata(app_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Persist canonical backend metadata for an installed app."""
+    safe_id = _validate_app_id(app_id)
+    target_dir = app_dir(safe_id)
+    os.makedirs(target_dir, exist_ok=True)
+
+    preview_urls = metadata.get("preview_urls") or []
+    if not isinstance(preview_urls, list):
+        preview_urls = []
+
+    payload: dict[str, Any] = {
+        "id": str(metadata.get("id") or safe_id),
+        "type": str(metadata.get("type") or ""),
+        "version": str(metadata.get("version") or ""),
+        "name": str(metadata.get("name") or ""),
+        "preview_urls": [str(item) for item in preview_urls if item],
+        "download_url": str(metadata.get("download_url") or ""),
+        "download_md5": str(metadata.get("download_md5") or ""),
+        "updated_at": str(
+            metadata.get("updated_at")
+            or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        ),
+    }
+
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{METADATA_FILENAME}.", suffix=".tmp", dir=target_dir, text=True
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, os.path.join(target_dir, METADATA_FILENAME))
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    return payload
