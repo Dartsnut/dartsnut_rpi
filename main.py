@@ -45,7 +45,6 @@ from states import MenuState, WidgetState, GameSelectState, InGameState, Setting
 from widget_lifecycle import (
     init_pages,
     term_widget_processes,
-    check_widget_ready,
     try_soft_apply_remote_supabase_pages,
 )
 from game_lifecycle import (
@@ -840,7 +839,6 @@ try:
         start_game_process=start_game_process,
         term_widget_processes=term_widget_processes,
         get_buttons_pressed=get_buttons_pressed,
-        check_widget_ready=check_widget_ready,
         in_game_state_cls=InGameState,
         get_remote_sync=get_remote_sync,
     )

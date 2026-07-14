@@ -166,17 +166,20 @@ class InGameState(BaseState):
                     ctx.display.update_frame_buffer(assets.create_loading_image())
         else:
             if shm_buf0 == 0:
-                game["launched"] = True
-                game_image = Image.frombytes(
-                    "RGB",
-                    (128, 160),
-                    bytes(shm_buf[1 : 1 + 128 * 160 * 3]),
-                )
-                ctx.display.update_frame_buffer(game_image)
-                shm_buf[0] = 1
-            elif game.get("launched", False):
-                ctx.display.update_frame_buffer(assets.create_loading_image())
-            else:
+                try:
+                    game_image = Image.frombytes(
+                        "RGB",
+                        (128, 160),
+                        bytes(shm_buf[1 : 1 + 128 * 160 * 3]),
+                    )
+                    ctx.display.update_frame_buffer(game_image)
+                    shm_buf[0] = 1
+                    game["loading"] = False
+                except Exception as e:
+                    _log.warning("Error rendering game frame: %s", e)
+                    if game.get("loading", True):
+                        ctx.display.update_frame_buffer(assets.create_loading_image())
+            elif game.get("loading", True):
                 ctx.display.update_frame_buffer(assets.create_loading_image())
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:

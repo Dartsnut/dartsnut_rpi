@@ -41,50 +41,6 @@ _missing_widget_download_attempts = {}
 _widget_background_download_inflight = set()
 
 
-def _get_flattened_data_compat(img):
-    """Backwards-compatible pixel flattener for PIL Image."""
-    if hasattr(img, "get_flattened_data"):
-        try:
-            return img.get_flattened_data()
-        except Exception:
-            pass
-    if hasattr(img, "getdata"):
-        try:
-            data_iter = iter(img.getdata())
-            first = next(data_iter, None)
-            if first is None:
-                return []
-            if isinstance(first, (tuple, list)):
-                flat = list(first)
-                for px in data_iter:
-                    flat.extend(px)
-                return flat
-            return [first, *list(data_iter)]
-        except Exception:
-            pass
-    try:
-        return list(img.tobytes())
-    except Exception:
-        return []
-
-
-def check_widget_ready(widget_frame) -> bool:
-    """True if top or bottom row of widget frame has any non-black pixel."""
-    if widget_frame is None:
-        return False
-    width, height = widget_frame.size
-    top_row = widget_frame.crop((0, 0, width, 1))
-    top_pixels_flat = _get_flattened_data_compat(top_row)
-    if any(value != 0 for value in top_pixels_flat):
-        return True
-    if height > 1:
-        bottom_row = widget_frame.crop((0, height - 1, width, height))
-        bottom_pixels_flat = _get_flattened_data_compat(bottom_row)
-        if any(value != 0 for value in bottom_pixels_flat):
-            return True
-    return False
-
-
 def process_widget_fields(widget_id: str, widget_fields_parameter: dict) -> dict:
     """Process widget fields (e.g. decode image base64) using conf.json."""
     params = widget_fields_parameter.copy()
@@ -243,7 +199,7 @@ def _kill_widget_process(widget_entry: dict, widget_id: str, reason: str = "") -
                 _log.warning("Error cleaning up shared memory for widget %s: %s", widget_id, e)
         widget_entry["process"] = None
         widget_entry["shm"] = None
-        widget_entry["launched"] = False
+        widget_entry["loading"] = False
     except Exception as e:
         _log.error("Error killing widget %s process: %s", widget_id, e)
 
@@ -424,7 +380,7 @@ def restart_widget_process(
         )
         widget_entry["process"] = process
         widget_entry["shm"] = shm
-        widget_entry["launched"] = False
+        widget_entry["loading"] = True
         widget_entry["has_small_widget"] = None
         _log.info("widget: restarted process id=%s pid=%s", widget_id, process.pid)
     except Exception as e:
@@ -573,7 +529,7 @@ def start_page_process(page: dict) -> dict:
                 "process": None,
                 "shm": None,
                 "widget": widget,
-                "launched": False,
+                "loading": False,
                 "has_small_widget": None,
             }
             page_uuid = page["uuid"]
@@ -589,6 +545,7 @@ def start_page_process(page: dict) -> dict:
                 pass
             try:
                 shm = shared_memory.SharedMemory(name=shm_name, create=True, size=shm_size)
+                shm.buf[0] = 1
                 command = uv_run_script_command("default.py")
                 command.extend(["--params", "{}", "--shm", shm_name])
                 command.extend(["--data-store", get_user_data_store_path("0")])
@@ -600,7 +557,7 @@ def start_page_process(page: dict) -> dict:
                         "process": process,
                         "shm": shm,
                         "widget": widget,
-                        "launched": False,
+                        "loading": True,
                         "has_small_widget": None,
                     }
                 )
@@ -616,7 +573,7 @@ def start_page_process(page: dict) -> dict:
                     "process": None,
                     "shm": None,
                     "widget": widget,
-                    "launched": False,
+                    "loading": False,
                     "has_small_widget": None,
                 }
             )
@@ -635,7 +592,7 @@ def start_page_process(page: dict) -> dict:
                     "process": None,
                     "shm": None,
                     "widget": widget,
-                    "launched": False,
+                    "loading": False,
                     "has_small_widget": None,
                 }
             )
@@ -647,7 +604,7 @@ def start_page_process(page: dict) -> dict:
                     "process": None,
                     "shm": None,
                     "widget": widget,
-                    "launched": False,
+                    "loading": False,
                     "has_small_widget": None,
                 }
             )
@@ -688,7 +645,7 @@ def start_page_process(page: dict) -> dict:
                         "process": process,
                         "shm": shm,
                         "widget": widget,
-                        "launched": False,
+                        "loading": True,
                         "has_small_widget": None,
                     }
                 )
@@ -699,7 +656,7 @@ def start_page_process(page: dict) -> dict:
                         "process": None,
                         "shm": None,
                         "widget": widget,
-                        "launched": False,
+                        "loading": False,
                         "has_small_widget": None,
                     }
                 )
@@ -710,7 +667,6 @@ def start_page_process(page: dict) -> dict:
             if proc is None:
                 continue
             signal_process_group(proc.pid, signal.SIGSTOP)
-            w["launched"] = False
         except Exception as e:
             _log.warning("Error pausing widget process: %s", e)
     return {
