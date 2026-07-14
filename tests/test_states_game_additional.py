@@ -1,5 +1,8 @@
 import signal
 
+from PIL import Image
+
+import states.game as sgame
 from states.game import InGameState
 
 
@@ -24,6 +27,11 @@ class _Display:
 
 class _ClosedShm:
     buf = None
+
+
+class _Shm:
+    def __init__(self):
+        self.buf = bytearray(1 + 128 * 160 * 3)
 
 
 class _Ctx:
@@ -91,3 +99,37 @@ def test_ingame_update_handles_closed_shared_memory_buffer():
     state.update(ctx)
 
     assert len(ctx.display.frames) == 1
+
+
+def test_standard_game_loading_clears_on_first_frame_and_does_not_reappear(monkeypatch):
+    ctx = _Ctx()
+    state = InGameState()
+    shm = _Shm()
+    loading_image = Image.new("RGB", (128, 160), "yellow")
+    monkeypatch.setattr(sgame.assets, "create_loading_image", lambda: loading_image)
+    ctx.game = {
+        "process": ctx.proc,
+        "game_id": "g1",
+        "shm": shm,
+        "loading": True,
+    }
+
+    shm.buf[0] = 1
+    state.update(ctx)
+
+    assert ctx.game["loading"] is True
+    assert ctx.display.frames == [loading_image]
+
+    first_frame = Image.new("RGB", (128, 160), "red")
+    shm.buf[1:] = first_frame.tobytes()
+    shm.buf[0] = 0
+    state.update(ctx)
+
+    assert ctx.game["loading"] is False
+    assert shm.buf[0] == 1
+    assert ctx.display.frames[-1].getpixel((0, 0)) == (255, 0, 0)
+
+    frame_count = len(ctx.display.frames)
+    state.update(ctx)
+
+    assert len(ctx.display.frames) == frame_count

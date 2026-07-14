@@ -71,10 +71,8 @@ class WidgetState(BaseState):
                     try:
                         process = widget.get("process")
                         if process is None:
-                            widget["launched"] = False
                             continue
                         signal_process_group(process.pid, signal.SIGCONT)
-                        widget["launched"] = False
                     except Exception as e:
                         _log.warning("Error resuming next widget process: %s", e)
                 ctx.next_page_prepared_index = next_index
@@ -101,7 +99,6 @@ class WidgetState(BaseState):
                                 continue
                             if process.poll() is None:
                                 signal_process_group(process.pid, signal.SIGCONT)
-                                widget_entry["launched"] = False
                             else:
                                 widget = widget_entry.get("widget")
                                 if widget and widget.get("id") != "0":
@@ -124,7 +121,6 @@ class WidgetState(BaseState):
                                 process = widget_entry.get("process")
                                 if process and process.poll() is None:
                                     signal_process_group(process.pid, signal.SIGSTOP)
-                                    widget_entry["launched"] = False
                         except Exception as e:
                             _log.warning("Error pausing widget process: %s", e)
             ctx.last_page_index = ctx.page_index

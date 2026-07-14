@@ -84,7 +84,7 @@ def test_widget_navigation_includes_page_with_unlaunched_widgets(monkeypatch):
                     "process": None,
                     "shm": None,
                     "widget": {"id": "digitalclock", "position": [0, 0, 127, 127], "fields": {}},
-                    "launched": False,
+                    "loading": False,
                     "has_small_widget": None,
                 }
             ],

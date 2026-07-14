@@ -68,7 +68,8 @@ def test_start_game_process_creates_process_and_tracking(monkeypatch, tmp_path):
     game = gl.start_game_process("chess")
 
     assert game["game_id"] == "chess"
-    assert game["launched"] is False
+    assert game["loading"] is True
+    assert created["shm"].buf[0] == 1
     assert tracked == ["chess"]
     assert popen_calls and popen_calls[0][1] == str(tmp_path / "apps" / "chess")
     assert popen_calls[0][0][0].endswith("apps/chess/.venv/bin/python")
@@ -82,6 +83,7 @@ def test_start_game_process_syncs_pico8_before_launch(monkeypatch, tmp_path):
     app_dir.mkdir(parents=True)
     (app_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
     events = []
+    created = {}
 
     class _LoadingImg:
         def tobytes(self):
@@ -90,7 +92,9 @@ def test_start_game_process_syncs_pico8_before_launch(monkeypatch, tmp_path):
     def _shared_memory(name, create=False, size=None):
         if not create:
             raise FileNotFoundError
-        return _FakeShm(name, size)
+        shm = _FakeShm(name, size)
+        created["shm"] = shm
+        return shm
 
     monkeypatch.setattr(gl.shared_memory, "SharedMemory", _shared_memory)
     monkeypatch.setattr(gl.assets, "create_loading_image", lambda: _LoadingImg())
@@ -112,6 +116,7 @@ def test_start_game_process_syncs_pico8_before_launch(monkeypatch, tmp_path):
     game = gl.start_game_process("pico8")
 
     assert game["game_id"] == "pico8"
+    assert created["shm"].buf[0] == 0
     assert events[:2] == [
         ("sync", "secret-key"),
         ("popen", str(tmp_path / "apps" / "pico8")),
