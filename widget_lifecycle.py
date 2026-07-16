@@ -82,7 +82,8 @@ def check_and_update_widget_version(widget_id: str):
         local_version = str(read_app_metadata(widget_id).get("version") or "") or None
         try:
             response = requests.get(
-                f"https://api.dartsnut.com/v1/mobile/widget/get-download-info?id={widget_id}",
+                "https://api.dartsnut.com/v1/mobile/widget/get-download-info",
+                params={"id": widget_id, "version": local_version or ""},
                 headers=build_api_headers(),
                 timeout=(5, 30),
             )

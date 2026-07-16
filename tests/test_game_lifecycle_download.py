@@ -146,7 +146,7 @@ def test_ensure_game_downloaded_does_not_sync_non_pico8(monkeypatch):
 def test_ensure_game_downloaded_sends_token_header(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    calls = {"headers": None}
+    calls = {"headers": None, "params": None}
     state = {"exists": False}
 
     class _Resp:
@@ -163,6 +163,7 @@ def test_ensure_game_downloaded_sends_token_header(monkeypatch, tmp_path):
 
     def _get(_url, **kwargs):
         calls["headers"] = kwargs.get("headers")
+        calls["params"] = kwargs.get("params")
         return _Resp()
 
     monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda _p: state["exists"])
@@ -178,10 +179,11 @@ def test_ensure_game_downloaded_sends_token_header(monkeypatch, tmp_path):
 
     assert ensure_game_downloaded("chess") is True
     assert calls["headers"] == {"Token": "abc"}
+    assert calls["params"] == {"id": "chess", "version": ""}
 
 
 def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
-    calls = {"download": []}
+    calls = {"download": [], "params": None}
     state = {"version": "1.0.0"}
 
     monkeypatch.setattr("game_lifecycle.os.path.isdir", lambda _p: True)
@@ -204,10 +206,15 @@ def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
         state["version"] = "2.0.0"
         return True
 
-    monkeypatch.setattr("game_lifecycle.requests.get", lambda url, **kwargs: _Resp())
+    def _get(_url, **kwargs):
+        calls["params"] = kwargs.get("params")
+        return _Resp()
+
+    monkeypatch.setattr("game_lifecycle.requests.get", _get)
     monkeypatch.setattr("game_lifecycle._download_game_file", _download_game_file)
 
     assert ensure_game_downloaded("chess", "2.0.0") is True
+    assert calls["params"] == {"id": "chess", "version": "1.0.0"}
     assert calls["download"] == [("https://example.com/chess.zip", "abc123", "chess")]
 
 

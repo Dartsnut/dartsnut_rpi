@@ -378,6 +378,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     expected_version = str(remote_version or "").strip()
     normalized_gameid = str(gameid or "").strip()
+    local_version = ""
     if os.path.isdir(game_path):
         if not expected_version:
             if normalized_gameid == "pico8":
@@ -404,7 +405,8 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     try:
         response = retry_with_backoff(
             lambda: requests.get(
-                f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}",
+                "https://api.dartsnut.com/v1/mobile/game/get-download-info",
+                params={"id": gameid, "version": local_version},
                 headers=build_api_headers(),
                 timeout=(5, 30),
             ),
