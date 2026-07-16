@@ -5,6 +5,7 @@ import json
 import tarfile
 
 from python_websocket import file_operations as fops
+from core.app_metadata import write_app_metadata
 from core.app_metadata import read_app_metadata
 
 
@@ -68,7 +69,7 @@ def test_get_file_md5_and_remove_directory_missing(tmp_path, monkeypatch):
 def test_download_game_worker_sends_token_header(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    calls = {"headers": None}
+    calls = {"headers": None, "params": None}
 
     class _Resp:
         status_code = 200
@@ -85,12 +86,14 @@ def test_download_game_worker_sends_token_header(tmp_path, monkeypatch):
     def _get(url, **kwargs):
         if "api.dartsnut.com" in url:
             calls["headers"] = kwargs.get("headers")
+            calls["params"] = kwargs.get("params")
             return _Resp()
         raise AssertionError("download URL should be stubbed before requests.get")
 
     from runtime.api_token_store import preserve_remote_user_token
 
     preserve_remote_user_token({"token": "abc"})
+    write_app_metadata("g1", {"id": "g1", "type": "game", "version": "1.2.3"})
     monkeypatch.setattr(fops.requests, "get", _get)
 
     fops.DOWNLOAD_PROGRESS.clear()
@@ -99,6 +102,7 @@ def test_download_game_worker_sends_token_header(tmp_path, monkeypatch):
     fops._download_game_worker("g1")
 
     assert calls["headers"] == {"Token": "abc"}
+    assert calls["params"] == {"id": "g1", "version": "1.2.3"}
 
 
 def test_download_app_requires_game_id():

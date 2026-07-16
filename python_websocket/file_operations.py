@@ -16,7 +16,7 @@ from python_websocket.error_handler import (
 
 from machine_state_service import get_machine_state_service
 from core.app_env import ensure_app_venv, install_app_tarball
-from core.app_metadata import write_app_metadata
+from core.app_metadata import read_app_metadata, write_app_metadata
 from runtime.api_token_store import build_api_headers
 
 _log = logging.getLogger(__name__)
@@ -80,8 +80,10 @@ def _game_metadata_from_download_info(game_id, data):
 
 
 def _fetch_game_download_info(game_id):
+    local_version = str(read_app_metadata(game_id).get("version") or "")
     response = requests.get(
-        f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={game_id}",
+        "https://api.dartsnut.com/v1/mobile/game/get-download-info",
+        params={"id": game_id, "version": local_version},
         headers=build_api_headers(),
     )
     if response.status_code != 200:

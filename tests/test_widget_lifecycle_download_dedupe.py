@@ -39,7 +39,7 @@ def test_download_widget_async_second_call_skipped_while_inflight(monkeypatch):
 def test_check_and_update_widget_version_sends_token_header(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    calls = {"headers": None}
+    calls = {"headers": None, "params": None}
 
     class _Resp:
         status_code = 200
@@ -50,6 +50,7 @@ def test_check_and_update_widget_version_sends_token_header(tmp_path, monkeypatc
 
     def _get(_url, **kwargs):
         calls["headers"] = kwargs.get("headers")
+        calls["params"] = kwargs.get("params")
         return _Resp()
 
     from runtime.api_token_store import preserve_remote_user_token
@@ -59,6 +60,7 @@ def test_check_and_update_widget_version_sends_token_header(tmp_path, monkeypatc
 
     assert wl.check_and_update_widget_version("clock") == (True, {"version": "1.0.0"})
     assert calls["headers"] == {"Token": "abc"}
+    assert calls["params"] == {"id": "clock", "version": ""}
 
 
 def test_check_and_update_widget_version_uses_backend_metadata_not_conf(tmp_path, monkeypatch):
@@ -78,6 +80,13 @@ def test_check_and_update_widget_version_uses_backend_metadata_not_conf(tmp_path
         def json():
             return {"data": {"widget_id": "clock", "version": "2.0.0"}}
 
-    monkeypatch.setattr(wl.requests, "get", lambda *_a, **_k: _Resp())
+    calls = {"params": None}
+
+    def _get(*_args, **kwargs):
+        calls["params"] = kwargs.get("params")
+        return _Resp()
+
+    monkeypatch.setattr(wl.requests, "get", _get)
 
     assert wl.check_and_update_widget_version("clock") == (False, {"widget_id": "clock", "version": "2.0.0"})
+    assert calls["params"] == {"id": "clock", "version": "2.0.0"}
