@@ -22,6 +22,7 @@ _log = logging.getLogger(__name__)
 DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
 STAMP_FILENAME = ".dartsnut_stamp"
 MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
+TARBALL_PYPROJECT_MARKER = ".dartsnut_tarball_pyproject"
 
 
 def read_app_type(app_id: str) -> str | None:
@@ -116,6 +117,9 @@ def _materialize_pyproject(app_id: str, app_type: str) -> None:
     template = _template_path(app_type)
     template_text = template.read_text(encoding="utf-8")
     if os.path.isfile(dest):
+        marker = os.path.join(app_dir(app_id), TARBALL_PYPROJECT_MARKER)
+        if os.path.isfile(marker):
+            return
         if not _is_managed_default_pyproject(dest):
             return
         with open(dest, encoding="utf-8") as f:
@@ -314,11 +318,18 @@ def install_app_tarball(tar_path: str, app_id: str) -> str:
                 tar.extractall(extract_dir, members=members)
 
         source_dir = _payload_source_dir(extract_dir)
+        tarball_has_pyproject = os.path.isfile(
+            os.path.join(source_dir, "pyproject.toml")
+        )
         shutil.copytree(
             source_dir,
             prepared_dir,
-            ignore=shutil.ignore_patterns("._*", "__MACOSX"),
+            ignore=shutil.ignore_patterns(
+                "._*", "__MACOSX", TARBALL_PYPROJECT_MARKER
+            ),
         )
+        if tarball_has_pyproject:
+            Path(prepared_dir, TARBALL_PYPROJECT_MARKER).touch()
 
         backup_dir = None
         if os.path.exists(target_dir):
