@@ -378,6 +378,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     expected_version = str(remote_version or "").strip()
     normalized_gameid = str(gameid or "").strip()
+    local_version = ""
     if os.path.isdir(game_path):
         if not expected_version:
             if normalized_gameid == "pico8":
@@ -404,7 +405,8 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     try:
         response = retry_with_backoff(
             lambda: requests.get(
-                f"https://api.dartsnut.com/v1/mobile/game/get-download-info?id={gameid}",
+                "https://api.dartsnut.com/v1/mobile/game/get-download-info",
+                params={"id": gameid, "version": expected_version},
                 headers=build_api_headers(),
                 timeout=(5, 30),
             ),
@@ -531,7 +533,7 @@ def download_game_async(
 
 
 def start_game_process(gameid: str) -> dict:
-    """Start game process and return game dict (process, shm, game_id, launched, pico8_first_frame_seen) or None."""
+    """Start game process and return its process/shared-memory runtime state."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     if not os.path.isdir(game_path):
         ensure_game_downloaded(gameid)
@@ -555,7 +557,10 @@ def start_game_process(gameid: str) -> dict:
         loading_image = assets.create_loading_image()
         img_bytes = loading_image.tobytes()
         shm.buf[1 : 1 + len(img_bytes)] = img_bytes
-        shm.buf[0] = 0
+        # The first byte is the producer/consumer frame handshake. Standard
+        # games start with no subprocess frame available; Pico-8 retains its
+        # legacy startup sequence and consumes the preloaded loading frame.
+        shm.buf[0] = 0 if gameid == "pico8" else 1
         command = app_python_command(gameid, "main.py")
         command.extend(["--shm", shm_name])
         command.extend(["--data-store", get_user_data_store_path(gameid)])
@@ -577,7 +582,7 @@ def start_game_process(gameid: str) -> dict:
             "process": process,
             "shm": shm,
             "game_id": gameid,
-            "launched": False,
+            "loading": True,
             "pico8_first_frame_seen": False,
         }
     except Exception as e:
