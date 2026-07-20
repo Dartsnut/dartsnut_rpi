@@ -406,7 +406,7 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         response = retry_with_backoff(
             lambda: requests.get(
                 "https://api.dartsnut.com/v1/mobile/game/get-download-info",
-                params={"id": gameid, "version": local_version},
+                params={"id": gameid, "version": expected_version},
                 headers=build_api_headers(),
                 timeout=(5, 30),
             ),
