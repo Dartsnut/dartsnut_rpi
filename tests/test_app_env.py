@@ -394,6 +394,42 @@ def test_install_app_tarball_rejects_unsafe_members_without_replacing_existing_a
     assert not (tmp_path / "evil.txt").exists()
 
 
+def test_install_app_tarball_preserves_embedded_managed_pyproject(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apps").mkdir()
+    tar_path = tmp_path / "mathdarts.tar.gz"
+    packaged_pyproject = (
+        "# Dartsnut managed default app dependencies.\n"
+        "[project]\n"
+        'name = "mathdarts"\n'
+        'version = "0.2.0"\n'
+        'dependencies = ["custom-dependency==1.0.0"]\n'
+    )
+    _write_tarball(
+        tar_path,
+        {
+            "mathdarts/conf.json": json.dumps(
+                {"id": "mathdarts", "type": "game", "version": "0.2.0"}
+            ),
+            "mathdarts/main.py": "print('new')\n",
+            "mathdarts/pyproject.toml": packaged_pyproject,
+        },
+    )
+
+    app_env.install_app_tarball(str(tar_path), "mathdarts")
+
+    app_dir = tmp_path / "apps" / "mathdarts"
+
+    def _fake_sync(_app_id):
+        venv = app_dir / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(app_env, "_uv_sync", _fake_sync)
+    assert app_env.ensure_app_venv("mathdarts") is True
+    assert (app_dir / "pyproject.toml").read_text(encoding="utf-8") == packaged_pyproject
+
+
 def test_install_app_tarball_replaces_existing_app_after_success(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     existing = tmp_path / "apps" / "chess"
