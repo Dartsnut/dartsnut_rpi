@@ -214,7 +214,7 @@ def test_ensure_game_downloaded_redownloads_when_version_mismatch(monkeypatch):
     monkeypatch.setattr("game_lifecycle._download_game_file", _download_game_file)
 
     assert ensure_game_downloaded("chess", "2.0.0") is True
-    assert calls["params"] == {"id": "chess", "version": "1.0.0"}
+    assert calls["params"] == {"id": "chess", "version": "2.0.0"}
     assert calls["download"] == [("https://example.com/chess.zip", "abc123", "chess")]
 
 
