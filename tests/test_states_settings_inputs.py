@@ -239,11 +239,11 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
     assert surface.getpixel((45, 45)) == (255, 255, 255)
     assert surface.getpixel((64, 64)) == (255, 255, 255)
     assert surface.getpixel((55, 55)) not in ((0, 0, 0), (255, 255, 255))
-    assert ssettings._BLUETOOTH_QR_LOGO.size == (35, 35)
+    assert ssettings._BLUETOOTH_QR_LOGO.size == (20, 20)
     assert min(
         ssettings._BLUETOOTH_QR_LOGO.getpixel((x, y))[3]
-        for y in range(7, 28)
-        for x in range(7, 28)
+        for y in range(4, 16)
+        for x in range(4, 16)
     ) == 255
 
 
