@@ -203,6 +203,15 @@ def test_settings_up_down_clamps_index():
     assert ctx.setting_select_index == 6
 
 
+def test_bluetooth_qr_payload_uses_deep_link_and_url_encodes_name():
+    assert ssettings._bluetooth_qr_payload("PixelDart-272c") == (
+        "dartsnut://device/connect?ble_name=PixelDart-272c"
+    )
+    assert ssettings._bluetooth_qr_payload("Pixel Dart/ä") == (
+        "dartsnut://device/connect?ble_name=Pixel%20Dart%2F%C3%A4"
+    )
+
+
 def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
     captured = {}
 
@@ -226,8 +235,12 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
 
     surface = ssettings._create_bluetooth_qr_surface("PixelDart-eeff")
 
-    assert captured["payload"] == "PixelDart-eeff"
+    assert captured["payload"] == "dartsnut://device/connect?ble_name=PixelDart-eeff"
     assert captured["fit"] is True
+    assert (
+        captured["kwargs"]["error_correction"]
+        == ssettings.qrcode.constants.ERROR_CORRECT_Q
+    )
     assert captured["kwargs"]["border"] == 2
     assert captured["image_kwargs"] == {
         "fill_color": "white",
@@ -239,11 +252,11 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
     assert surface.getpixel((45, 45)) == (255, 255, 255)
     assert surface.getpixel((64, 64)) == (255, 255, 255)
     assert surface.getpixel((55, 55)) not in ((0, 0, 0), (255, 255, 255))
-    assert ssettings._BLUETOOTH_QR_LOGO.size == (20, 20)
+    assert ssettings._BLUETOOTH_QR_LOGO.size == (45, 45)
     assert min(
         ssettings._BLUETOOTH_QR_LOGO.getpixel((x, y))[3]
-        for y in range(4, 16)
-        for x in range(4, 16)
+        for y in range(9, 36)
+        for x in range(9, 36)
     ) == 255
 
 
