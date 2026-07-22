@@ -1,13 +1,16 @@
-"""Settings state: name, IP, version, brightness, volume."""
+"""Settings state: device info, controls, Bluetooth QR, and reset."""
 import json
 import os
 import re
 import subprocess
 import time
+
+import qrcode
 from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
 from network_utils import get_primary_ipv4
+from runtime.bluetooth_identity import resolve_bluetooth_local_name
 from runtime.remote_sync_port import get_remote_sync
 from states.base import BaseState
 
@@ -232,27 +235,73 @@ SETTINGS_ITEMS = [
     {"name": "Version", "type": "info"},
     {"name": "Brightness", "type": "value"},
     {"name": "Volume", "type": "value"},
+    {"name": "Bluetooth QR", "type": "action"},
     {"name": "Reset device", "type": "action"},
 ]
 
 
-# List height limited to 128px; 6 rows -> item_height 21
 SETTINGS_LIST_MAX_HEIGHT = 128
-SETTINGS_NUM_ROWS = 6
+SETTINGS_NUM_ROWS = 7
 SETTINGS_ITEM_HEIGHT = SETTINGS_LIST_MAX_HEIGHT // SETTINGS_NUM_ROWS
+SETTINGS_FIRST_SELECTABLE_INDEX = 3
+SETTINGS_BLUETOOTH_QR_INDEX = 5
+SETTINGS_RESET_DEVICE_INDEX = 6
+
+_OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
+_OVERLAY_RESET_CONFIRM = "reset_confirm"
+
+
+def _draw_settings_label(draw, x, y, label, fill, font):
+    """Draw uppercase words with explicit gaps because font8 has no space glyph."""
+    current_x = x
+    for word_index, word in enumerate(label.upper().split()):
+        if word_index:
+            current_x += 4
+        draw.text((current_x, y), word, fill=fill, font=font)
+        current_x += len(word) * 6
+
+
+def _create_bluetooth_qr_surface(local_name: str) -> Image.Image:
+    """Create a scan-friendly QR centered on the 128x128 main surface."""
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=1,
+        border=4,
+    )
+    qr.add_data(local_name)
+    qr.make(fit=True)
+    qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+    width, height = qr_image.size
+    if width > 128 or height > 128:
+        raise ValueError("Bluetooth local name is too large for the display QR")
+    scale = min(128 // width, 128 // height)
+    if scale > 1:
+        qr_image = qr_image.resize(
+            (width * scale, height * scale),
+            resample=Image.Resampling.NEAREST,
+        )
+
+    surface = Image.new("RGB", (128, 128), "white")
+    x = (128 - qr_image.size[0]) // 2
+    y = (128 - qr_image.size[1]) // 2
+    surface.paste(qr_image, (x, y))
+    return surface
 
 
 class SettingsState(BaseState):
-    """Settings menu: name, IP, version, brightness, volume, reset device; B/home back to menu."""
+    """Settings menu with value controls, Bluetooth QR, and device reset."""
 
     def __init__(self):
-        self._show_reset_confirm = False
+        self._overlay_mode = None
+        self._bluetooth_qr_surface = None
 
     def name(self) -> str:
         return "settings"
 
     def consumes_btn_b_for_overlay(self, ctx: AppContext) -> bool:
-        return self._show_reset_confirm
+        return self._overlay_mode is not None
 
     def update(self, ctx: AppContext) -> None:
         settings_image = Image.new("RGB", (128, 160), (0, 0, 0))
@@ -324,16 +373,14 @@ class SettingsState(BaseState):
                 label_x = 2
             else:
                 label_x = 2
-            if item["name"] == "Reset device":
-                # font8 doesn't support space; draw two words with a gap
-                draw.text((label_x, ty), "RESET", fill=text_color, font=font8)
-                reset_w = 5 * 6  # 5 chars @ 6px
-                gap = 4
-                draw.text((label_x + reset_w + gap, ty), "DEVICE", fill=text_color, font=font8)
-            else:
-                draw.text(
-                    (label_x, ty), item["name"].upper(), fill=text_color, font=font8
-                )
+            _draw_settings_label(
+                draw,
+                label_x,
+                ty,
+                item["name"],
+                text_color,
+                font8,
+            )
             if item["name"] == "Name":
                 font_6x8 = ctx.assets.font_6x8
                 max_width = 100
@@ -407,7 +454,7 @@ class SettingsState(BaseState):
                     fill=text_color,
                     font=font8,
                 )
-            elif item["name"] == "Reset device":
+            elif item["type"] == "action":
                 pass  # label only, no value
         settings_image.paste(
             ctx.assets.settings_icon,
@@ -423,7 +470,22 @@ class SettingsState(BaseState):
             fill=(255, 255, 255),
             font=font8,
         )
-        if self._show_reset_confirm:
+        if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
+            if self._bluetooth_qr_surface is not None:
+                settings_image.paste(self._bluetooth_qr_surface, (0, 0))
+            else:
+                draw.rectangle((0, 0, 127, 127), fill=(0, 0, 0))
+                font_6x8 = ctx.assets.font_6x8
+                for line, line_y in (("BLUETOOTH", 52), ("UNAVAILABLE", 68)):
+                    bbox = draw.textbbox((0, 0), line, font=font_6x8)
+                    line_width = bbox[2] - bbox[0]
+                    draw.text(
+                        ((128 - line_width) / 2, line_y),
+                        line,
+                        fill=(255, 255, 255),
+                        font=font_6x8,
+                    )
+        elif self._overlay_mode == _OVERLAY_RESET_CONFIRM:
             settings_rgba = settings_image.convert("RGBA")
             overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 180))
             settings_rgba.paste(overlay, (0, 0), overlay)
@@ -444,19 +506,41 @@ class SettingsState(BaseState):
         ctx.display.update_frame_buffer(settings_image)
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:
-        if self._show_reset_confirm:
+        if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
+            if buttons.get("btn_b") or buttons.get("btn_home"):
+                self._overlay_mode = None
+                self._bluetooth_qr_surface = None
+            return
+
+        if self._overlay_mode == _OVERLAY_RESET_CONFIRM:
             if buttons.get("btn_a"):
                 if ctx.reset_device:
                     ctx.reset_device()
-                self._show_reset_confirm = False
+                self._overlay_mode = None
             elif buttons.get("btn_b") or buttons.get("btn_home"):
-                self._show_reset_confirm = False
+                self._overlay_mode = None
             return
+
         if buttons.get("btn_b") or buttons.get("btn_home"):
             from states.menu import MenuState
             ctx.transition_to(MenuState())
-        elif buttons.get("btn_a") and ctx.setting_select_index == 5:
-            self._show_reset_confirm = True
+        elif (
+            buttons.get("btn_a")
+            and ctx.setting_select_index == SETTINGS_BLUETOOTH_QR_INDEX
+        ):
+            self._bluetooth_qr_surface = None
+            try:
+                local_name = resolve_bluetooth_local_name(ctx.get_device_info())
+                if local_name:
+                    self._bluetooth_qr_surface = _create_bluetooth_qr_surface(local_name)
+            except Exception:
+                self._bluetooth_qr_surface = None
+            self._overlay_mode = _OVERLAY_BLUETOOTH_QR
+        elif (
+            buttons.get("btn_a")
+            and ctx.setting_select_index == SETTINGS_RESET_DEVICE_INDEX
+        ):
+            self._overlay_mode = _OVERLAY_RESET_CONFIRM
         elif buttons.get("btn_left"):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
@@ -488,6 +572,12 @@ class SettingsState(BaseState):
                 new_volume = _volume_level_to_raw(new_level)
                 ctx.set_volume(new_volume)
         elif buttons.get("btn_up"):
-            ctx.setting_select_index = max(3, ctx.setting_select_index - 1)
+            ctx.setting_select_index = max(
+                SETTINGS_FIRST_SELECTABLE_INDEX,
+                ctx.setting_select_index - 1,
+            )
         elif buttons.get("btn_down"):
-            ctx.setting_select_index = min(5, ctx.setting_select_index + 1)
+            ctx.setting_select_index = min(
+                SETTINGS_RESET_DEVICE_INDEX,
+                ctx.setting_select_index + 1,
+            )
