@@ -250,6 +250,15 @@ SETTINGS_RESET_DEVICE_INDEX = 6
 _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
 
+_BLUETOOTH_QR_LOGO = Image.open(
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "assets_media",
+        "images",
+        "bluetooth_qr_logo.png",
+    )
+).convert("RGBA")
+
 
 def _draw_settings_label(draw, x, y, label, fill, font):
     """Draw uppercase words with explicit gaps because font8 has no space glyph."""
@@ -267,7 +276,7 @@ def _create_bluetooth_qr_surface(local_name: str) -> Image.Image:
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=1,
-        border=4,
+        border=2,
     )
     qr.add_data(local_name)
     qr.make(fit=True)
@@ -287,6 +296,14 @@ def _create_bluetooth_qr_surface(local_name: str) -> Image.Image:
     x = (128 - qr_image.size[0]) // 2
     y = (128 - qr_image.size[1]) // 2
     surface.paste(qr_image, (x, y))
+
+    logo_x = (128 - _BLUETOOTH_QR_LOGO.size[0]) // 2
+    logo_y = (128 - _BLUETOOTH_QR_LOGO.size[1]) // 2
+    surface.paste(
+        _BLUETOOTH_QR_LOGO,
+        (logo_x, logo_y),
+        _BLUETOOTH_QR_LOGO,
+    )
     return surface
 
 
