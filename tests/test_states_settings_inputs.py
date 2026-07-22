@@ -217,8 +217,9 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
             captured["fit"] = fit
 
         def make_image(self, **kwargs):
-            image = Image.new("1", (29, 29), 1)
-            ImageDraw.Draw(image).rectangle((8, 8, 20, 20), fill=0)
+            captured["image_kwargs"] = kwargs
+            image = Image.new("1", (29, 29), 0)
+            ImageDraw.Draw(image).rectangle((8, 8, 20, 20), fill=1)
             return image
 
     monkeypatch.setattr(ssettings.qrcode, "QRCode", _FakeQr)
@@ -228,10 +229,14 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
     assert captured["payload"] == "PixelDart-eeff"
     assert captured["fit"] is True
     assert captured["kwargs"]["border"] == 4
+    assert captured["image_kwargs"] == {
+        "fill_color": "white",
+        "back_color": "black",
+    }
     assert surface.mode == "RGB"
     assert surface.size == (128, 128)
-    assert surface.getpixel((0, 0)) == (255, 255, 255)
-    assert surface.getpixel((64, 64)) == (0, 0, 0)
+    assert surface.getpixel((0, 0)) == (0, 0, 0)
+    assert surface.getpixel((64, 64)) == (255, 255, 255)
 
 
 def test_bluetooth_qr_surface_uses_real_qrcode_backend():
@@ -239,9 +244,9 @@ def test_bluetooth_qr_surface_uses_real_qrcode_backend():
 
     assert surface.mode == "RGB"
     assert surface.size == (128, 128)
-    assert surface.getpixel((0, 0)) == (255, 255, 255)
+    assert surface.getpixel((0, 0)) == (0, 0, 0)
     assert any(
-        surface.getpixel((x, y)) == (0, 0, 0)
+        surface.getpixel((x, y)) == (255, 255, 255)
         for y in range(surface.height)
         for x in range(surface.width)
     )

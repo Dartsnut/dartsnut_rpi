@@ -271,7 +271,7 @@ def _create_bluetooth_qr_surface(local_name: str) -> Image.Image:
     )
     qr.add_data(local_name)
     qr.make(fit=True)
-    qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    qr_image = qr.make_image(fill_color="white", back_color="black").convert("RGB")
 
     width, height = qr_image.size
     if width > 128 or height > 128:
@@ -283,7 +283,7 @@ def _create_bluetooth_qr_surface(local_name: str) -> Image.Image:
             resample=Image.Resampling.NEAREST,
         )
 
-    surface = Image.new("RGB", (128, 128), "white")
+    surface = Image.new("RGB", (128, 128), "black")
     x = (128 - qr_image.size[0]) // 2
     y = (128 - qr_image.size[1]) // 2
     surface.paste(qr_image, (x, y))
