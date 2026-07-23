@@ -391,7 +391,7 @@ def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
     )
 
     assert result["error_code"] == "6004"
-    assert callback_calls == [9]
+    assert callback_calls == [8]
     assert repair_markers == ["mark", "clear"]
     assert [cmd for cmd, _env in calls] == [
         ["git", "rev-parse", "HEAD"],
@@ -402,15 +402,6 @@ def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
         ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
         ["git", "reset", "--hard", "oldsha"],
         ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
-        [
-            "env",
-            "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
-            "scripts/rollback_rpi_kernel_6_12.sh",
-        ],
-        ["sudo", "systemctl", "restart", "dartsnut_matrix.service"],
-        ["sudo", "systemctl", "restart", "dartsnut_mcp.service"],
-        ["sudo", "systemctl", "restart", "dartsnut_watchdog.service"],
-        ["sudo", "systemctl", "restart", "dartsnut_python.service"],
     ]
 
 

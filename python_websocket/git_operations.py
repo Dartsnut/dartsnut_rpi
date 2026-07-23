@@ -342,13 +342,16 @@ def perform_update(before_terminal_action=None):
                 cwd=GIT_REPO_CWD,
                 check=True,
             )
+            # Keep the current known-good process alive so callers can report the
+            # failed update (including the on-device snackbar). The rollback
+            # repair restores files and dependencies but must not restart this
+            # process before the error response is composed.
             _run_update_script(
-                defer_terminal_actions=defer_terminal_actions,
+                defer_terminal_actions=True,
                 uv_default_index=uv_default_index,
             )
             clear_update_repair_pending()
-            if defer_terminal_actions:
-                _run_terminal_update_actions(before_terminal)
+            before_terminal()
             return create_error_response(
                 "perform_update",
                 ErrorCode.GIT_UPDATE_FAILED,
