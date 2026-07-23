@@ -25,6 +25,7 @@ def _write_fake_project(tmp_path: Path, uv_script: str) -> Path:
         ),
         encoding="utf-8",
     )
+    (repo / "uv.lock").write_text("canonical lock\n", encoding="utf-8")
     uv = repo / "uv"
     uv.write_text(uv_script, encoding="utf-8")
     uv.chmod(0o755)
@@ -48,6 +49,7 @@ def _run_refresh(
             "REPO_DIR": str(repo),
             "UV_CALL_LOG": str(log),
             "UV_SYNC_MAX_ATTEMPTS": "3",
+            "UV_DEFAULT_INDEX": "https://pypi.org/simple",
             **(extra_env or {}),
         },
         text=True,
@@ -370,3 +372,80 @@ def test_native_dbus_comes_from_system_package_and_bluezero_is_uv_managed() -> N
     assert "bluezero==0.9.1" in pyproject
     assert "python3-dbus" in system_packages
     assert "python3-gi" in system_packages
+
+
+def test_refresh_uv_project_passes_selected_index_to_all_uv_commands(tmp_path: Path) -> None:
+    repo = _write_fake_project(
+        tmp_path,
+        """#!/bin/sh
+printf '%s|%s\n' "$UV_DEFAULT_INDEX" "$*" >> "$UV_CALL_LOG"
+if [ "$1" = "sync" ]; then
+    printf 'temporary mirror lock\n' > "$REPO_DIR/uv.lock"
+    exit 0
+fi
+[ "$1" = "venv" ] && exit 0
+[ "$1" = "run" ] && exit 0
+[ "$1" = "pip" ] && exit 0
+exit 3
+""",
+    )
+    log = tmp_path / "uv.log"
+
+    result = _run_refresh(
+        repo,
+        log,
+        {"UV_DEFAULT_INDEX": "https://mirrors.ustc.edu.cn/pypi/simple"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert all(
+        line.startswith("https://mirrors.ustc.edu.cn/pypi/simple|")
+        for line in log.read_text(encoding="utf-8").splitlines()
+    )
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == "canonical lock\n"
+
+
+def test_refresh_uv_project_restores_lock_after_failure(tmp_path: Path) -> None:
+    repo = _write_fake_project(
+        tmp_path,
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$UV_CALL_LOG"
+if [ "$1" = "sync" ]; then
+    printf 'failed mirror lock\n' > "$REPO_DIR/uv.lock"
+    exit 9
+fi
+[ "$1" = "venv" ] && exit 0
+exit 3
+""",
+    )
+    log = tmp_path / "uv.log"
+
+    result = _run_refresh(repo, log, {"UV_SYNC_MAX_ATTEMPTS": "1"})
+
+    assert result.returncode == 9
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == "canonical lock\n"
+
+
+def test_select_uv_default_index_uses_helper_when_environment_is_missing(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    helper = repo / "update_sources.py"
+    helper.write_text(
+        'print("https://mirrors.ustc.edu.cn/pypi/simple")\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'unset UV_DEFAULT_INDEX; source "{UV_ENV_SCRIPT}"; select_uv_default_index; printf "%s" "$UV_DEFAULT_INDEX"',
+        ],
+        cwd=repo,
+        env={**os.environ, "REPO_DIR": str(repo)},
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith("https://mirrors.ustc.edu.cn/pypi/simple")

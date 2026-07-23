@@ -12,6 +12,15 @@ def _cp(stdout: str = "", returncode: int = 0):
     return SimpleNamespace(stdout=stdout, returncode=returncode)
 
 
+def _use_direct_update_sources(monkeypatch):
+    monkeypatch.setattr(
+        git_operations,
+        "prepare_update_sources",
+        lambda _cwd: git_operations.DIRECT_PYPI_INDEX,
+    )
+    monkeypatch.setattr(git_operations, "prepare_git_source", lambda _cwd: "direct")
+
+
 def test_get_current_branch_uses_origin_head_when_detached(monkeypatch):
     calls = []
 
@@ -202,6 +211,7 @@ def test_check_update_release_falls_back_current_version_when_no_tag(monkeypatch
 
 
 def test_perform_update_defers_terminal_actions_and_calls_callback_before_restart(monkeypatch):
+    _use_direct_update_sources(monkeypatch)
     calls = []
     callback_calls = []
 
@@ -226,6 +236,7 @@ def test_perform_update_defers_terminal_actions_and_calls_callback_before_restar
     assert calls[5][0] == [
         "sudo",
         "env",
+        "UV_DEFAULT_INDEX=https://pypi.org/simple",
         "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1",
         "./update.sh",
     ]
@@ -242,6 +253,7 @@ def test_perform_update_defers_terminal_actions_and_calls_callback_before_restar
 
 
 def test_perform_update_calls_callback_right_before_reboot(monkeypatch):
+    _use_direct_update_sources(monkeypatch)
     calls = []
     callback_calls = []
 
@@ -279,6 +291,7 @@ def test_perform_update_calls_callback_right_before_reboot(monkeypatch):
 
 
 def test_perform_update_without_callback_uses_direct_update_script(monkeypatch):
+    _use_direct_update_sources(monkeypatch)
     calls = []
 
     monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
@@ -302,11 +315,12 @@ def test_perform_update_without_callback_uses_direct_update_script(monkeypatch):
         ["git", "fetch", "origin"],
         ["git", "rev-parse", "origin/master"],
         ["git", "reset", "--hard", "origin/master"],
-        ["sudo", "./update.sh"],
+        ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "./update.sh"],
     ]
 
 
 def test_perform_update_skips_install_when_already_at_remote_head(monkeypatch):
+    _use_direct_update_sources(monkeypatch)
     calls = []
     callback_calls = []
 
@@ -341,6 +355,7 @@ def test_perform_update_skips_install_when_already_at_remote_head(monkeypatch):
 
 
 def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
+    _use_direct_update_sources(monkeypatch)
     calls = []
     repair_markers = []
     callback_calls = []
@@ -363,7 +378,7 @@ def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
             return _cp("oldsha\n")
         if (
             cmd
-            == ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"]
+            == ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"]
             and sum(c[0] == cmd for c in calls) == 1
         ):
             raise subprocess.CalledProcessError(1, cmd)
@@ -384,9 +399,9 @@ def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
         ["git", "fetch", "origin"],
         ["git", "rev-parse", "origin/master"],
         ["git", "reset", "--hard", "origin/master"],
-        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
+        ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
         ["git", "reset", "--hard", "oldsha"],
-        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
+        ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
         [
             "env",
             "DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1",
@@ -400,6 +415,7 @@ def test_perform_update_repairs_runtime_after_rollback(monkeypatch):
 
 
 def test_perform_update_leaves_pending_repair_when_rollback_update_fails(monkeypatch):
+    _use_direct_update_sources(monkeypatch)
     calls = []
     repair_markers = []
     callback_calls = []
@@ -423,6 +439,7 @@ def test_perform_update_leaves_pending_repair_when_rollback_update_fails(monkeyp
         if cmd == [
             "sudo",
             "env",
+            "UV_DEFAULT_INDEX=https://pypi.org/simple",
             "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1",
             "./update.sh",
         ]:
@@ -444,7 +461,60 @@ def test_perform_update_leaves_pending_repair_when_rollback_update_fails(monkeyp
         ["git", "fetch", "origin"],
         ["git", "rev-parse", "origin/master"],
         ["git", "reset", "--hard", "origin/master"],
-        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
+        ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
         ["git", "reset", "--hard", "oldsha"],
-        ["sudo", "env", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
+        ["sudo", "env", "UV_DEFAULT_INDEX=https://pypi.org/simple", "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1", "./update.sh"],
     ]
+
+
+def test_check_update_prepares_sources_before_fetch(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        git_operations,
+        "prepare_git_source",
+        lambda cwd: calls.append(("prepare", cwd)) or "direct",
+    )
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+
+    def fake_run(cmd, **kwargs):
+        calls.append(("run", cmd))
+        if cmd == ["git", "rev-parse", "--verify", "origin/master"]:
+            return _cp("")
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("same\n")
+        if cmd == ["git", "rev-parse", "origin/master"]:
+            return _cp("same\n")
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.check_update()
+
+    assert result["needs_update"] is False
+    assert calls[0] == ("prepare", git_operations.GIT_REPO_CWD)
+    assert calls[1] == ("run", ["git", "fetch", "origin"])
+
+
+def test_perform_update_passes_selected_uv_index_to_update_script(monkeypatch):
+    calls = []
+    mirror = "https://mirrors.ustc.edu.cn/pypi/simple"
+
+    monkeypatch.setattr(git_operations, "prepare_update_sources", lambda _cwd: mirror)
+    monkeypatch.setattr(git_operations, "_get_current_branch", lambda: "master")
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _cp("oldsha\n")
+        if cmd == ["git", "rev-parse", "origin/master"]:
+            return _cp("newsha\n")
+        return _cp("")
+
+    monkeypatch.setattr(git_operations.subprocess, "run", fake_run)
+
+    result = git_operations.perform_update()
+
+    assert result["action"] == "perform_update"
+    assert calls[2] == ["git", "fetch", "origin"]
+    assert calls[-1] == ["sudo", "env", f"UV_DEFAULT_INDEX={mirror}", "./update.sh"]

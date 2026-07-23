@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -7,6 +8,11 @@ from python_websocket.error_handler import (
     create_error_response,
 )
 from update_repair import clear_update_repair_pending, mark_update_repair_pending
+from update_sources import (
+    DIRECT_PYPI_INDEX,
+    prepare_git_source,
+    prepare_update_sources,
+)
 
 # Repo root = parent of python_websocket/ so git matches this install, not a hardcoded path.
 GIT_REPO_CWD = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -14,17 +20,34 @@ KERNEL_ROLLBACK_SCRIPT = os.path.join("scripts", "rollback_rpi_kernel_6_12.sh")
 KERNEL_ROLLBACK_REBOOT_DEFERRED = 77
 
 
-def _run_update_script(*, defer_terminal_actions=False):
+def _run_update_script(*, defer_terminal_actions=False, uv_default_index=None):
+    uv_default_index = uv_default_index or DIRECT_PYPI_INDEX
+    cmd = ["sudo", "env", f"UV_DEFAULT_INDEX={uv_default_index}"]
     if defer_terminal_actions:
-        cmd = [
-            "sudo",
-            "env",
-            "DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1",
-            "./update.sh",
-        ]
-    else:
-        cmd = ["sudo", "./update.sh"]
+        cmd.append("DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1")
+    cmd.append("./update.sh")
     return subprocess.run(cmd, cwd=GIT_REPO_CWD, check=True)
+
+
+def _prepare_git_and_uv_sources():
+    try:
+        return prepare_update_sources(GIT_REPO_CWD)
+    except Exception as exc:
+        print(
+            f"Update sources: selection failed; using direct sources: {exc}",
+            file=sys.stderr,
+        )
+        return DIRECT_PYPI_INDEX
+
+
+def _prepare_git_source_only():
+    try:
+        prepare_git_source(GIT_REPO_CWD)
+    except Exception as exc:
+        print(
+            f"Update sources: Git selection failed; using direct route: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _run_terminal_update_actions(before_terminal_action=None):
@@ -179,6 +202,7 @@ def _fallback_version_from_head() -> str:
 
 def check_update():
     try:
+        _prepare_git_source_only()
         subprocess.run(
             ["git", "fetch", "origin"], cwd=GIT_REPO_CWD, check=True
         )
@@ -249,6 +273,7 @@ def check_update():
 
 def perform_update(before_terminal_action=None):
     old_commit = None
+    uv_default_index = DIRECT_PYPI_INDEX
     defer_terminal_actions = before_terminal_action is not None
     before_terminal = _call_once(before_terminal_action)
 
@@ -266,6 +291,7 @@ def perform_update(before_terminal_action=None):
         subprocess.run(
             ["git", "reset", "--hard"], cwd=GIT_REPO_CWD, check=True
         )
+        uv_default_index = _prepare_git_and_uv_sources()
         subprocess.run(
             ["git", "fetch", "origin"], cwd=GIT_REPO_CWD, check=True
         )
@@ -292,7 +318,10 @@ def perform_update(before_terminal_action=None):
 
         # Always run update.sh for git-based updates.
         # setup.sh is reserved for first-time machine provisioning.
-        _run_update_script(defer_terminal_actions=defer_terminal_actions)
+        _run_update_script(
+            defer_terminal_actions=defer_terminal_actions,
+            uv_default_index=uv_default_index,
+        )
         if defer_terminal_actions:
             _run_terminal_update_actions(before_terminal)
 
@@ -313,7 +342,10 @@ def perform_update(before_terminal_action=None):
                 cwd=GIT_REPO_CWD,
                 check=True,
             )
-            _run_update_script(defer_terminal_actions=defer_terminal_actions)
+            _run_update_script(
+                defer_terminal_actions=defer_terminal_actions,
+                uv_default_index=uv_default_index,
+            )
             clear_update_repair_pending()
             if defer_terminal_actions:
                 _run_terminal_update_actions(before_terminal)
