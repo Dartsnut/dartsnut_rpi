@@ -16,6 +16,10 @@ from python_websocket.error_handler import (
     handle_exception,
 )
 from network_utils import get_primary_ipv4
+from runtime.bluetooth_identity import (
+    build_bluetooth_local_name,
+    get_bluetooth_adapter_address,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -80,19 +84,6 @@ def _connect_wifi_error_response(exc: subprocess.CalledProcessError):
     response["command"] = "connect_wifi"
     return response
 
-
-def _ble_mac_last_two_octets(adapter_address: str) -> str:
-    """Return the last two octets of a BLE MAC address as 4 hex chars (e.g. eeff)."""
-    try:
-        s = adapter_address.strip().lower().replace(":", "")
-        if len(s) >= 4:
-            return s[-4:]
-        parts = adapter_address.strip().lower().split(":")
-        if len(parts) >= 2:
-            return (parts[-2] + parts[-1]).replace(":", "")
-    except Exception:
-        pass
-    return "0000"
 
 
 class UARTDevice:
@@ -301,11 +292,11 @@ def start_ble_server(locate_device=None):
     with open("device.json", 'r') as file:
         UARTDevice.device_info = json.load(file)
 
-    # Get the device name: model plus last two octets of BLE MAC for uniqueness
-    base_name = UARTDevice.device_info.get("model", "Dartsnut")
-    adapter_address = list(adapter.Adapter.available())[0].address
-    suffix = _ble_mac_last_two_octets(adapter_address)
-    local_name = f"{base_name}-{suffix}"
+    # Use the shared identity helper so the UI QR and BLE advertisement match.
+    adapter_address = get_bluetooth_adapter_address()
+    if not adapter_address:
+        raise RuntimeError("No Bluetooth adapter available")
+    local_name = build_bluetooth_local_name(UARTDevice.device_info, adapter_address)
     UARTDevice.device_info["ble_mac"] = adapter_address
     # Ensure Bluetooth is unblocked and powered on
     try:

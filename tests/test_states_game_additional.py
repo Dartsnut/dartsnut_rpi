@@ -3,7 +3,7 @@ import signal
 from PIL import Image
 
 import states.game as sgame
-from states.game import InGameState
+from states.game import GameSelectState, InGameState
 
 
 class _Proc:
@@ -58,6 +58,25 @@ class _Ctx:
 
     def transition_to(self, state):
         self.transitions.append(type(state).__name__)
+
+
+def test_empty_game_list_uses_dynamic_bluetooth_qr(monkeypatch):
+    ctx = _Ctx()
+    ctx.game_list = []
+    qr_surface = Image.new("RGB", (128, 128), "black")
+    calls = []
+    monkeypatch.setattr(
+        sgame,
+        "create_bluetooth_qr_for_device",
+        lambda device_info: calls.append(device_info) or qr_surface,
+    )
+
+    state = GameSelectState()
+    state.update(ctx)
+    state.update(ctx)
+
+    assert calls == [{}]
+    assert ctx.display.frames == [qr_surface, qr_surface]
 
 
 def test_ingame_home_on_pixelboard_goes_to_widget(monkeypatch):

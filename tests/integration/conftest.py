@@ -361,7 +361,6 @@ class FakeDisplay:
 
 class FakeAssets:
     def __init__(self) -> None:
-        self.qrcode_image = object()
         self.game_select_image = object()
         self.font24 = None
 
