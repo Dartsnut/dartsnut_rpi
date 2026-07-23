@@ -2,6 +2,8 @@ from PIL import Image
 
 from runtime.snackbar_display import (
     FIRMWARE_UPDATING_MESSAGE,
+    MAIN_SURFACE_HEIGHT,
+    SNACKBAR_HEIGHT,
     SnackbarDisplay,
     wrap_firmware_update_with_snackbar,
 )
@@ -38,22 +40,27 @@ def test_snackbar_animates_and_expires_without_touching_pdm():
     clock.now = 0.1
     display.present()
     halfway = target.frames[-1]
-    assert halfway.getpixel((0, 119)) == (255, 0, 0)
-    assert halfway.getpixel((0, 120)) == (255, 255, 255)
+    halfway_top = MAIN_SURFACE_HEIGHT - (SNACKBAR_HEIGHT // 2)
+    assert halfway.getpixel((0, halfway_top - 1)) == (255, 0, 0)
+    assert halfway.getpixel((0, halfway_top)) == (255, 255, 255)
     assert halfway.crop((0, 128, 128, 160)).tobytes() == pdm.tobytes()
 
     clock.now = 0.2
     display.present()
-    assert target.frames[-1].getpixel((0, 112)) == (255, 255, 255)
+    assert target.frames[-1].getpixel(
+        (0, MAIN_SURFACE_HEIGHT - SNACKBAR_HEIGHT)
+    ) == (255, 255, 255)
 
     clock.now = 4.9
     display.present()
-    assert target.frames[-1].getpixel((0, 120)) == (255, 255, 255)
+    assert target.frames[-1].getpixel((0, 126)) == (255, 255, 255)
 
     clock.now = 4.9
     display.present()
-    assert target.frames[-1].getpixel((0, 112)) == (255, 0, 0)
-    assert target.frames[-1].getpixel((0, 120)) == (255, 255, 255)
+    assert target.frames[-1].getpixel(
+        (0, MAIN_SURFACE_HEIGHT - SNACKBAR_HEIGHT)
+    ) == (255, 0, 0)
+    assert target.frames[-1].getpixel((0, 124)) == (255, 255, 255)
 
     clock.now = 5.0
     display.present()
@@ -105,10 +112,12 @@ def test_new_snackbar_replaces_message_and_restarts_timeout():
     display.show_snackbar("SECOND")
     clock.now = 5.2
     display.present()
-    assert target.frames[-1].getpixel((0, 112)) == (255, 255, 255)
+    assert target.frames[-1].getpixel(
+        (0, MAIN_SURFACE_HEIGHT - SNACKBAR_HEIGHT)
+    ) == (255, 255, 255)
     clock.now = 9.8
     display.present()
-    assert target.frames[-1].getpixel((0, 120)) == (255, 255, 255)
+    assert target.frames[-1].getpixel((0, 126)) == (255, 255, 255)
     clock.now = 9.9
     display.present()
     assert target.frames[-1].getpixel((0, 120)) == (0, 0, 0)
