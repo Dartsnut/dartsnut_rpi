@@ -18,6 +18,12 @@ SNACKBAR_DURATION_SECONDS = 5.0
 SNACKBAR_ANIMATION_SECONDS = 0.2
 CONTROLLER_CONNECTED_MESSAGE = "CONTROLLER CONNECTED"
 FIRMWARE_UPDATING_MESSAGE = "FIRMWARE UPDATING"
+FIRMWARE_UPDATE_FAILED_MESSAGE = "UPDATE FAILED"
+FIRMWARE_UPDATE_FAILED_FALLBACK_CODE = "6004"
+SNACKBAR_DEFAULT_BACKGROUND = (255, 255, 255)
+SNACKBAR_DEFAULT_FOREGROUND = (0, 0, 0)
+SNACKBAR_ERROR_BACKGROUND = (192, 0, 0)
+SNACKBAR_ERROR_FOREGROUND = (255, 255, 255)
 
 
 class SnackbarDisplay:
@@ -43,6 +49,8 @@ class SnackbarDisplay:
         self._dismissed_at: float | None = None
         self._dismiss_start_progress = 0.0
         self._snackbar_token = 0
+        self._background = SNACKBAR_DEFAULT_BACKGROUND
+        self._foreground = SNACKBAR_DEFAULT_FOREGROUND
         self._hide_base_frame: Image.Image | None = None
         self._dirty = False
         self._last_presented_bytes: bytes | None = None
@@ -65,8 +73,15 @@ class SnackbarDisplay:
             self._dirty = True
             return self._present_locked(self._monotonic())
 
-    def show_snackbar(self, message: str, *, persistent: bool = False) -> int | None:
-        """Show or replace a snackbar and return its dismissal token."""
+    def show_snackbar(
+        self,
+        message: str,
+        *,
+        persistent: bool = False,
+        background: tuple[int, int, int] = SNACKBAR_DEFAULT_BACKGROUND,
+        foreground: tuple[int, int, int] = SNACKBAR_DEFAULT_FOREGROUND,
+    ) -> int | None:
+        """Show or replace a styled snackbar and return its dismissal token."""
         normalized = str(message or "").strip().upper()
         if not normalized:
             return None
@@ -77,6 +92,8 @@ class SnackbarDisplay:
             self._persistent = bool(persistent)
             self._dismissed_at = None
             self._dismiss_start_progress = 0.0
+            self._background = background
+            self._foreground = foreground
             self._hide_base_frame = None
             self._dirty = True
             return self._snackbar_token
@@ -171,7 +188,7 @@ class SnackbarDisplay:
             return
 
         snackbar = Image.new(
-            "RGB", (DISPLAY_WIDTH, SNACKBAR_HEIGHT), (255, 255, 255)
+            "RGB", (DISPLAY_WIDTH, SNACKBAR_HEIGHT), self._background
         )
         draw = ImageDraw.Draw(snackbar)
         bbox = draw.textbbox((0, 0), message, font=self._font)
@@ -179,7 +196,9 @@ class SnackbarDisplay:
         text_height = bbox[3] - bbox[1]
         text_x = max(0, (DISPLAY_WIDTH - text_width) // 2 - bbox[0])
         text_y = max(0, (SNACKBAR_HEIGHT - text_height) // 2 - bbox[1])
-        draw.text((text_x, text_y), message, fill=(0, 0, 0), font=self._font)
+        draw.text(
+            (text_x, text_y), message, fill=self._foreground, font=self._font
+        )
 
         destination_y = MAIN_SURFACE_HEIGHT - visible_height
         source_y = SNACKBAR_HEIGHT - visible_height
@@ -214,14 +233,31 @@ def wrap_firmware_update_with_snackbar(
 ) -> Callable[..., Any]:
     """Return an update callable that announces firmware work before blocking."""
 
+    def show_failure(error_code: Any = None) -> None:
+        code = str(error_code or FIRMWARE_UPDATE_FAILED_FALLBACK_CODE).strip()
+        if not code:
+            code = FIRMWARE_UPDATE_FAILED_FALLBACK_CODE
+        display.show_snackbar(
+            f"{FIRMWARE_UPDATE_FAILED_MESSAGE} {code}",
+            background=SNACKBAR_ERROR_BACKGROUND,
+            foreground=SNACKBAR_ERROR_FOREGROUND,
+        )
+
     @wraps(perform_update)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         token = display.show_snackbar(
             FIRMWARE_UPDATING_MESSAGE, persistent=True
         )
         try:
-            return perform_update(*args, **kwargs)
-        finally:
+            result = perform_update(*args, **kwargs)
+        except Exception:
+            show_failure()
+            raise
+
+        if isinstance(result, dict) and result.get("error"):
+            show_failure(result.get("error_code"))
+        else:
             display.dismiss_snackbar(token)
+        return result
 
     return wrapped
