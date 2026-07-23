@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from PIL import Image, ImageDraw, ImageFont
 
+import runtime.bluetooth_qr as bluetooth_qr
 import states.settings as ssettings
 from states.settings import SettingsState
 
@@ -204,10 +205,10 @@ def test_settings_up_down_clamps_index():
 
 
 def test_bluetooth_qr_payload_uses_deep_link_and_url_encodes_name():
-    assert ssettings._bluetooth_qr_payload("PixelDart-272c") == (
+    assert bluetooth_qr.bluetooth_qr_payload("PixelDart-272c") == (
         "dartsnut://device/connect?ble_name=PixelDart-272c"
     )
-    assert ssettings._bluetooth_qr_payload("Pixel Dart/ä") == (
+    assert bluetooth_qr.bluetooth_qr_payload("Pixel Dart/ä") == (
         "dartsnut://device/connect?ble_name=Pixel%20Dart%2F%C3%A4"
     )
 
@@ -231,15 +232,15 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
             ImageDraw.Draw(image).rectangle((8, 8, 16, 16), fill=1)
             return image
 
-    monkeypatch.setattr(ssettings.qrcode, "QRCode", _FakeQr)
+    monkeypatch.setattr(bluetooth_qr.qrcode, "QRCode", _FakeQr)
 
-    surface = ssettings._create_bluetooth_qr_surface("PixelDart-eeff")
+    surface = bluetooth_qr.create_bluetooth_qr_surface("PixelDart-eeff")
 
     assert captured["payload"] == "dartsnut://device/connect?ble_name=PixelDart-eeff"
     assert captured["fit"] is True
     assert (
         captured["kwargs"]["error_correction"]
-        == ssettings.qrcode.constants.ERROR_CORRECT_Q
+        == bluetooth_qr.qrcode.constants.ERROR_CORRECT_Q
     )
     assert captured["kwargs"]["border"] == 2
     assert captured["image_kwargs"] == {
@@ -252,16 +253,16 @@ def test_bluetooth_qr_surface_encodes_payload_and_is_centered(monkeypatch):
     assert surface.getpixel((45, 45)) == (255, 255, 255)
     assert surface.getpixel((64, 64)) == (255, 255, 255)
     assert surface.getpixel((55, 55)) not in ((0, 0, 0), (255, 255, 255))
-    assert ssettings._BLUETOOTH_QR_LOGO.size == (45, 45)
+    assert bluetooth_qr._BLUETOOTH_QR_LOGO.size == (45, 45)
     assert min(
-        ssettings._BLUETOOTH_QR_LOGO.getpixel((x, y))[3]
+        bluetooth_qr._BLUETOOTH_QR_LOGO.getpixel((x, y))[3]
         for y in range(9, 36)
         for x in range(9, 36)
     ) == 255
 
 
 def test_bluetooth_qr_surface_uses_real_qrcode_backend():
-    surface = ssettings._create_bluetooth_qr_surface("PixelDart-eeff")
+    surface = bluetooth_qr.create_bluetooth_qr_surface("PixelDart-eeff")
 
     assert surface.mode == "RGB"
     assert surface.size == (128, 128)
