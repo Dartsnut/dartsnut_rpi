@@ -5,9 +5,11 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import re
 import struct
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 _log = logging.getLogger(__name__)
@@ -80,6 +82,64 @@ EV_KEY_TO_APP = {
 
 _JS_EVENT = struct.Struct("Ihbb")
 _EVDEV_EVENT = struct.Struct("@llHHi")
+_BT_DEVICE_RE = re.compile(r"^hci\d+:([0-9A-Fa-f:]{17})$")
+_INPUT_DEVICE_RE = re.compile(r"^(?:event|js)\d+$")
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        return ""
+
+
+def _event_has_gamepad_buttons(device_path: Path) -> bool:
+    raw = _read_text(device_path / "capabilities" / "key")
+    if not raw:
+        return False
+    try:
+        words = [int(word, 16) for word in reversed(raw.split())]
+    except ValueError:
+        return False
+
+    def has_key(code: int) -> bool:
+        word_index, bit_index = divmod(code, 64)
+        return word_index < len(words) and bool(words[word_index] & (1 << bit_index))
+
+    return any(
+        has_key(code)
+        for code in (BTN_SOUTH, BTN_EAST, BTN_SELECT, BTN_START, BTN_MODE)
+    )
+
+
+def _bluetooth_address(device_path: Path) -> str:
+    uniq = _read_text(device_path / "uniq").upper()
+    if re.fullmatch(r"[0-9A-F]{2}(?::[0-9A-F]{2}){5}", uniq):
+        return uniq
+    for parent in (device_path, *device_path.parents):
+        match = _BT_DEVICE_RE.match(parent.name)
+        if match:
+            return match.group(1).upper()
+    return ""
+
+
+def _bluetooth_controller_identity(
+    path: str, *, sysfs_root: Path = Path("/sys/class/input")
+) -> str | None:
+    """Return a physical Bluetooth controller key for a Linux input node."""
+    node_name = os.path.basename(path)
+    if not _INPUT_DEVICE_RE.match(node_name):
+        return None
+    try:
+        device_path = (sysfs_root / node_name / "device").resolve(strict=True)
+    except OSError:
+        return None
+
+    is_controller = node_name.startswith("js") or _event_has_gamepad_buttons(device_path)
+    if not is_controller:
+        return None
+    address = _bluetooth_address(device_path)
+    return f"bluetooth:{address}" if address else None
 
 
 @dataclass
@@ -98,10 +158,18 @@ class ControllerInputManager:
         js_glob: str = "/dev/input/js*",
         evdev_glob: str = "/dev/input/event*",
         duplicate_press_window_seconds: float = DUPLICATE_PRESS_WINDOW_SECONDS,
+        on_controller_connected: Callable[[], None] | None = None,
+        input_device_identity: Callable[[str], str | None] | None = None,
     ) -> None:
         self.js_glob = js_glob
         self.evdev_glob = evdev_glob
         self.duplicate_press_window_seconds = duplicate_press_window_seconds
+        self.on_controller_connected = on_controller_connected
+        self._input_device_identity = (
+            input_device_identity or _bluetooth_controller_identity
+        )
+        self._controller_identity_by_path: dict[str, str] = {}
+        self._controller_paths_by_identity: dict[str, set[str]] = {}
         self.old_buttons = {button: False for button in APP_BUTTONS}
         self.current = {button: False for button in APP_BUTTONS}
         self.press_counts = {button: 0 for button in APP_BUTTONS}
@@ -169,6 +237,7 @@ class ControllerInputManager:
                 os.set_blocking(input_file.fileno(), False)
                 files[path] = input_file
                 _log.info("controller input opened: %s", path)
+                self._register_controller_path(path)
             except OSError as e:
                 _log.debug("Unable to open controller input %s: %s", path, e)
 
@@ -430,10 +499,41 @@ class ControllerInputManager:
                 return True
         return False
 
+    def _register_controller_path(self, path: str) -> None:
+        try:
+            identity = self._input_device_identity(path)
+        except Exception as e:
+            _log.debug("Unable to identify controller input %s: %s", path, e)
+            return
+        if not identity:
+            return
+
+        paths = self._controller_paths_by_identity.setdefault(identity, set())
+        is_new_connection = not paths
+        paths.add(path)
+        self._controller_identity_by_path[path] = identity
+        if is_new_connection and self.on_controller_connected is not None:
+            try:
+                self.on_controller_connected()
+            except Exception as e:
+                _log.warning("Controller connection callback failed: %s", e)
+
+    def _unregister_controller_path(self, path: str) -> None:
+        identity = self._controller_identity_by_path.pop(path, None)
+        if identity is None:
+            return
+        paths = self._controller_paths_by_identity.get(identity)
+        if paths is None:
+            return
+        paths.discard(path)
+        if not paths:
+            self._controller_paths_by_identity.pop(identity, None)
+
     def _close_input(self, path: str, files: dict[str, BinaryIO]) -> None:
         input_file = files.pop(path, None)
         if input_file is None:
             return
+        self._unregister_controller_path(path)
         try:
             input_file.close()
         except Exception:

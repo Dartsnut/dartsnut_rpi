@@ -309,3 +309,109 @@ def test_disconnected_input_file_is_closed_and_removed(monkeypatch):
 
     assert ev.closed is True
     assert "/dev/input/event0" not in manager.ev_files
+
+
+def test_controller_connection_callback_deduplicates_input_nodes(monkeypatch):
+    js = _FakeInputFile([])
+    event = _FakeInputFile([])
+    notifications = []
+    manager = _manager(
+        monkeypatch,
+        js_files={"/dev/input/js0": js},
+        ev_files={"/dev/input/event4": event},
+    )
+    manager.on_controller_connected = lambda: notifications.append("connected")
+    manager._input_device_identity = lambda path: "bluetooth:AA:BB"  # noqa: SLF001
+
+    manager.poll(_Dartsnut())
+    assert notifications == ["connected"]
+
+    manager.poll(_Dartsnut())
+    assert notifications == ["connected"]
+
+
+def test_controller_connection_callback_fires_after_real_disconnect(monkeypatch):
+    first = _FakeInputFile([OSError("gone")])
+    second = _FakeInputFile([])
+    discovered = {"/dev/input/js0": first}
+    monkeypatch.setattr(
+        "runtime.controller_input.glob.glob",
+        lambda pattern: list(discovered.keys()) if pattern == "/dev/input/js*" else [],
+    )
+    monkeypatch.setattr(
+        "runtime.controller_input.open", lambda path, _mode: discovered[path], raising=False
+    )
+    monkeypatch.setattr("runtime.controller_input.os.set_blocking", lambda _fd, _flag: None)
+    notifications = []
+    manager = ControllerInputManager(
+        on_controller_connected=lambda: notifications.append("connected"),
+        input_device_identity=lambda _path: "bluetooth:AA:BB",
+    )
+
+    manager.poll(_Dartsnut())
+    assert notifications == ["connected"]
+    assert manager.js_files == {}
+
+    discovered["/dev/input/js0"] = second
+    manager.poll(_Dartsnut())
+    assert notifications == ["connected", "connected"]
+
+
+def test_controller_connection_callback_ignores_unidentified_inputs(monkeypatch):
+    keyboard = _FakeInputFile([])
+    notifications = []
+    manager = _manager(
+        monkeypatch, ev_files={"/dev/input/event1": keyboard}
+    )
+    manager.on_controller_connected = lambda: notifications.append("connected")
+    manager._input_device_identity = lambda _path: None  # noqa: SLF001
+
+    manager.poll(_Dartsnut())
+    assert notifications == []
+
+
+def test_bluetooth_controller_identity_uses_uniq_and_gamepad_capabilities(tmp_path):
+    from runtime.controller_input import _bluetooth_controller_identity
+
+    sysfs = tmp_path / "input"
+    js_device = sysfs / "js0" / "device"
+    js_device.mkdir(parents=True)
+    (js_device / "uniq").write_text("aa:bb:cc:dd:ee:ff\n", encoding="utf-8")
+
+    event_device = sysfs / "event4" / "device"
+    (event_device / "capabilities").mkdir(parents=True)
+    (event_device / "uniq").write_text("aa:bb:cc:dd:ee:ff\n", encoding="utf-8")
+    key_words = ["0"] * 5
+    key_words[BTN_SOUTH // 64] = f"{1 << (BTN_SOUTH % 64):x}"
+    (event_device / "capabilities" / "key").write_text(
+        " ".join(reversed(key_words)) + "\n", encoding="utf-8"
+    )
+
+    assert _bluetooth_controller_identity(
+        "/dev/input/js0", sysfs_root=sysfs
+    ) == "bluetooth:AA:BB:CC:DD:EE:FF"
+    assert _bluetooth_controller_identity(
+        "/dev/input/event4", sysfs_root=sysfs
+    ) == "bluetooth:AA:BB:CC:DD:EE:FF"
+
+
+def test_bluetooth_controller_identity_ignores_keyboard_and_wired_joystick(tmp_path):
+    from runtime.controller_input import _bluetooth_controller_identity
+
+    sysfs = tmp_path / "input"
+    keyboard = sysfs / "event1" / "device"
+    (keyboard / "capabilities").mkdir(parents=True)
+    (keyboard / "capabilities" / "key").write_text(
+        f"{1 << KEY_ENTER:x}\n", encoding="utf-8"
+    )
+
+    wired = sysfs / "js0" / "device"
+    wired.mkdir(parents=True)
+    (wired / "uniq").write_text("\n", encoding="utf-8")
+
+    assert _bluetooth_controller_identity(
+        "/dev/input/event1", sysfs_root=sysfs
+    ) is None
+    assert _bluetooth_controller_identity(
+        "/dev/input/js0", sysfs_root=sysfs
+    ) is None
