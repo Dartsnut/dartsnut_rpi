@@ -80,6 +80,11 @@ from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
 from runtime.controller_input import ControllerInputManager
+from runtime.snackbar_display import (
+    CONTROLLER_CONNECTED_MESSAGE,
+    SnackbarDisplay,
+    wrap_firmware_update_with_snackbar,
+)
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
@@ -89,6 +94,7 @@ _log.info("Logging initialized (effective level: %s)", _effective_log_level)
 # Display and device (used by context and dim logic)
 # -----------------------------------------------------------------------------
 dartsnut = Dartsnut()
+display = SnackbarDisplay(dartsnut, font=assets.font8)
 
 # Dim window state (shared with set_brightness and display loop)
 dim_rt = DimWindowRuntime()
@@ -115,7 +121,11 @@ _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
     debounce_seconds=SETTING_SYNC_DEBOUNCE_SECONDS,
 )
-_controller_input_manager = ControllerInputManager()
+_controller_input_manager = ControllerInputManager(
+    on_controller_connected=lambda: display.show_snackbar(
+        CONTROLLER_CONNECTED_MESSAGE
+    )
+)
 
 _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     scan_builder=machine_api.build_remote_bluetooth_list,
@@ -124,7 +134,12 @@ _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     connect_device=machine_api.connect_device_for_remote,
     connected_controllers_provider=machine_api.list_connected_paired_devices,
 )
-_websocket_service_registry = build_default_websocket_registry()
+perform_update_with_snackbar = wrap_firmware_update_with_snackbar(
+    display, machine_api.perform_update
+)
+_websocket_service_registry = build_default_websocket_registry(
+    perform_update=perform_update_with_snackbar
+)
 
 
 def _get_current_brightness_for_transition():
@@ -333,7 +348,7 @@ def set_time_zone(time_zone):
 # App context and lifecycle callbacks
 # -----------------------------------------------------------------------------
 ctx = AppContext(
-    display=dartsnut,
+    display=display,
     assets=assets,
     get_device_info=get_device_info,
     set_brightness=set_brightness,
@@ -439,7 +454,7 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         cancel_game_download=cancel_game_download,
         local_game_version_matches=local_game_version_matches,
         remove_local_game_folder=remove_local_game_folder,
-        perform_update=machine_api.perform_update,
+        perform_update=perform_update_with_snackbar,
         get_version=machine_api.get_version,
         is_reset_in_progress=_is_reset_in_progress,
         on_reset_confirmed=_reset_remote_confirm_event.set,
@@ -784,7 +799,7 @@ def trigger_dim_check():
 
 device_info = get_device_info() or {}
 start_background_subsystems(
-    dartsnut=dartsnut,
+    dartsnut=display,
     device_info=device_info,
     get_version=machine_api.get_version,
     set_volume=set_volume,

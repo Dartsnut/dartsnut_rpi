@@ -30,7 +30,10 @@ def _adapt(action: str, fn: Callable[..., dict[str, Any]], context: str) -> Call
     return wrapped
 
 
-def build_default_websocket_registry() -> WebsocketServiceRegistry:
+def build_default_websocket_registry(
+    *, perform_update: Callable[..., dict[str, Any]] | None = None
+) -> WebsocketServiceRegistry:
+    update_fn = perform_update or gitops.perform_update
     return WebsocketServiceRegistry(
         file_ops=FileOpsPort(
             receive_file=_adapt("send_file", fops.receive_file, "Failed to receive file"),
@@ -93,7 +96,7 @@ def build_default_websocket_registry() -> WebsocketServiceRegistry:
         ),
         git_ops=GitOpsPort(
             check_update=_adapt("check_update", gitops.check_update, "Failed to check update"),
-            perform_update=_adapt("perform_update", gitops.perform_update, "Failed to update"),
+            perform_update=_adapt("perform_update", update_fn, "Failed to update"),
             get_version=_adapt("get_version", gitops.get_version, "Failed to get version"),
         ),
         device_ops=DeviceOpsPort(

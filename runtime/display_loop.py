@@ -199,6 +199,9 @@ def run_main_loop(
             assets.get_current_loading_frame()
 
             update_brightness_transition()
+            present_display = getattr(ctx.display, "present", None)
+            if callable(present_display):
+                present_display()
 
             if ctx.trigger_dim_check:
                 ctx.trigger_dim_check = False
@@ -285,7 +288,7 @@ def run_main_loop(
                 _log.debug("Error writing UI state snapshot: %s", e)
 
             if ctx.locate_device_intv:
-                dartsnut.update_frame_buffer(assets.identify_image)
+                ctx.display.update_frame_buffer(assets.identify_image)
                 ctx.locate_device_intv -= 1
             elif ctx.reload_conf:
                 ctx.reload_conf = False
