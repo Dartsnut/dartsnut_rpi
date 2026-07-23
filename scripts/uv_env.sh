@@ -4,6 +4,62 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 UV_BIN="${REPO_DIR}/uv"
 FORCEFSCK_PATH="${FORCEFSCK_PATH:-/forcefsck}"
 DARTSNUT_UPDATE_PENDING_MARKERS="${DARTSNUT_UPDATE_PENDING_MARKERS:-/boot/firmware/dartsnut_update_pending /boot/dartsnut_update_pending /var/lib/dartsnut/update_pending}"
+UV_LOCK_BACKUP=""
+UV_LOCK_EXISTED=0
+
+
+select_uv_default_index() {
+    if [ -n "${UV_DEFAULT_INDEX:-}" ]; then
+        export UV_DEFAULT_INDEX
+        echo "Using configured uv index: ${UV_DEFAULT_INDEX}"
+        return 0
+    fi
+
+    local selected
+    if selected="$(python3 "${REPO_DIR}/update_sources.py" select-uv)" && [ -n "${selected}" ]; then
+        UV_DEFAULT_INDEX="${selected}"
+    else
+        echo "Warning: uv source selection failed; using PyPI." >&2
+        UV_DEFAULT_INDEX="https://pypi.org/simple"
+    fi
+    export UV_DEFAULT_INDEX
+    echo "Selected uv index: ${UV_DEFAULT_INDEX}"
+}
+
+backup_uv_lock() {
+    local lock_path="${REPO_DIR}/uv.lock"
+    if [ -n "${UV_LOCK_BACKUP}" ]; then
+        return 0
+    fi
+
+    UV_LOCK_BACKUP="$(mktemp)" || return $?
+    if [ -f "${lock_path}" ]; then
+        cp "${lock_path}" "${UV_LOCK_BACKUP}" || {
+            rm -f "${UV_LOCK_BACKUP}"
+            UV_LOCK_BACKUP=""
+            return 1
+        }
+        UV_LOCK_EXISTED=1
+    else
+        UV_LOCK_EXISTED=0
+    fi
+}
+
+restore_uv_lock() {
+    local lock_path="${REPO_DIR}/uv.lock"
+    if [ -z "${UV_LOCK_BACKUP}" ]; then
+        return 0
+    fi
+
+    if [ "${UV_LOCK_EXISTED}" -eq 1 ]; then
+        cp "${UV_LOCK_BACKUP}" "${lock_path}"
+    else
+        rm -f "${lock_path}"
+    fi
+    rm -f "${UV_LOCK_BACKUP}"
+    UV_LOCK_BACKUP=""
+    UV_LOCK_EXISTED=0
+}
 
 resolve_uv_bin() {
     if [ ! -x "${UV_BIN}" ]; then
@@ -228,8 +284,22 @@ setup_uv_project() {
 }
 
 refresh_uv_project() {
+    local status
+
     resolve_uv_bin
+    select_uv_default_index
+    backup_uv_lock || return $?
+    trap 'restore_uv_lock' RETURN INT TERM
+
     rm -rf "${REPO_DIR}/venv0" "${REPO_DIR}/.venv"
-    sync_uv_project || return $?
-    verify_uv_python_packages
+    sync_uv_project
+    status=$?
+    if [ "${status}" -eq 0 ]; then
+        verify_uv_python_packages
+        status=$?
+    fi
+
+    restore_uv_lock
+    trap - RETURN INT TERM
+    return "${status}"
 }
