@@ -1,3 +1,4 @@
+import pytest
 from PIL import Image
 
 from runtime.snackbar_display import (
@@ -123,24 +124,67 @@ def test_new_snackbar_replaces_message_and_restarts_timeout():
     assert target.frames[-1].getpixel((0, 120)) == (0, 0, 0)
 
 
-def test_firmware_wrapper_announces_before_update():
-    events = []
-
-    class _Snackbar:
-        def show_snackbar(self, message):
-            events.append(("snackbar", message))
+def test_firmware_wrapper_stays_visible_until_update_finishes():
+    clock = _Clock()
+    target = _Display()
+    display = SnackbarDisplay(target, monotonic=clock)
+    display.update_frame_buffer(Image.new("RGB", (128, 160), "red"))
 
     def update(*, before_terminal_action=None):
-        events.append(("update", before_terminal_action))
+        clock.now = 30.0
+        display.present()
+        assert target.frames[-1].getpixel((0, 124)) == (255, 255, 255)
         return {"message": "ok"}
 
-    callback = object()
-    wrapped = wrap_firmware_update_with_snackbar(_Snackbar(), update)
-    assert wrapped(before_terminal_action=callback) == {"message": "ok"}
-    assert events == [
-        ("snackbar", FIRMWARE_UPDATING_MESSAGE),
-        ("update", callback),
-    ]
+    wrapped = wrap_firmware_update_with_snackbar(display, update)
+    assert wrapped(before_terminal_action=object()) == {"message": "ok"}
+
+    clock.now = 30.1
+    display.present()
+    assert target.frames[-1].getpixel((0, 124)) == (255, 255, 255)
+    clock.now = 30.2
+    display.present()
+    assert target.frames[-1].getpixel((0, 124)) == (255, 0, 0)
+
+
+def test_firmware_wrapper_dismisses_when_update_raises():
+    clock = _Clock()
+    target = _Display()
+    display = SnackbarDisplay(target, monotonic=clock)
+    display.update_frame_buffer(Image.new("RGB", (128, 160), "red"))
+
+    def update():
+        clock.now = 10.0
+        display.present()
+        assert target.frames[-1].getpixel((0, 124)) == (255, 255, 255)
+        raise RuntimeError("failed")
+
+    wrapped = wrap_firmware_update_with_snackbar(display, update)
+    with pytest.raises(RuntimeError, match="failed"):
+        wrapped()
+
+    clock.now = 10.2
+    display.present()
+    assert target.frames[-1].getpixel((0, 124)) == (255, 0, 0)
+
+
+def test_stale_firmware_completion_does_not_dismiss_newer_snackbar():
+    clock = _Clock()
+    target = _Display()
+    display = SnackbarDisplay(target, monotonic=clock)
+    display.update_frame_buffer(Image.new("RGB", (128, 160), "black"))
+
+    def update():
+        display.show_snackbar("NEWER")
+        return {"message": "ok"}
+
+    wrapped = wrap_firmware_update_with_snackbar(display, update)
+    assert wrapped() == {"message": "ok"}
+    clock.now = 0.2
+    display.present()
+    assert target.frames[-1].getpixel(
+        (0, MAIN_SURFACE_HEIGHT - SNACKBAR_HEIGHT)
+    ) == (255, 255, 255)
 
 
 def test_busy_expiry_retries_the_frame_that_removed_snackbar():

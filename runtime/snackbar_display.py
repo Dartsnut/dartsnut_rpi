@@ -39,6 +39,10 @@ class SnackbarDisplay:
         )
         self._message: str | None = None
         self._shown_at = 0.0
+        self._persistent = False
+        self._dismissed_at: float | None = None
+        self._dismiss_start_progress = 0.0
+        self._snackbar_token = 0
         self._hide_base_frame: Image.Image | None = None
         self._dirty = False
         self._last_presented_bytes: bytes | None = None
@@ -61,15 +65,34 @@ class SnackbarDisplay:
             self._dirty = True
             return self._present_locked(self._monotonic())
 
-    def show_snackbar(self, message: str) -> None:
-        """Show or replace a snackbar and restart its timeout."""
+    def show_snackbar(self, message: str, *, persistent: bool = False) -> int | None:
+        """Show or replace a snackbar and return its dismissal token."""
         normalized = str(message or "").strip().upper()
         if not normalized:
-            return
+            return None
         with self._lock:
+            self._snackbar_token += 1
             self._message = normalized
             self._shown_at = self._monotonic()
+            self._persistent = bool(persistent)
+            self._dismissed_at = None
+            self._dismiss_start_progress = 0.0
+            self._hide_base_frame = None
             self._dirty = True
+            return self._snackbar_token
+
+    def dismiss_snackbar(self, token: int | None = None) -> bool:
+        """Slide out the active snackbar, optionally only if its token matches."""
+        with self._lock:
+            if self._message is None:
+                return False
+            if token is not None and token != self._snackbar_token:
+                return False
+            now = self._monotonic()
+            self._dismiss_start_progress = self._active_progress(now)
+            self._dismissed_at = now
+            self._dirty = True
+            return True
 
     def present(self) -> bool:
         """Advance snackbar animation and retry a previously busy display."""
@@ -103,22 +126,42 @@ class SnackbarDisplay:
         if self._message is None:
             return 0.0
 
+        if self._dismissed_at is not None:
+            dismiss_elapsed = max(0.0, now - self._dismissed_at)
+            if dismiss_elapsed < SNACKBAR_ANIMATION_SECONDS:
+                return self._dismiss_start_progress * (
+                    1.0 - dismiss_elapsed / SNACKBAR_ANIMATION_SECONDS
+                )
+            self._clear_snackbar()
+            return 0.0
+
+        progress = self._active_progress(now)
+        if self._persistent:
+            return progress
+
         elapsed = max(0.0, now - self._shown_at)
-        slide_in_end = SNACKBAR_ANIMATION_SECONDS
-        slide_out_end = SNACKBAR_DURATION_SECONDS
-        hold_end = slide_out_end - SNACKBAR_ANIMATION_SECONDS
-
-        if elapsed < slide_in_end:
-            return elapsed / SNACKBAR_ANIMATION_SECONDS
+        hold_end = SNACKBAR_DURATION_SECONDS - SNACKBAR_ANIMATION_SECONDS
         if elapsed < hold_end:
-            return 1.0
-        if elapsed < slide_out_end:
-            return 1.0 - ((elapsed - hold_end) / SNACKBAR_ANIMATION_SECONDS)
+            return progress
+        if elapsed < SNACKBAR_DURATION_SECONDS:
+            return 1.0 - (
+                (elapsed - hold_end) / SNACKBAR_ANIMATION_SECONDS
+            )
 
+        self._clear_snackbar()
+        return 0.0
+
+    def _active_progress(self, now: float) -> float:
+        elapsed = max(0.0, now - self._shown_at)
+        return min(1.0, elapsed / SNACKBAR_ANIMATION_SECONDS)
+
+    def _clear_snackbar(self) -> None:
         self._message = None
+        self._persistent = False
+        self._dismissed_at = None
+        self._dismiss_start_progress = 0.0
         self._hide_base_frame = self._base_frame.copy()
         self._dirty = True
-        return 0.0
 
     def _draw_snackbar(self, frame: Image.Image, message: str, progress: float) -> None:
         visible_height = max(
@@ -173,7 +216,12 @@ def wrap_firmware_update_with_snackbar(
 
     @wraps(perform_update)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
-        display.show_snackbar(FIRMWARE_UPDATING_MESSAGE)
-        return perform_update(*args, **kwargs)
+        token = display.show_snackbar(
+            FIRMWARE_UPDATING_MESSAGE, persistent=True
+        )
+        try:
+            return perform_update(*args, **kwargs)
+        finally:
+            display.dismiss_snackbar(token)
 
     return wrapped
