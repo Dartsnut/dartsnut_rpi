@@ -270,14 +270,31 @@ def _draw_settings_label(draw, x, y, label, fill, font):
         current_x += len(word) * 6
 
 
+def _controller_name(name):
+    return str(name or "").strip() or "Controller"
+
+
 def _controller_display_label(name, max_chars=18):
-    """Fit a controller name on the narrow display without exposing its MAC."""
-    clean_name = str(name or "").strip() or "Controller"
+    """Fit a static controller name without exposing its MAC."""
+    clean_name = _controller_name(name)
     if len(clean_name) <= max_chars:
         return clean_name
     if max_chars <= 3:
         return clean_name[:max_chars]
     return clean_name[: max_chars - 3] + "..."
+
+
+def _controller_marquee_label(name, elapsed, max_chars=18):
+    """Return a looping marquee window after a short initial pause."""
+    clean_name = _controller_name(name)
+    if len(clean_name) <= max_chars:
+        return clean_name
+    if elapsed < 1.0:
+        return clean_name[:max_chars]
+    cycle = clean_name + "   "
+    offset = int((elapsed - 1.0) / 0.25) % len(cycle)
+    repeats = ((offset + max_chars) // len(cycle)) + 2
+    return (cycle * repeats)[offset : offset + max_chars]
 
 
 class SettingsState(BaseState):
@@ -290,6 +307,8 @@ class SettingsState(BaseState):
         self._connectivity_select_index = 0
         self._controller_selected_key = "scan"
         self._controller_selected_index = 0
+        self._controller_scroll_key = None
+        self._controller_scroll_started_at = 0.0
 
     def name(self) -> str:
         return "settings"
@@ -475,7 +494,7 @@ class SettingsState(BaseState):
                 if snapshot.get("is_scan"):
                     self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
                 continue
-            label = _controller_display_label(row.get("name"))
+            label = self._controller_row_label(row, focused)
             draw.text(
                 (2, y + (SETTINGS_ITEM_HEIGHT - 8) // 2),
                 label,
@@ -490,6 +509,19 @@ class SettingsState(BaseState):
             )
         self._draw_footer(image, draw, ctx, "CONTROLLERS")
         return image
+
+    def _controller_row_label(self, row, focused):
+        if not focused:
+            return _controller_display_label(row.get("name"))
+        key = row.get("key")
+        now = time.time()
+        if key != self._controller_scroll_key:
+            self._controller_scroll_key = key
+            self._controller_scroll_started_at = now
+        return _controller_marquee_label(
+            row.get("name"),
+            now - self._controller_scroll_started_at,
+        )
 
     @staticmethod
     def _draw_level_boxes(draw, y, item_height, dot_count, lit_count):
@@ -681,6 +713,8 @@ class SettingsState(BaseState):
         self._page_mode = _PAGE_CONTROLLERS
         self._controller_selected_key = "scan"
         self._controller_selected_index = 0
+        self._controller_scroll_key = None
+        self._controller_scroll_started_at = 0.0
         manager = getattr(ctx, "bluetooth_controller", None)
         if manager is not None:
             try:

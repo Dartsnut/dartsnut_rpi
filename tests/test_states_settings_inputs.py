@@ -6,7 +6,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 import runtime.bluetooth_qr as bluetooth_qr
 import states.settings as ssettings
-from states.settings import SettingsState, _controller_display_label
+from states.settings import (
+    SettingsState,
+    _controller_display_label,
+    _controller_marquee_label,
+)
 
 
 class _Display:
@@ -401,6 +405,29 @@ def test_controller_display_label_truncates_without_mac_suffix():
 
 def test_controller_display_label_uses_plain_fallback_for_missing_name():
     assert _controller_display_label("") == "Controller"
+
+
+def test_controller_marquee_pauses_then_scrolls_and_wraps():
+    name = "DUALSHOCK 4 Wireless Controller"
+
+    assert _controller_marquee_label(name, 0.9) == name[:18]
+    assert _controller_marquee_label(name, 1.25) == name[1:19]
+    wrapped = _controller_marquee_label(name, 1.0 + len(name) * 0.25)
+    assert wrapped.startswith("   DUALSHOCK")
+    assert len(wrapped) == 18
+
+
+def test_controller_marquee_resets_when_selected_row_changes(monkeypatch):
+    state = SettingsState()
+    first = {"key": "controller:AA", "name": "First Very Long Controller"}
+    second = {"key": "controller:BB", "name": "Second Very Long Controller"}
+    now = [10.0]
+    monkeypatch.setattr(ssettings.time, "time", lambda: now[0])
+
+    assert state._controller_row_label(first, True) == first["name"][:18]
+    now[0] = 11.25
+    assert state._controller_row_label(first, True) == first["name"][1:19]
+    assert state._controller_row_label(second, True) == second["name"][:18]
 
 
 def test_bluetooth_qr_payload_uses_deep_link_and_url_encodes_name():
