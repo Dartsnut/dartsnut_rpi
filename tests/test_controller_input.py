@@ -92,7 +92,7 @@ def _manager(monkeypatch, js_files=None, ev_files=None, now=None):
     monkeypatch.setattr("runtime.controller_input.os.set_blocking", lambda _fd, _flag: None)
     clock = iter(now or [1.0, 1.2, 1.4, 1.6])
     monkeypatch.setattr("runtime.controller_input.time.monotonic", lambda: next(clock))
-    return ControllerInputManager()
+    return ControllerInputManager(input_discovery_clock=lambda: 0.0)
 
 
 def test_gpio_edges_return_pressed_and_current(monkeypatch):
@@ -311,6 +311,37 @@ def test_disconnected_input_file_is_closed_and_removed(monkeypatch):
     assert "/dev/input/event0" not in manager.ev_files
 
 
+def test_input_discovery_is_throttled_but_open_files_are_read_each_poll(monkeypatch):
+    ev = _FakeInputFile([_ev_key(BTN_SOUTH)])
+    now = [0.0]
+    glob_calls = []
+
+    def fake_glob(pattern):
+        glob_calls.append(pattern)
+        return ["/dev/input/event0"] if pattern == "/dev/input/event*" else []
+
+    monkeypatch.setattr("runtime.controller_input.glob.glob", fake_glob)
+    monkeypatch.setattr(
+        "runtime.controller_input.open", lambda _path, _mode: ev, raising=False
+    )
+    monkeypatch.setattr("runtime.controller_input.os.set_blocking", lambda _fd, _flag: None)
+    manager = ControllerInputManager(input_discovery_clock=lambda: now[0])
+
+    first = manager.poll(_Dartsnut(), consume_app_controls=True)
+    assert first.pressed["btn_a"] is True
+    assert len(glob_calls) == 2
+
+    ev._chunks.append(_ev_key(BTN_EAST))
+    now[0] = 0.5
+    second = manager.poll(_Dartsnut(), consume_app_controls=True)
+    assert second.pressed["btn_b"] is True
+    assert len(glob_calls) == 2
+
+    now[0] = 1.0
+    manager.poll(_Dartsnut(), consume_app_controls=True)
+    assert len(glob_calls) == 4
+
+
 def test_controller_connection_callback_deduplicates_input_nodes(monkeypatch):
     js = _FakeInputFile([])
     event = _FakeInputFile([])
@@ -343,9 +374,11 @@ def test_controller_connection_callback_fires_after_real_disconnect(monkeypatch)
     )
     monkeypatch.setattr("runtime.controller_input.os.set_blocking", lambda _fd, _flag: None)
     notifications = []
+    discovery_now = [0.0]
     manager = ControllerInputManager(
         on_controller_connected=lambda: notifications.append("connected"),
         input_device_identity=lambda _path: "bluetooth:AA:BB",
+        input_discovery_clock=lambda: discovery_now[0],
     )
 
     manager.poll(_Dartsnut())
@@ -353,6 +386,7 @@ def test_controller_connection_callback_fires_after_real_disconnect(monkeypatch)
     assert manager.js_files == {}
 
     discovered["/dev/input/js0"] = second
+    discovery_now[0] = 1.0
     manager.poll(_Dartsnut())
     assert notifications == ["connected", "connected"]
 

@@ -2,6 +2,7 @@ import pytest
 from PIL import Image
 
 from runtime.snackbar_display import (
+    CONTROLLER_DISCONNECTED_MESSAGE,
     FIRMWARE_UPDATE_FAILED_FALLBACK_CODE,
     FIRMWARE_UPDATE_FAILED_MESSAGE,
     MAIN_SURFACE_HEIGHT,
@@ -11,6 +12,10 @@ from runtime.snackbar_display import (
     SnackbarDisplay,
     wrap_firmware_update_with_snackbar,
 )
+
+
+def test_controller_disconnected_message_is_available():
+    assert CONTROLLER_DISCONNECTED_MESSAGE == "CONTROLLER DISCONNECTED"
 
 
 class _Clock:

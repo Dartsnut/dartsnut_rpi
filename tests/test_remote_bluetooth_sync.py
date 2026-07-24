@@ -11,34 +11,91 @@ from python_websocket import bluetooth_operations
 from python_websocket.remote_bluetooth_sync_controller import RemoteBluetoothScanController
 
 
-def test_build_remote_bluetooth_list_maps_status(monkeypatch):
+def test_controller_class_filter_accepts_only_gamepad_and_joystick():
+    assert bluetooth_operations._is_game_controller_class(0x2508) is True
+    assert bluetooth_operations._is_game_controller_class(0x2504) is True
+    assert bluetooth_operations._is_game_controller_class("0x00002508") is True
+
+    assert bluetooth_operations._is_game_controller_class(0x2540) is False
+    assert bluetooth_operations._is_game_controller_class(0x2580) is False
+    assert bluetooth_operations._is_game_controller_class(0x250C) is False
+    assert bluetooth_operations._is_game_controller_class(0x2404) is False
+    assert bluetooth_operations._is_game_controller_class(None) is False
+    assert bluetooth_operations._is_game_controller_class("bad") is False
+
+
+def test_build_remote_bluetooth_list_filters_by_class_and_maps_status(monkeypatch):
+    calls = []
+
+    def discover_devices(**kwargs):
+        calls.append(kwargs)
+        return [
+            ("aa:bb:cc:dd:ee:01", "Arbitrary Name", 0x2508),
+            ("AA:BB:CC:DD:EE:02", "Joystick", 0x2504),
+            ("AA:BB:CC:DD:EE:03", "Controller Speaker", 0x2404),
+            ("AA:BB:CC:DD:EE:04", "Controller Keyboard", 0x2540),
+            ("AA:BB:CC:DD:EE:05", "Controller Remote", 0x250C),
+            ("AA:BB:CC:DD:EE:06", "Missing Class", None),
+            ("AA:BB:CC:DD:EE:01", "Duplicate", 0x2508),
+            ("malformed",),
+        ]
+
     monkeypatch.setattr(
         bluetooth_operations.bluetooth,
         "discover_devices",
-        lambda duration, lookup_names: [
-            ("AA:BB:CC:DD:EE:01", "Game Controller"),
-            ("AA:BB:CC:DD:EE:02", "Office Speaker"),
-            ("AA:BB:CC:DD:EE:03", "Keyboard"),
-        ],
+        discover_devices,
     )
-
     monkeypatch.setattr(
-        bluetooth_operations, "get_connection_status", lambda address: "connected" if address.endswith("01") else "disconnected"
+        bluetooth_operations,
+        "get_connection_status",
+        lambda address: "connected" if address.endswith("01") else "disconnected",
     )
 
     result = bluetooth_operations.build_remote_bluetooth_list()
 
+    assert calls == [
+        {"duration": 8, "lookup_names": True, "lookup_class": True}
+    ]
     assert result == [
         {
             "address": "AA:BB:CC:DD:EE:01",
-            "name": "Game Controller",
+            "name": "Arbitrary Name",
             "status": "connected",
         },
         {
             "address": "AA:BB:CC:DD:EE:02",
-            "name": "Office Speaker",
+            "name": "Joystick",
             "status": "disconnected",
         },
+    ]
+
+
+def test_bluetooth_device_properties_parse_class_and_connected_once(monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "Device AA:BB:CC:DD:EE:FF\n"
+                "\tClass: 0x00002508 (9480)\n"
+                "\tConnected: yes\n"
+            ),
+        )
+
+    monkeypatch.setattr(bluetooth_operations.subprocess, "run", run)
+
+    properties = bluetooth_operations._get_bluetooth_device_properties(
+        "AA:BB:CC:DD:EE:FF"
+    )
+
+    assert properties == {"connected": True, "class": 0x2508}
+    assert len(calls) == 1
+    assert calls[0][0] == [
+        "bluetoothctl",
+        "info",
+        "AA:BB:CC:DD:EE:FF",
     ]
 
 
@@ -282,29 +339,129 @@ def test_remote_connect_preserves_scan_result_name_when_upserting_controller():
     assert published[0]["bluetooth"]["scan_results"] == []
 
 
-def test_list_connected_paired_devices_filters_and_dedupes(monkeypatch):
+def test_list_paired_devices_filters_by_class_and_queries_once(monkeypatch):
     monkeypatch.setattr(
         bluetooth_operations,
-        "list_paired_devices",
+        "_list_paired_devices_raw",
+        lambda: {
+            "action": "bluetooth_list",
+            "devices": [
+                {"address": "aa:bb:cc:dd:ee:01", "name": "Pad"},
+                {"address": "AA:BB:CC:DD:EE:01", "name": "Duplicate"},
+                {"address": "11:22:33:44:55:66", "name": "Speaker"},
+            ],
+        },
+    )
+    calls = []
+
+    def properties(address):
+        calls.append(address)
+        return {
+            "AA:BB:CC:DD:EE:01": {"connected": False, "class": 0x2508},
+            "11:22:33:44:55:66": {"connected": True, "class": 0x2404},
+        }[address]
+
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_get_bluetooth_device_properties",
+        properties,
+    )
+
+    assert bluetooth_operations.list_paired_devices() == {
+        "action": "bluetooth_list",
+        "devices": [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad"},
+        ],
+    }
+    assert calls == ["AA:BB:CC:DD:EE:01", "11:22:33:44:55:66"]
+
+
+def test_list_paired_devices_with_status_filters_by_class_and_queries_once(monkeypatch):
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_list_paired_devices_raw",
+        lambda: {
+            "action": "bluetooth_list",
+            "devices": [
+                {"address": "aa:bb:cc:dd:ee:01", "name": "Pad A"},
+                {"address": "AA:BB:CC:DD:EE:01", "name": "Duplicate"},
+                {"address": "11:22:33:44:55:66", "name": "Speaker"},
+                {"address": "22:33:44:55:66:77", "name": "Joystick"},
+            ],
+        },
+    )
+    calls = []
+
+    def properties(address):
+        calls.append(address)
+        return {
+            "AA:BB:CC:DD:EE:01": {"connected": True, "class": 0x2508},
+            "11:22:33:44:55:66": {"connected": True, "class": 0x2404},
+            "22:33:44:55:66:77": {"connected": False, "class": 0x2504},
+        }[address]
+
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_get_bluetooth_device_properties",
+        properties,
+    )
+
+    assert bluetooth_operations.list_paired_devices_with_status() == [
+        {
+            "address": "AA:BB:CC:DD:EE:01",
+            "name": "Pad A",
+            "status": "connected",
+        },
+        {
+            "address": "22:33:44:55:66:77",
+            "name": "Joystick",
+            "status": "disconnected",
+        },
+    ]
+    assert calls == [
+        "AA:BB:CC:DD:EE:01",
+        "11:22:33:44:55:66",
+        "22:33:44:55:66:77",
+    ]
+
+
+def test_list_connected_paired_devices_filters_class_status_and_dedupes(monkeypatch):
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_list_paired_devices_raw",
         lambda: {
             "action": "bluetooth_list",
             "devices": [
                 {"address": "aa:bb:cc:dd:ee:01", "name": "Pad A"},
                 {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A dup"},
                 {"address": "11:22:33:44:55:66", "name": "Speaker"},
+                {"address": "22:33:44:55:66:77", "name": "Idle Pad"},
             ],
         },
     )
+    calls = []
 
-    def status(address):
-        if str(address).upper().endswith("01"):
-            return "connected"
-        return "disconnected"
+    def properties(address):
+        calls.append(address)
+        return {
+            "AA:BB:CC:DD:EE:01": {"connected": True, "class": 0x2508},
+            "11:22:33:44:55:66": {"connected": True, "class": 0x2404},
+            "22:33:44:55:66:77": {"connected": False, "class": 0x2508},
+        }[address]
 
-    monkeypatch.setattr(bluetooth_operations, "get_connection_status", status)
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_get_bluetooth_device_properties",
+        properties,
+    )
 
     assert bluetooth_operations.list_connected_paired_devices() == [
         {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A"},
+    ]
+    assert calls == [
+        "AA:BB:CC:DD:EE:01",
+        "11:22:33:44:55:66",
+        "22:33:44:55:66:77",
     ]
 
 
@@ -439,3 +596,281 @@ def test_remote_connect_controller_failure_sets_error_and_clears_connect():
             "last_error": "Auth failed",
         }
     ]
+
+
+def test_state_snapshot_is_detached_from_controller_state():
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "2026-07-24T00:00:00+00:00",
+        publish_update=lambda payload: None,
+        connect_device=lambda address: (True, ""),
+    )
+    controller._state["controllers"] = [
+        {"name": "Pad", "mac": "AA:BB", "status": "idle"}
+    ]
+
+    snapshot = controller.get_state_snapshot()
+    snapshot["controllers"][0]["status"] = "error"
+
+    assert controller.get_state_snapshot()["controllers"][0]["status"] == "idle"
+
+
+def test_async_remembered_refresh_merges_status_and_preserves_error():
+    published = []
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "2026-07-24T00:00:00+00:00",
+        publish_update=lambda payload: published.append(payload),
+        connect_device=lambda address: (True, ""),
+        remembered_controllers_provider=lambda: [
+            {"address": "AA:BB", "name": "Connected", "status": "connected"},
+            {"address": "CC:DD", "name": "Retry", "status": "idle"},
+        ],
+    )
+    controller._state["controllers"] = [
+        {"name": "Retry", "mac": "CC:DD", "status": "error", "last_error": "No"}
+    ]
+
+    assert controller.refresh_remembered_if_requested() is True
+    for _ in range(100):
+        if published:
+            break
+        threading.Event().wait(0.01)
+
+    snapshot = controller.get_state_snapshot()
+    assert snapshot["controllers"][0]["status"] == "error"
+    assert snapshot["controllers"][0]["last_error"] == "No"
+    assert snapshot["controllers"][1] == {
+        "name": "Connected",
+        "mac": "AA:BB",
+        "status": "connected",
+    }
+
+
+def test_scan_refreshes_remembered_devices_without_blocking_scan_start():
+    scan_gate = threading.Event()
+    published = []
+
+    def scan_builder():
+        scan_gate.wait(timeout=1)
+        return [{"address": "EE:FF", "name": "Found", "status": "idle"}]
+
+    controller = RemoteBluetoothScanController(
+        scan_builder=scan_builder,
+        timestamp_factory=lambda: "2026-07-24T00:00:00+00:00",
+        publish_update=lambda payload: published.append(copy.deepcopy(payload)),
+        connect_device=lambda address: (True, ""),
+        remembered_controllers_provider=lambda: [
+            {"address": "AA:BB", "name": "Paired", "status": "connected"}
+        ],
+    )
+
+    assert controller.start_scan_if_requested() is True
+    assert published[0]["bluetooth"]["is_scan"] is True
+    assert published[0]["bluetooth"]["scan_results"] == []
+    scan_gate.set()
+    for _ in range(100):
+        if len(published) >= 2:
+            break
+        threading.Event().wait(0.01)
+
+    assert published[-1]["bluetooth"]["controllers"] == [
+        {"name": "Paired", "mac": "AA:BB", "status": "connected"}
+    ]
+    assert published[-1]["bluetooth"]["scan_results"] == [
+        {"name": "Found", "mac": "EE:FF", "status": "idle"}
+    ]
+
+
+def test_connection_poll_uses_silent_baseline_then_reports_transitions_once():
+    snapshots = [
+        [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A", "status": "connected"},
+            {"address": "AA:BB:CC:DD:EE:02", "name": "Pad B", "status": "disconnected"},
+        ],
+        [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A", "status": "connected"},
+            {"address": "AA:BB:CC:DD:EE:02", "name": "Pad B", "status": "connected"},
+        ],
+        [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A", "status": "connected"},
+            {"address": "AA:BB:CC:DD:EE:02", "name": "Pad B", "status": "connected"},
+        ],
+        [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A", "status": "disconnected"},
+            {"address": "AA:BB:CC:DD:EE:02", "name": "Pad B", "status": "connected"},
+        ],
+    ]
+    published = []
+    notifications = []
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "",
+        publish_update=lambda payload: published.append(copy.deepcopy(payload)),
+        connect_device=lambda _address: (True, ""),
+        remembered_controllers_provider=lambda: snapshots.pop(0),
+        on_controller_connected=lambda: notifications.append("connected"),
+        on_controller_disconnected=lambda: notifications.append("disconnected"),
+    )
+
+    assert controller.poll_connection_status() is True
+    assert notifications == []
+    assert [row["status"] for row in controller.get_state_snapshot()["controllers"]] == [
+        "connected",
+        "idle",
+    ]
+    assert len(published) == 1
+
+    published.clear()
+    assert controller.poll_connection_status() is True
+    assert notifications == ["connected"]
+    assert [row["status"] for row in controller.get_state_snapshot()["controllers"]] == [
+        "connected",
+        "connected",
+    ]
+    assert len(published) == 1
+
+    published.clear()
+    assert controller.poll_connection_status() is True
+    assert notifications == ["connected"]
+    assert published == []
+
+    assert controller.poll_connection_status() is True
+    assert notifications == ["connected", "disconnected"]
+    assert [row["status"] for row in controller.get_state_snapshot()["controllers"]] == [
+        "idle",
+        "connected",
+    ]
+    assert len(published) == 1
+
+
+def test_connection_poll_notifies_once_for_multiple_same_type_transitions():
+    snapshots = [
+        [],
+        [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad A", "status": "connected"},
+            {"address": "AA:BB:CC:DD:EE:02", "name": "Pad B", "status": "connected"},
+        ],
+    ]
+    notifications = []
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "",
+        publish_update=lambda _payload: None,
+        connect_device=lambda _address: (True, ""),
+        remembered_controllers_provider=lambda: snapshots.pop(0),
+        on_controller_connected=lambda: notifications.append("connected"),
+    )
+
+    assert controller.poll_connection_status() is True
+    assert controller.poll_connection_status() is True
+    assert notifications == ["connected"]
+
+
+def test_failed_connection_polls_preserve_state_and_baseline():
+    response = {
+        "value": [
+            {"address": "AA:BB:CC:DD:EE:01", "name": "Pad", "status": "connected"}
+        ]
+    }
+    published = []
+    notifications = []
+
+    def provider():
+        value = response["value"]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "",
+        publish_update=lambda payload: published.append(copy.deepcopy(payload)),
+        connect_device=lambda _address: (True, ""),
+        remembered_controllers_provider=provider,
+        on_controller_connected=lambda: notifications.append("connected"),
+        on_controller_disconnected=lambda: notifications.append("disconnected"),
+    )
+
+    assert controller.poll_connection_status() is True
+    baseline = controller.get_state_snapshot()
+    published.clear()
+
+    response["value"] = None
+    assert controller.poll_connection_status() is False
+    response["value"] = RuntimeError("BlueZ unavailable")
+    assert controller.poll_connection_status() is False
+
+    assert controller.get_state_snapshot() == baseline
+    assert published == []
+    assert notifications == []
+
+
+def test_unavailable_remembered_provider_does_not_clear_manual_refresh_or_scan():
+    published = []
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [{"address": "BB", "name": "Found", "status": "idle"}],
+        timestamp_factory=lambda: "now",
+        publish_update=lambda payload: published.append(copy.deepcopy(payload)),
+        connect_device=lambda _address: (True, ""),
+        remembered_controllers_provider=lambda: None,
+    )
+    controller._state["controllers"] = [
+        {"name": "Keep", "mac": "AA", "status": "connected"}
+    ]
+
+    assert controller.refresh_remembered_if_requested() is True
+    for _ in range(40):
+        if not controller._refresh_in_progress:
+            break
+        threading.Event().wait(0.01)
+    assert controller.get_state_snapshot()["controllers"] == [
+        {"name": "Keep", "mac": "AA", "status": "connected"}
+    ]
+    assert published == []
+
+    assert controller.start_scan_if_requested() is True
+    for _ in range(40):
+        if len(published) >= 2:
+            break
+        threading.Event().wait(0.01)
+    assert published[-1]["bluetooth"]["controllers"] == [
+        {"name": "Keep", "mac": "AA", "status": "connected"}
+    ]
+    assert published[-1]["bluetooth"]["scan_results"] == [
+        {"name": "Found", "mac": "BB", "status": "idle"}
+    ]
+
+
+def test_paired_status_provider_distinguishes_empty_from_bluez_failure(monkeypatch):
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_list_paired_devices_raw",
+        lambda: {"action": "bluetooth_list", "devices": []},
+    )
+    assert bluetooth_operations.list_paired_devices_with_status() == []
+
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_list_paired_devices_raw",
+        lambda: {"error": {"code": "failed"}},
+    )
+    assert bluetooth_operations.list_paired_devices_with_status() is None
+
+
+def test_paired_status_provider_returns_none_when_device_info_query_fails(monkeypatch):
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_list_paired_devices_raw",
+        lambda: {
+            "action": "bluetooth_list",
+            "devices": [{"address": "AA:BB:CC:DD:EE:01", "name": "Pad"}],
+        },
+    )
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "_get_bluetooth_device_properties",
+        lambda _address: None,
+    )
+
+    assert bluetooth_operations.list_paired_devices_with_status() is None

@@ -82,6 +82,7 @@ from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_D
 from runtime.controller_input import ControllerInputManager
 from runtime.snackbar_display import (
     CONTROLLER_CONNECTED_MESSAGE,
+    CONTROLLER_DISCONNECTED_MESSAGE,
     SnackbarDisplay,
     wrap_firmware_update_with_snackbar,
 )
@@ -121,11 +122,7 @@ _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
     debounce_seconds=SETTING_SYNC_DEBOUNCE_SECONDS,
 )
-_controller_input_manager = ControllerInputManager(
-    on_controller_connected=lambda: display.show_snackbar(
-        CONTROLLER_CONNECTED_MESSAGE
-    )
-)
+_controller_input_manager = ControllerInputManager()
 
 _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     scan_builder=machine_api.build_remote_bluetooth_list,
@@ -133,6 +130,13 @@ _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
     connect_device=machine_api.connect_device_for_remote,
     connected_controllers_provider=machine_api.list_connected_paired_devices,
+    remembered_controllers_provider=machine_api.list_paired_devices_with_status,
+    on_controller_connected=lambda: display.show_snackbar(
+        CONTROLLER_CONNECTED_MESSAGE
+    ),
+    on_controller_disconnected=lambda: display.show_snackbar(
+        CONTROLLER_DISCONNECTED_MESSAGE
+    ),
 )
 perform_update_with_snackbar = wrap_firmware_update_with_snackbar(
     display, machine_api.perform_update
@@ -354,6 +358,7 @@ ctx = AppContext(
     set_brightness=set_brightness,
     set_volume=set_volume,
     set_brightness_hardware=_set_brightness_hardware,
+    bluetooth_controller=_remote_bluetooth_scan_controller,
 )
 ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
@@ -781,6 +786,16 @@ def network_state_remote_loop():
         _network_state_refresh_event.wait(poll_interval_seconds)
 
 
+def controller_status_loop():
+    """Poll BlueZ once per second for paired controller status changes."""
+    while True:
+        try:
+            _remote_bluetooth_scan_controller.poll_connection_status()
+        except Exception as e:
+            _log.warning("Error polling controller connection status: %s", e)
+        time.sleep(1)
+
+
 def request_network_state_refresh():
     """
     Trigger an immediate poll cycle and force a republish of IP/SSID on next run.
@@ -814,6 +829,7 @@ start_background_subsystems(
     trigger_dim_check=trigger_dim_check,
     check_connection_loop=check_connection_loop,
     network_state_remote_loop=network_state_remote_loop,
+    controller_status_loop=controller_status_loop,
     apply_remote_config=_apply_remote_config,
     on_sync_game_ready=_on_sync_game_ready,
     on_remote_connectivity_changed=_on_remote_connectivity_changed,
