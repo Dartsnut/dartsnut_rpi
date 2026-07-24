@@ -70,9 +70,8 @@ def _discover_filtered_devices():
 
 def _get_bluetooth_device_properties(address):
     """Read connection and Class-of-Device properties in one bluetoothctl call."""
-    properties = {"connected": False, "class": None}
     if not address:
-        return properties
+        return None
     try:
         result = subprocess.run(
             ["bluetoothctl", "info", str(address)],
@@ -81,21 +80,22 @@ def _get_bluetooth_device_properties(address):
             check=False,
         )
         if result.returncode != 0:
-            return properties
+            return None
         output = result.stdout or ""
+        properties = {"connected": False, "class": None}
         properties["connected"] = "connected: yes" in output.lower()
         match = _CLASS_LINE_RE.search(output)
         if match:
             properties["class"] = _coerce_device_class(match.group(1))
+        return properties
     except Exception:
-        pass
-    return properties
+        return None
 
 
 def get_connection_status(address):
     """Return ``connected`` or ``disconnected`` for a Bluetooth address."""
     properties = _get_bluetooth_device_properties(address)
-    return "connected" if properties["connected"] else "disconnected"
+    return "connected" if properties and properties["connected"] else "disconnected"
 
 
 def build_remote_bluetooth_list():
@@ -179,6 +179,8 @@ def list_paired_devices():
             continue
         seen.add(address)
         properties = _get_bluetooth_device_properties(address)
+        if properties is None:
+            continue
         if not _is_game_controller_class(properties.get("class")):
             continue
         controllers.append(
@@ -194,10 +196,10 @@ def list_paired_devices_with_status():
     """Return paired devices with normalized addresses and live connection status."""
     paired_result = _list_paired_devices_raw()
     if not isinstance(paired_result, dict) or paired_result.get("error"):
-        return []
+        return None
     devices = paired_result.get("devices")
     if not isinstance(devices, list):
-        return []
+        return None
 
     out = []
     seen = set()
@@ -209,6 +211,8 @@ def list_paired_devices_with_status():
             continue
         seen.add(address)
         properties = _get_bluetooth_device_properties(address)
+        if properties is None:
+            return None
         if not _is_game_controller_class(properties.get("class")):
             continue
         out.append(
@@ -245,6 +249,8 @@ def list_connected_paired_devices():
             continue
         seen.add(address)
         properties = _get_bluetooth_device_properties(address)
+        if properties is None:
+            continue
         if (
             not _is_game_controller_class(properties.get("class"))
             or not properties.get("connected")

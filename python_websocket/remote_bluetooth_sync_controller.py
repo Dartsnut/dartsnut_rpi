@@ -11,6 +11,8 @@ class RemoteBluetoothScanController:
         connect_device,
         connected_controllers_provider=None,
         remembered_controllers_provider=None,
+        on_controller_connected=None,
+        on_controller_disconnected=None,
     ):
         self._scan_builder = scan_builder
         self._timestamp_factory = timestamp_factory
@@ -22,10 +24,13 @@ class RemoteBluetoothScanController:
         self._remembered_controllers_provider = (
             remembered_controllers_provider or (lambda: [])
         )
+        self._on_controller_connected = on_controller_connected
+        self._on_controller_disconnected = on_controller_disconnected
         self._lock = threading.Lock()
         self._in_progress = False
         self._connect_in_progress = False
         self._refresh_in_progress = False
+        self._observed_connected_macs = None
         self._state = {
             "is_scan": False,
             "controllers": [],
@@ -45,6 +50,47 @@ class RemoteBluetoothScanController:
                 return False
             self._refresh_in_progress = True
         threading.Thread(target=self._refresh_worker, daemon=True).start()
+        return True
+
+    def poll_connection_status(self):
+        """Reconcile paired controller state and notify on BlueZ transitions."""
+        remembered = self._load_remembered_controllers()
+        if remembered is None:
+            return False
+
+        connected_macs = {
+            item["mac"]
+            for item in remembered
+            if item.get("status") == "connected"
+        }
+        notify_connected = False
+        notify_disconnected = False
+        payload = None
+
+        with self._lock:
+            previous_connected = self._observed_connected_macs
+            before = copy.deepcopy(self._state)
+            self._merge_remembered_controllers(remembered)
+
+            if previous_connected is not None:
+                for mac in previous_connected - connected_macs:
+                    self._set_connected_controller_idle(mac)
+                notify_connected = bool(connected_macs - previous_connected)
+                notify_disconnected = bool(previous_connected - connected_macs)
+
+            self._observed_connected_macs = connected_macs
+            if self._state != before:
+                payload = {"bluetooth": copy.deepcopy(self._state)}
+
+        if payload is not None:
+            try:
+                self._publish_update(payload)
+            except Exception:
+                pass
+        if notify_connected:
+            self._invoke_callback(self._on_controller_connected)
+        if notify_disconnected:
+            self._invoke_callback(self._on_controller_disconnected)
         return True
 
     def apply_explicit_remote_lists(self, bluetooth_cfg):
@@ -108,6 +154,7 @@ class RemoteBluetoothScanController:
         return True
 
     def _scan_worker(self):
+        remembered = None
         try:
             remembered = self._load_remembered_controllers()
             bluetooth_list = self._normalize_scan_entries(self._scan_builder())
@@ -130,6 +177,8 @@ class RemoteBluetoothScanController:
     def _refresh_worker(self):
         try:
             remembered = self._load_remembered_controllers()
+            if remembered is None:
+                return
             with self._lock:
                 self._merge_remembered_controllers(remembered)
                 payload = {"bluetooth": copy.deepcopy(self._state)}
@@ -142,9 +191,12 @@ class RemoteBluetoothScanController:
 
     def _load_remembered_controllers(self):
         try:
-            return self._normalize_scan_entries(self._remembered_controllers_provider())
+            remembered = self._remembered_controllers_provider()
         except Exception:
-            return []
+            return None
+        if not isinstance(remembered, list):
+            return None
+        return self._normalize_scan_entries(remembered)
 
     def _merge_remembered_controllers(self, remembered):
         if not isinstance(remembered, list):
@@ -171,6 +223,22 @@ class RemoteBluetoothScanController:
                     status = existing.get("status")
                     last_error = str(existing.get("last_error") or "")
             self._upsert_controller(mac, name, status, last_error)
+
+    def _set_connected_controller_idle(self, mac):
+        for item in self._state.get("controllers") or []:
+            if item.get("mac") != mac or item.get("status") != "connected":
+                continue
+            item["status"] = "idle"
+            item.pop("last_error", None)
+            return
+
+    def _invoke_callback(self, callback):
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            pass
 
     def _connect_worker(self, address, source_list):
         try:

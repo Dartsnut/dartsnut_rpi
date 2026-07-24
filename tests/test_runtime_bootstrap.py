@@ -190,6 +190,7 @@ def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeyp
     monkeypatch.setattr(bootstrap.threading, "Thread", _FakeThread)
     monkeypatch.setattr(bootstrap, "get_remote_sync", lambda: _FakeRemoteSync())
     monkeypatch.setattr(bootstrap.assets, "create_loading_image", lambda: object())
+    controller_status_loop = lambda: None
 
     bootstrap.start_background_subsystems(
         dartsnut=_FakeDartsnut(),
@@ -207,6 +208,7 @@ def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeyp
         trigger_dim_check=lambda: None,
         check_connection_loop=lambda: None,
         network_state_remote_loop=lambda: None,
+        controller_status_loop=controller_status_loop,
         apply_remote_config=lambda _cfg: None,
         on_remote_connectivity_changed=lambda _c: None,
         request_network_state_refresh=lambda: None,
@@ -215,7 +217,8 @@ def test_start_background_subsystems_does_not_start_udp_broadcast_thread(monkeyp
 
     target_names = {getattr(target, "__name__", "") for target in started_targets}
     assert "udp_broadcast" not in target_names
-    assert len(started_targets) == 4
+    assert len(started_targets) == 5
+    assert controller_status_loop in started_targets
     assert runtime.awaiting_games_ready_confirmation is True
     assert runtime.startup_settlement_completed is False
     assert runtime.startup_games_ready_confirmed_at is None

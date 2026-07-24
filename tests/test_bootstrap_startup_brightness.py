@@ -66,6 +66,7 @@ def test_startup_volume_failure_does_not_abort_background_subsystems():
             trigger_dim_check=lambda: None,
             check_connection_loop=lambda: None,
             network_state_remote_loop=lambda: None,
+            controller_status_loop=lambda: None,
             apply_remote_config=lambda _config: None,
             on_remote_connectivity_changed=lambda _connected: None,
             request_network_state_refresh=lambda: None,
@@ -73,4 +74,4 @@ def test_startup_volume_failure_does_not_abort_background_subsystems():
             set_startup_volume=failing_startup_volume,
         )
 
-    assert len(started_threads) == 4
+    assert len(started_threads) == 5

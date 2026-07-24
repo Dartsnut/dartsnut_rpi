@@ -27,6 +27,7 @@ APP_BUTTONS = (
 
 AXIS_THRESHOLD = 16000
 DUPLICATE_PRESS_WINDOW_SECONDS = 0.08
+INPUT_DISCOVERY_INTERVAL_SECONDS = 1.0
 
 JS_EVENT_BUTTON = 0x01
 JS_EVENT_AXIS = 0x02
@@ -158,12 +159,19 @@ class ControllerInputManager:
         js_glob: str = "/dev/input/js*",
         evdev_glob: str = "/dev/input/event*",
         duplicate_press_window_seconds: float = DUPLICATE_PRESS_WINDOW_SECONDS,
+        input_discovery_interval_seconds: float = INPUT_DISCOVERY_INTERVAL_SECONDS,
+        input_discovery_clock: Callable[[], float] | None = None,
         on_controller_connected: Callable[[], None] | None = None,
         input_device_identity: Callable[[str], str | None] | None = None,
     ) -> None:
         self.js_glob = js_glob
         self.evdev_glob = evdev_glob
         self.duplicate_press_window_seconds = duplicate_press_window_seconds
+        self.input_discovery_interval_seconds = max(
+            0.0, float(input_discovery_interval_seconds)
+        )
+        self._input_discovery_clock = input_discovery_clock or time.monotonic
+        self._next_input_discovery_at = 0.0
         self.on_controller_connected = on_controller_connected
         self._input_device_identity = (
             input_device_identity or _bluetooth_controller_identity
@@ -190,8 +198,7 @@ class ControllerInputManager:
         pressed = {button: False for button in APP_BUTTONS}
         self.press_counts = {button: 0 for button in APP_BUTTONS}
         self._poll_gpio(dartsnut, pressed)
-        self._open_new_inputs(self.js_glob, self.js_files)
-        self._open_new_inputs(self.evdev_glob, self.ev_files)
+        self._discover_new_inputs_if_due()
         self._poll_js_files(
             pressed,
             consume_app_controls=consume_app_controls,
@@ -207,6 +214,16 @@ class ControllerInputManager:
             current=dict(self.current),
             press_counts=dict(self.press_counts),
         )
+
+    def _discover_new_inputs_if_due(self) -> None:
+        now = self._input_discovery_clock()
+        if now < self._next_input_discovery_at:
+            return
+        self._next_input_discovery_at = (
+            now + self.input_discovery_interval_seconds
+        )
+        self._open_new_inputs(self.js_glob, self.js_files)
+        self._open_new_inputs(self.evdev_glob, self.ev_files)
 
     def _poll_gpio(self, dartsnut: Any, pressed: dict[str, bool]) -> None:
         try:

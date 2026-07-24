@@ -121,6 +121,7 @@ def start_background_subsystems(
     trigger_dim_check: Callable[[], None],
     check_connection_loop: Callable[[], None],
     network_state_remote_loop: Callable[[], None],
+    controller_status_loop: Callable[[], None],
     apply_remote_config: Callable[[Dict[str, Any]], None],
     on_sync_game_ready: Optional[Callable[[Any], None]] = None,
     on_remote_connectivity_changed: Callable[[bool], None],
@@ -176,6 +177,7 @@ def start_background_subsystems(
     ).start()
     threading.Thread(target=check_connection_loop, daemon=True).start()
     threading.Thread(target=network_state_remote_loop, daemon=True).start()
+    threading.Thread(target=controller_status_loop, daemon=True).start()
 
     get_remote_sync().set_connectivity_callback(on_remote_connectivity_changed)
     request_network_state_refresh()
