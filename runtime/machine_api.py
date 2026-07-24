@@ -55,6 +55,12 @@ def build_remote_bluetooth_list():
     return btops.build_remote_bluetooth_list()
 
 
+def list_paired_devices_with_status():
+    btops = importlib.import_module("python_websocket.bluetooth_operations")
+
+    return btops.list_paired_devices_with_status()
+
+
 def list_connected_paired_devices():
     btops = importlib.import_module("python_websocket.bluetooth_operations")
 

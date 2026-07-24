@@ -282,6 +282,39 @@ def test_remote_connect_preserves_scan_result_name_when_upserting_controller():
     assert published[0]["bluetooth"]["scan_results"] == []
 
 
+def test_list_paired_devices_with_status_normalizes_and_dedupes(monkeypatch):
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "list_paired_devices",
+        lambda: {
+            "action": "bluetooth_list",
+            "devices": [
+                {"address": "aa:bb:cc:dd:ee:01", "name": "Pad A"},
+                {"address": "AA:BB:CC:DD:EE:01", "name": "Duplicate"},
+                {"address": "11:22:33:44:55:66", "name": "Pad B"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        bluetooth_operations,
+        "get_connection_status",
+        lambda address: "connected" if address.endswith("01") else "disconnected",
+    )
+
+    assert bluetooth_operations.list_paired_devices_with_status() == [
+        {
+            "address": "AA:BB:CC:DD:EE:01",
+            "name": "Pad A",
+            "status": "connected",
+        },
+        {
+            "address": "11:22:33:44:55:66",
+            "name": "Pad B",
+            "status": "disconnected",
+        },
+    ]
+
+
 def test_list_connected_paired_devices_filters_and_dedupes(monkeypatch):
     monkeypatch.setattr(
         bluetooth_operations,
@@ -438,4 +471,88 @@ def test_remote_connect_controller_failure_sets_error_and_clears_connect():
             "status": "error",
             "last_error": "Auth failed",
         }
+    ]
+
+
+def test_state_snapshot_is_detached_from_controller_state():
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "2026-07-24T00:00:00+00:00",
+        publish_update=lambda payload: None,
+        connect_device=lambda address: (True, ""),
+    )
+    controller._state["controllers"] = [
+        {"name": "Pad", "mac": "AA:BB", "status": "idle"}
+    ]
+
+    snapshot = controller.get_state_snapshot()
+    snapshot["controllers"][0]["status"] = "error"
+
+    assert controller.get_state_snapshot()["controllers"][0]["status"] == "idle"
+
+
+def test_async_remembered_refresh_merges_status_and_preserves_error():
+    published = []
+    controller = RemoteBluetoothScanController(
+        scan_builder=lambda: [],
+        timestamp_factory=lambda: "2026-07-24T00:00:00+00:00",
+        publish_update=lambda payload: published.append(payload),
+        connect_device=lambda address: (True, ""),
+        remembered_controllers_provider=lambda: [
+            {"address": "AA:BB", "name": "Connected", "status": "connected"},
+            {"address": "CC:DD", "name": "Retry", "status": "idle"},
+        ],
+    )
+    controller._state["controllers"] = [
+        {"name": "Retry", "mac": "CC:DD", "status": "error", "last_error": "No"}
+    ]
+
+    assert controller.refresh_remembered_if_requested() is True
+    for _ in range(100):
+        if published:
+            break
+        threading.Event().wait(0.01)
+
+    snapshot = controller.get_state_snapshot()
+    assert snapshot["controllers"][0]["status"] == "error"
+    assert snapshot["controllers"][0]["last_error"] == "No"
+    assert snapshot["controllers"][1] == {
+        "name": "Connected",
+        "mac": "AA:BB",
+        "status": "connected",
+    }
+
+
+def test_scan_refreshes_remembered_devices_without_blocking_scan_start():
+    scan_gate = threading.Event()
+    published = []
+
+    def scan_builder():
+        scan_gate.wait(timeout=1)
+        return [{"address": "EE:FF", "name": "Found", "status": "idle"}]
+
+    controller = RemoteBluetoothScanController(
+        scan_builder=scan_builder,
+        timestamp_factory=lambda: "2026-07-24T00:00:00+00:00",
+        publish_update=lambda payload: published.append(copy.deepcopy(payload)),
+        connect_device=lambda address: (True, ""),
+        remembered_controllers_provider=lambda: [
+            {"address": "AA:BB", "name": "Paired", "status": "connected"}
+        ],
+    )
+
+    assert controller.start_scan_if_requested() is True
+    assert published[0]["bluetooth"]["is_scan"] is True
+    assert published[0]["bluetooth"]["scan_results"] == []
+    scan_gate.set()
+    for _ in range(100):
+        if len(published) >= 2:
+            break
+        threading.Event().wait(0.01)
+
+    assert published[-1]["bluetooth"]["controllers"] == [
+        {"name": "Paired", "mac": "AA:BB", "status": "connected"}
+    ]
+    assert published[-1]["bluetooth"]["scan_results"] == [
+        {"name": "Found", "mac": "EE:FF", "status": "idle"}
     ]

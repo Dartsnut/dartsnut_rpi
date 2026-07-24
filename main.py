@@ -133,6 +133,7 @@ _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
     connect_device=machine_api.connect_device_for_remote,
     connected_controllers_provider=machine_api.list_connected_paired_devices,
+    remembered_controllers_provider=machine_api.list_paired_devices_with_status,
 )
 perform_update_with_snackbar = wrap_firmware_update_with_snackbar(
     display, machine_api.perform_update
@@ -354,6 +355,7 @@ ctx = AppContext(
     set_brightness=set_brightness,
     set_volume=set_volume,
     set_brightness_hardware=_set_brightness_hardware,
+    bluetooth_controller=_remote_bluetooth_scan_controller,
 )
 ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process

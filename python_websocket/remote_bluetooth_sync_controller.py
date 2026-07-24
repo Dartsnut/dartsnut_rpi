@@ -1,3 +1,4 @@
+import copy
 import threading
 
 
@@ -9,6 +10,7 @@ class RemoteBluetoothScanController:
         publish_update,
         connect_device,
         connected_controllers_provider=None,
+        remembered_controllers_provider=None,
     ):
         self._scan_builder = scan_builder
         self._timestamp_factory = timestamp_factory
@@ -17,15 +19,33 @@ class RemoteBluetoothScanController:
         self._connected_controllers_provider = (
             connected_controllers_provider or (lambda: [])
         )
+        self._remembered_controllers_provider = (
+            remembered_controllers_provider or (lambda: [])
+        )
         self._lock = threading.Lock()
         self._in_progress = False
         self._connect_in_progress = False
+        self._refresh_in_progress = False
         self._state = {
             "is_scan": False,
             "controllers": [],
             "scan_results": [],
             "last_scan_at": "",
         }
+
+    def get_state_snapshot(self):
+        """Return a detached state copy safe for rendering from another thread."""
+        with self._lock:
+            return copy.deepcopy(self._state)
+
+    def refresh_remembered_if_requested(self):
+        """Refresh paired controller rows without blocking the caller."""
+        with self._lock:
+            if self._refresh_in_progress:
+                return False
+            self._refresh_in_progress = True
+        threading.Thread(target=self._refresh_worker, daemon=True).start()
+        return True
 
     def apply_explicit_remote_lists(self, bluetooth_cfg):
         """Mirror remote rows into local state when the patch includes explicit keys.
@@ -89,12 +109,14 @@ class RemoteBluetoothScanController:
 
     def _scan_worker(self):
         try:
+            remembered = self._load_remembered_controllers()
             bluetooth_list = self._normalize_scan_entries(self._scan_builder())
         except Exception:
             bluetooth_list = []
         finally:
             try:
                 with self._lock:
+                    self._merge_remembered_controllers(remembered)
                     self._state["scan_results"] = bluetooth_list
                     self._state["is_scan"] = False
                     self._state["last_scan_at"] = self._timestamp_factory()
@@ -104,6 +126,51 @@ class RemoteBluetoothScanController:
                 pass
             with self._lock:
                 self._in_progress = False
+
+    def _refresh_worker(self):
+        try:
+            remembered = self._load_remembered_controllers()
+            with self._lock:
+                self._merge_remembered_controllers(remembered)
+                payload = {"bluetooth": copy.deepcopy(self._state)}
+            self._publish_update(payload)
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                self._refresh_in_progress = False
+
+    def _load_remembered_controllers(self):
+        try:
+            return self._normalize_scan_entries(self._remembered_controllers_provider())
+        except Exception:
+            return []
+
+    def _merge_remembered_controllers(self, remembered):
+        if not isinstance(remembered, list):
+            return
+        for device in remembered:
+            if not isinstance(device, dict):
+                continue
+            mac = str(device.get("mac") or "").strip().upper()
+            if not mac:
+                continue
+            name = str(device.get("name") or "").strip()
+            status = self._normalize_status(device.get("status"))
+            existing = next(
+                (
+                    item
+                    for item in (self._state.get("controllers") or [])
+                    if item.get("mac") == mac
+                ),
+                None,
+            )
+            last_error = ""
+            if existing is not None and existing.get("status") in {"connecting", "error"}:
+                if status != "connected":
+                    status = existing.get("status")
+                    last_error = str(existing.get("last_error") or "")
+            self._upsert_controller(mac, name, status, last_error)
 
     def _connect_worker(self, address, source_list):
         try:

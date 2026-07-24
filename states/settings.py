@@ -236,18 +236,26 @@ SETTINGS_ITEMS = [
     {"name": "Version", "type": "info"},
     {"name": "Brightness", "type": "value"},
     {"name": "Volume", "type": "value"},
-    {"name": "Bluetooth QR", "type": "action"},
+    {"name": "Connectivity", "type": "action"},
     {"name": "Reset device", "type": "action"},
 ]
 
+CONNECTIVITY_ITEMS = [
+    {"name": "Bluetooth QR", "type": "action"},
+    {"name": "Controllers", "type": "action"},
+]
 
 SETTINGS_LIST_MAX_HEIGHT = 128
 SETTINGS_NUM_ROWS = 7
 SETTINGS_ITEM_HEIGHT = SETTINGS_LIST_MAX_HEIGHT // SETTINGS_NUM_ROWS
 SETTINGS_FIRST_SELECTABLE_INDEX = 3
-SETTINGS_BLUETOOTH_QR_INDEX = 5
+SETTINGS_CONNECTIVITY_INDEX = 5
 SETTINGS_RESET_DEVICE_INDEX = 6
+CONTROLLER_VISIBLE_ROWS = 7
 
+_PAGE_SETTINGS = "settings"
+_PAGE_CONNECTIVITY = "connectivity"
+_PAGE_CONTROLLERS = "controllers"
 _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
 
@@ -262,12 +270,35 @@ def _draw_settings_label(draw, x, y, label, fill, font):
         current_x += len(word) * 6
 
 
+def _controller_display_label(name, mac, max_chars=18):
+    """Keep controller rows identifiable on the narrow display."""
+    clean_name = str(name or "").strip() or "Controller"
+    clean_mac = str(mac or "").strip().upper()
+    suffix = clean_mac[-5:] if clean_mac else ""
+    if not suffix:
+        return clean_name[:max_chars]
+    suffix_text = f" {suffix}"
+    available = max_chars - len(suffix_text)
+    if available <= 0:
+        return suffix[-max_chars:]
+    if len(clean_name) > available:
+        if available <= 3:
+            clean_name = clean_name[:available]
+        else:
+            clean_name = clean_name[: available - 3] + "..."
+    return clean_name + suffix_text
+
+
 class SettingsState(BaseState):
-    """Settings menu with value controls, Bluetooth QR, and device reset."""
+    """Three-level settings menu with connectivity and controller management."""
 
     def __init__(self):
+        self._page_mode = _PAGE_SETTINGS
         self._overlay_mode = None
         self._bluetooth_qr_surface = None
+        self._connectivity_select_index = 0
+        self._controller_selected_key = "scan"
+        self._controller_selected_index = 0
 
     def name(self) -> str:
         return "settings"
@@ -276,6 +307,20 @@ class SettingsState(BaseState):
         return self._overlay_mode is not None
 
     def update(self, ctx: AppContext) -> None:
+        if self._page_mode == _PAGE_CONNECTIVITY:
+            settings_image = self._render_connectivity(ctx)
+        elif self._page_mode == _PAGE_CONTROLLERS:
+            settings_image = self._render_controllers(ctx)
+        else:
+            settings_image = self._render_settings(ctx)
+
+        if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
+            settings_image = self._render_bluetooth_qr_overlay(ctx, settings_image)
+        elif self._overlay_mode == _OVERLAY_RESET_CONFIRM:
+            settings_image = self._render_reset_overlay(ctx, settings_image)
+        ctx.display.update_frame_buffer(settings_image)
+
+    def _render_settings(self, ctx):
         settings_image = Image.new("RGB", (128, 160), (0, 0, 0))
         draw = ImageDraw.Draw(settings_image)
         device_info = {}
@@ -332,40 +377,38 @@ class SettingsState(BaseState):
                 draw.rectangle(
                     (0, y, 127, y + item_height - 1), fill=(255, 255, 255)
                 )
+            label_x = 2
             if item["name"] == "IP":
                 color = _settings_wifi_icon_color(ctx)
                 icon_rgba = wifi_icon.convert("RGBA")
                 tinted = _tint_icon_rgba(icon_rgba, color)
                 icon_y = y + (item_height - wifi_icon.size[1]) // 2
-                # "IP" is 2 chars @ 6px = 12; icon after label with 2px gap
                 icon_x = 2 + 12 + 2
                 settings_image.paste(
                     tinted.convert("RGB"), (icon_x, icon_y), tinted.split()[3]
                 )
-                label_x = 2
-            else:
-                label_x = 2
             _draw_settings_label(
-                draw,
-                label_x,
-                ty,
-                item["name"],
-                text_color,
-                font8,
+                draw, label_x, ty, item["name"], text_color, font8
             )
             if item["name"] == "Name":
                 font_6x8 = ctx.assets.font_6x8
                 max_width = 100
                 display_name = device_name
                 if draw.textbbox((0, 0), display_name, font=font_6x8)[2] > max_width:
-                    suffix = "..."
-                    while display_name and draw.textbbox((0, 0), display_name + suffix, font=font_6x8)[2] > max_width:
+                    suffix_text = "..."
+                    while (
+                        display_name
+                        and draw.textbbox(
+                            (0, 0), display_name + suffix_text, font=font_6x8
+                        )[2]
+                        > max_width
+                    ):
                         display_name = display_name[:-1]
-                    display_name = display_name + suffix if display_name != device_name else display_name
+                    if display_name != device_name:
+                        display_name += suffix_text
                 text_width = draw.textbbox((0, 0), display_name, font=font_6x8)[2]
-                value_x = 126 - text_width
                 draw.text(
-                    (value_x, ty),
+                    (126 - text_width, ty),
                     display_name,
                     fill=text_color,
                     font=font_6x8,
@@ -374,108 +417,295 @@ class SettingsState(BaseState):
                 brightness_level = _brightness_raw_to_display_boxes_for_device(
                     brightness, device_info
                 )
-                dot_size = 5
-                dot_count = 9
-                dot_gap = 1
-                bar_width = dot_count * dot_size + (dot_count - 1) * dot_gap
-                bar_right_x = 126
-                bar_left_x = bar_right_x - bar_width + 1
-                dot_top_y = y + (item_height - dot_size) // 2
-                for i in range(dot_count):
-                    dot_x0 = bar_left_x + i * (dot_size + dot_gap)
-                    dot_x1 = dot_x0 + dot_size - 1
-                    lit = i < brightness_level
-                    if lit:
-                        draw.rectangle(
-                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=(255, 101, 140),
-                        )
+                self._draw_level_boxes(draw, y, item_height, 9, brightness_level)
             elif item["name"] == "Volume":
                 volume_level = _volume_raw_to_level(volume)
-                dot_size = 5
-                dot_count = 10
-                dot_gap = 1
-                bar_width = dot_count * dot_size + (dot_count - 1) * dot_gap
-                bar_right_x = 126
-                bar_left_x = bar_right_x - bar_width + 1
-                dot_top_y = y + (item_height - dot_size) // 2
-                for i in range(dot_count):
-                    dot_x0 = bar_left_x + i * (dot_size + dot_gap)
-                    dot_x1 = dot_x0 + dot_size - 1
-                    lit = i < volume_level
-                    if lit:
-                        draw.rectangle(
-                            (dot_x0, dot_top_y, dot_x1, dot_top_y + dot_size - 1),
-                            fill=(255, 101, 140),
-                        )
+                self._draw_level_boxes(draw, y, item_height, 10, volume_level)
             elif item["name"] == "IP":
                 text_width = len(ip_address) * 6
-                value_x = 126 - text_width
                 draw.text(
-                    (value_x, ty),
+                    (126 - text_width, ty),
                     ip_address,
                     fill=text_color,
                     font=font8,
                 )
             elif item["name"] == "Version":
                 text_width = len(version) * 6
-                value_x = 126 - text_width
                 draw.text(
-                    (value_x, ty),
+                    (126 - text_width, ty),
                     version,
                     fill=text_color,
                     font=font8,
                 )
-            elif item["type"] == "action":
-                pass  # label only, no value
-        settings_image.paste(
+        self._draw_footer(settings_image, draw, ctx, "SETTINGS")
+        return settings_image
+
+    def _render_connectivity(self, ctx):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        self._draw_simple_rows(
+            draw,
+            CONNECTIVITY_ITEMS,
+            self._connectivity_select_index,
+            ctx.assets.font8,
+        )
+        self._draw_footer(image, draw, ctx, "CONNECTIVITY")
+        return image
+
+    def _render_controllers(self, ctx):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        snapshot = self._controller_snapshot(ctx)
+        rows = self._controller_rows(snapshot)
+        selected_index = self._sync_controller_selection(rows)
+        start = max(0, selected_index - CONTROLLER_VISIBLE_ROWS + 1)
+        start = min(start, max(0, len(rows) - CONTROLLER_VISIBLE_ROWS))
+        visible = rows[start : start + CONTROLLER_VISIBLE_ROWS]
+        for visible_index, row in enumerate(visible):
+            actual_index = start + visible_index
+            y = visible_index * SETTINGS_ITEM_HEIGHT
+            focused = actual_index == selected_index
+            if focused:
+                draw.rectangle(
+                    (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
+                    fill=(255, 255, 255),
+                )
+            text_color = (0, 0, 0) if focused else (255, 255, 255)
+            if row["type"] == "scan":
+                label = "SCANNING" if snapshot.get("is_scan") else "SCAN"
+                _draw_settings_label(
+                    draw,
+                    2,
+                    y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+                    label,
+                    text_color,
+                    ctx.assets.font8,
+                )
+                if snapshot.get("is_scan"):
+                    self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
+                continue
+            label = _controller_display_label(row.get("name"), row.get("mac"))
+            draw.text(
+                (2, y + (SETTINGS_ITEM_HEIGHT - 8) // 2),
+                label,
+                fill=text_color,
+                font=ctx.assets.font_6x8,
+            )
+            self._draw_controller_status_icon(
+                draw,
+                row.get("status"),
+                119,
+                y + SETTINGS_ITEM_HEIGHT // 2,
+            )
+        self._draw_footer(image, draw, ctx, "CONTROLLERS")
+        return image
+
+    @staticmethod
+    def _draw_level_boxes(draw, y, item_height, dot_count, lit_count):
+        dot_size = 5
+        dot_gap = 1
+        bar_width = dot_count * dot_size + (dot_count - 1) * dot_gap
+        bar_left_x = 126 - bar_width + 1
+        dot_top_y = y + (item_height - dot_size) // 2
+        for i in range(dot_count):
+            if i >= lit_count:
+                continue
+            dot_x0 = bar_left_x + i * (dot_size + dot_gap)
+            draw.rectangle(
+                (dot_x0, dot_top_y, dot_x0 + dot_size - 1, dot_top_y + dot_size - 1),
+                fill=(255, 101, 140),
+            )
+
+    @staticmethod
+    def _draw_simple_rows(draw, items, selected_index, font):
+        for idx, item in enumerate(items):
+            y = idx * SETTINGS_ITEM_HEIGHT
+            focused = idx == selected_index
+            if focused:
+                draw.rectangle(
+                    (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
+                    fill=(255, 255, 255),
+                )
+            color = (0, 0, 0) if focused else (255, 255, 255)
+            _draw_settings_label(
+                draw,
+                2,
+                y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+                item["name"],
+                color,
+                font,
+            )
+
+    @staticmethod
+    def _draw_footer(image, draw, ctx, title):
+        image.paste(
             ctx.assets.settings_icon,
             (24, 128),
             ctx.assets.settings_icon.convert("RGBA"),
         )
-        settings_text = "SETTINGS"
-        settings_text_width = len(settings_text) * 6
-        settings_text_x = int((64 - settings_text_width) / 2)
+        width = len(title) * 6
         draw.text(
-            (settings_text_x, 152),
-            settings_text,
+            (max(0, int((64 - width) / 2)), 152),
+            title,
             fill=(255, 255, 255),
-            font=font8,
+            font=ctx.assets.font8,
         )
-        if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
-            if self._bluetooth_qr_surface is not None:
-                settings_image.paste(self._bluetooth_qr_surface, (0, 0))
-            else:
-                draw.rectangle((0, 0, 127, 127), fill=(0, 0, 0))
-                font_6x8 = ctx.assets.font_6x8
-                for line, line_y in (("BLUETOOTH", 52), ("UNAVAILABLE", 68)):
-                    bbox = draw.textbbox((0, 0), line, font=font_6x8)
-                    line_width = bbox[2] - bbox[0]
-                    draw.text(
-                        ((128 - line_width) / 2, line_y),
-                        line,
-                        fill=(255, 255, 255),
-                        font=font_6x8,
-                    )
-        elif self._overlay_mode == _OVERLAY_RESET_CONFIRM:
-            settings_rgba = settings_image.convert("RGBA")
-            overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 180))
-            settings_rgba.paste(overlay, (0, 0), overlay)
-            overlay_draw = ImageDraw.Draw(settings_rgba)
-            font24 = ctx.assets.font24
-            font_6x8 = ctx.assets.font_6x8
-            line1 = "Reset device?"
-            line2 = "A: Confirm  B: Cancel"
-            bbox1 = overlay_draw.textbbox((0, 0), line1, font=font24)
-            bbox2 = overlay_draw.textbbox((0, 0), line2, font=font_6x8)
-            w1 = bbox1[2] - bbox1[0]
-            w2 = bbox2[2] - bbox2[0]
-            y1 = 64 - (bbox1[3] - bbox1[1]) - 4
-            y2 = 64 + 12  # extra gap between "Reset device?" and second row
-            overlay_draw.text(((128 - w1) / 2, y1), line1, fill="white", font=font24)
-            overlay_draw.text(((128 - w2) / 2, y2), line2, fill="white", font=font_6x8)
-            settings_image = settings_rgba.convert("RGB")
-        ctx.display.update_frame_buffer(settings_image)
+
+    @staticmethod
+    def _draw_activity_icon(draw, cx, cy):
+        phase = int(time.time() * 6) % 4
+        points = [(cx, cy - 4), (cx + 4, cy), (cx, cy + 4), (cx - 4, cy)]
+        for index, (x, y) in enumerate(points):
+            color = (255, 101, 140) if index == phase else (96, 96, 96)
+            draw.rectangle((x - 1, y - 1, x + 1, y + 1), fill=color)
+
+    def _draw_controller_status_icon(self, draw, status, cx, cy):
+        status = str(status or "idle").lower()
+        if status == "connected":
+            color = (0, 255, 0)
+            draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=color)
+            draw.line((cx - 3, cy, cx - 1, cy + 2, cx + 3, cy - 3), fill=color, width=2)
+        elif status == "error":
+            color = (255, 0, 0)
+            draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=color)
+            draw.line((cx, cy - 3, cx, cy + 1), fill=color, width=2)
+            draw.point((cx, cy + 3), fill=color)
+        elif status == "connecting":
+            self._draw_activity_icon(draw, cx, cy)
+
+    def _render_bluetooth_qr_overlay(self, ctx, image):
+        if self._bluetooth_qr_surface is not None:
+            image.paste(self._bluetooth_qr_surface, (0, 0))
+            return image
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 127, 127), fill=(0, 0, 0))
+        for line, line_y in (("BLUETOOTH", 52), ("UNAVAILABLE", 68)):
+            bbox = draw.textbbox((0, 0), line, font=ctx.assets.font_6x8)
+            draw.text(
+                ((128 - (bbox[2] - bbox[0])) / 2, line_y),
+                line,
+                fill=(255, 255, 255),
+                font=ctx.assets.font_6x8,
+            )
+        return image
+
+    @staticmethod
+    def _render_reset_overlay(ctx, image):
+        settings_rgba = image.convert("RGBA")
+        overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 180))
+        settings_rgba.paste(overlay, (0, 0), overlay)
+        draw = ImageDraw.Draw(settings_rgba)
+        line1 = "Reset device?"
+        line2 = "A: Confirm  B: Cancel"
+        bbox1 = draw.textbbox((0, 0), line1, font=ctx.assets.font24)
+        bbox2 = draw.textbbox((0, 0), line2, font=ctx.assets.font_6x8)
+        y1 = 64 - (bbox1[3] - bbox1[1]) - 4
+        draw.text(
+            ((128 - (bbox1[2] - bbox1[0])) / 2, y1),
+            line1,
+            fill="white",
+            font=ctx.assets.font24,
+        )
+        draw.text(
+            ((128 - (bbox2[2] - bbox2[0])) / 2, 76),
+            line2,
+            fill="white",
+            font=ctx.assets.font_6x8,
+        )
+        return settings_rgba.convert("RGB")
+
+    @staticmethod
+    def _controller_snapshot(ctx):
+        manager = getattr(ctx, "bluetooth_controller", None)
+        if manager is None:
+            return {"is_scan": False, "controllers": [], "scan_results": []}
+        try:
+            snapshot = manager.get_state_snapshot()
+            if isinstance(snapshot, dict):
+                return snapshot
+        except Exception:
+            pass
+        return {"is_scan": False, "controllers": [], "scan_results": []}
+
+    @staticmethod
+    def _normalized_controller_row(item, row_type):
+        if not isinstance(item, dict):
+            return None
+        mac = str(item.get("mac") or item.get("address") or "").strip().upper()
+        if not mac:
+            return None
+        status = str(item.get("status") or "idle").strip().lower()
+        if status not in {"idle", "connecting", "connected", "error"}:
+            status = "idle"
+        return {
+            "key": f"{row_type}:{mac}",
+            "type": row_type,
+            "mac": mac,
+            "name": str(item.get("name") or "").strip(),
+            "status": status,
+        }
+
+    def _controller_rows(self, snapshot):
+        rows = []
+        remembered_macs = set()
+        for item in snapshot.get("controllers") or []:
+            row = self._normalized_controller_row(item, "controller")
+            if row is None or row["mac"] in remembered_macs:
+                continue
+            remembered_macs.add(row["mac"])
+            rows.append(row)
+        rows.append({"key": "scan", "type": "scan"})
+        result_macs = set()
+        for item in snapshot.get("scan_results") or []:
+            row = self._normalized_controller_row(item, "result")
+            if (
+                row is None
+                or row["mac"] in remembered_macs
+                or row["mac"] in result_macs
+            ):
+                continue
+            result_macs.add(row["mac"])
+            rows.append(row)
+        return rows
+
+    def _sync_controller_selection(self, rows):
+        keys = [row["key"] for row in rows]
+        if self._controller_selected_key in keys:
+            index = keys.index(self._controller_selected_key)
+        else:
+            index = min(self._controller_selected_index, len(rows) - 1)
+            index = max(0, index)
+            self._controller_selected_key = rows[index]["key"]
+        self._controller_selected_index = index
+        return index
+
+    def _move_controller_selection(self, ctx, delta):
+        rows = self._controller_rows(self._controller_snapshot(ctx))
+        index = self._sync_controller_selection(rows)
+        index = _clamp(index + delta, 0, len(rows) - 1)
+        self._controller_selected_index = index
+        self._controller_selected_key = rows[index]["key"]
+
+    def _enter_controllers(self, ctx):
+        self._page_mode = _PAGE_CONTROLLERS
+        self._controller_selected_key = "scan"
+        self._controller_selected_index = 0
+        manager = getattr(ctx, "bluetooth_controller", None)
+        if manager is not None:
+            try:
+                manager.refresh_remembered_if_requested()
+            except Exception:
+                pass
+
+    def _open_bluetooth_qr(self, ctx):
+        self._bluetooth_qr_surface = None
+        try:
+            local_name = resolve_bluetooth_local_name(ctx.get_device_info())
+            if local_name:
+                self._bluetooth_qr_surface = _create_bluetooth_qr_surface(local_name)
+        except Exception:
+            self._bluetooth_qr_surface = None
+        self._overlay_mode = _OVERLAY_BLUETOOTH_QR
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:
         if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
@@ -493,21 +723,91 @@ class SettingsState(BaseState):
                 self._overlay_mode = None
             return
 
-        if buttons.get("btn_b") or buttons.get("btn_home"):
-            from states.menu import MenuState
-            ctx.transition_to(MenuState())
-        elif (
-            buttons.get("btn_a")
-            and ctx.setting_select_index == SETTINGS_BLUETOOTH_QR_INDEX
-        ):
-            self._bluetooth_qr_surface = None
+        if buttons.get("btn_home"):
+            self._transition_to_main_menu(ctx)
+            return
+        if buttons.get("btn_b"):
+            if self._page_mode == _PAGE_CONTROLLERS:
+                self._page_mode = _PAGE_CONNECTIVITY
+                self._connectivity_select_index = 1
+            elif self._page_mode == _PAGE_CONNECTIVITY:
+                self._page_mode = _PAGE_SETTINGS
+                ctx.setting_select_index = SETTINGS_CONNECTIVITY_INDEX
+            else:
+                self._transition_to_main_menu(ctx)
+            return
+
+        if self._page_mode == _PAGE_CONTROLLERS:
+            self._handle_controllers_input(ctx, buttons)
+        elif self._page_mode == _PAGE_CONNECTIVITY:
+            self._handle_connectivity_input(ctx, buttons)
+        else:
+            self._handle_settings_input(ctx, buttons)
+
+    @staticmethod
+    def _transition_to_main_menu(ctx):
+        from states.menu import MenuState
+
+        ctx.transition_to(MenuState())
+
+    def _handle_connectivity_input(self, ctx, buttons):
+        if buttons.get("btn_a"):
+            if self._connectivity_select_index == 0:
+                self._open_bluetooth_qr(ctx)
+            else:
+                self._enter_controllers(ctx)
+        elif buttons.get("btn_up"):
+            self._connectivity_select_index = max(
+                0, self._connectivity_select_index - 1
+            )
+        elif buttons.get("btn_down"):
+            self._connectivity_select_index = min(
+                len(CONNECTIVITY_ITEMS) - 1,
+                self._connectivity_select_index + 1,
+            )
+
+    def _handle_controllers_input(self, ctx, buttons):
+        if buttons.get("btn_up"):
+            self._move_controller_selection(ctx, -1)
+            return
+        if buttons.get("btn_down"):
+            self._move_controller_selection(ctx, 1)
+            return
+        if not buttons.get("btn_a"):
+            return
+
+        snapshot = self._controller_snapshot(ctx)
+        rows = self._controller_rows(snapshot)
+        selected_index = self._sync_controller_selection(rows)
+        row = rows[selected_index]
+        manager = getattr(ctx, "bluetooth_controller", None)
+        if manager is None:
+            return
+        if row["type"] == "scan":
+            if snapshot.get("is_scan"):
+                return
             try:
-                local_name = resolve_bluetooth_local_name(ctx.get_device_info())
-                if local_name:
-                    self._bluetooth_qr_surface = _create_bluetooth_qr_surface(local_name)
+                manager.start_scan_if_requested()
             except Exception:
-                self._bluetooth_qr_surface = None
-            self._overlay_mode = _OVERLAY_BLUETOOTH_QR
+                pass
+            return
+        if row.get("status") in {"connected", "connecting"}:
+            return
+        source = "controllers" if row["type"] == "controller" else "scan_results"
+        try:
+            started = manager.start_connect_if_requested(row["mac"], source)
+        except Exception:
+            started = False
+        if started and row["type"] == "result":
+            self._controller_selected_key = f"controller:{row['mac']}"
+
+    def _handle_settings_input(self, ctx, buttons):
+        if (
+            buttons.get("btn_a")
+            and ctx.setting_select_index == SETTINGS_CONNECTIVITY_INDEX
+        ):
+            self._page_mode = _PAGE_CONNECTIVITY
+            self._connectivity_select_index = 0
         elif (
             buttons.get("btn_a")
             and ctx.setting_select_index == SETTINGS_RESET_DEVICE_INDEX
@@ -520,14 +820,13 @@ class SettingsState(BaseState):
                 raw_brightness = int(di.get("brightness", "50"))
                 level = _brightness_raw_to_level_for_device(raw_brightness, di)
                 new_level = max(1, level - 1)
-                new_brightness = _brightness_level_to_raw_for_device(new_level, di)
-                ctx.set_brightness(new_brightness)
+                ctx.set_brightness(
+                    _brightness_level_to_raw_for_device(new_level, di)
+                )
             elif idx == 4:
                 raw_volume = int(di.get("volume", "50"))
                 level = _volume_raw_to_level(raw_volume)
-                new_level = max(0, level - 1)
-                new_volume = _volume_level_to_raw(new_level)
-                ctx.set_volume(new_volume)
+                ctx.set_volume(_volume_level_to_raw(max(0, level - 1)))
         elif buttons.get("btn_right"):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
@@ -535,14 +834,14 @@ class SettingsState(BaseState):
                 raw_brightness = int(di.get("brightness", "50"))
                 level = _brightness_raw_to_level_for_device(raw_brightness, di)
                 new_level = min(len(_brightness_values_for_device(di)), level + 1)
-                new_brightness = _brightness_level_to_raw_for_device(new_level, di)
-                ctx.set_brightness(new_brightness)
+                ctx.set_brightness(
+                    _brightness_level_to_raw_for_device(new_level, di)
+                )
             elif idx == 4:
                 raw_volume = int(di.get("volume", "50"))
                 level = _volume_raw_to_level(raw_volume)
                 new_level = min(len(VOLUME_LEVEL_VALUES) - 1, level + 1)
-                new_volume = _volume_level_to_raw(new_level)
-                ctx.set_volume(new_volume)
+                ctx.set_volume(_volume_level_to_raw(new_level))
         elif buttons.get("btn_up"):
             ctx.setting_select_index = max(
                 SETTINGS_FIRST_SELECTABLE_INDEX,
