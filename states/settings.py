@@ -492,12 +492,8 @@ class SettingsState(BaseState):
                     ctx.assets.font8,
                 )
                 if snapshot.get("is_scan"):
-                    self._draw_status_dot(
-                        draw,
-                        119,
-                        y + SETTINGS_ITEM_HEIGHT // 2,
-                        (255, 101, 140),
-                        pulse=True,
+                    self._draw_activity_icon(
+                        draw, 119, y + SETTINGS_ITEM_HEIGHT // 2
                     )
                 continue
             label = self._controller_row_label(row, focused)
@@ -581,16 +577,24 @@ class SettingsState(BaseState):
         )
 
     @staticmethod
-    def _draw_status_dot(draw, cx, cy, color, pulse=False):
-        if pulse and int(time.time() * 4) % 2:
-            color = tuple(max(32, channel // 3) for channel in color)
+    def _draw_activity_icon(draw, cx, cy):
+        phase = int(time.time() * 6) % 4
+        points = [(cx, cy - 4), (cx + 4, cy), (cx, cy + 4), (cx - 4, cy)]
+        for index, (x, y) in enumerate(points):
+            color = (255, 101, 140) if index == phase else (96, 96, 96)
+            draw.rectangle((x - 1, y - 1, x + 1, y + 1), fill=color)
+
+    @staticmethod
+    def _draw_status_dot(draw, cx, cy, color):
         draw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=color)
 
     def _draw_controller_status_icon(self, draw, status, cx, cy):
         status = str(status or "idle").lower()
+        if status == "connecting":
+            self._draw_activity_icon(draw, cx, cy)
+            return
         colors = {
             "idle": (96, 96, 96),
-            "connecting": (255, 101, 140),
             "connected": (0, 255, 0),
             "error": (255, 0, 0),
         }
@@ -599,7 +603,6 @@ class SettingsState(BaseState):
             cx,
             cy,
             colors.get(status, colors["idle"]),
-            pulse=status == "connecting",
         )
 
     def _render_bluetooth_qr_overlay(self, ctx, image):

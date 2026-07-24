@@ -396,6 +396,20 @@ def test_controller_render_shows_connected_error_and_activity_colors():
     assert (255, 101, 140) in colors
 
 
+def test_connecting_status_uses_four_dot_activity_indicator(monkeypatch):
+    state = SettingsState()
+    image = Image.new("RGB", (24, 24), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    monkeypatch.setattr(ssettings.time, "time", lambda: 0.0)
+
+    state._draw_controller_status_icon(draw, "connecting", 12, 12)
+
+    assert image.getpixel((12, 8)) == (255, 101, 140)
+    assert image.getpixel((16, 12)) == (96, 96, 96)
+    assert image.getpixel((12, 16)) == (96, 96, 96)
+    assert image.getpixel((8, 12)) == (96, 96, 96)
+
+
 def test_controller_status_icon_is_a_small_colored_dot():
     state = SettingsState()
     image = Image.new("RGB", (20, 20), (0, 0, 0))
