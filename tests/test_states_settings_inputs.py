@@ -396,6 +396,24 @@ def test_controller_render_shows_connected_error_and_activity_colors():
     assert (255, 101, 140) in colors
 
 
+def test_controller_status_icon_is_a_small_colored_dot():
+    state = SettingsState()
+    image = Image.new("RGB", (20, 20), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+
+    state._draw_controller_status_icon(draw, "connected", 10, 10)
+
+    green_pixels = [
+        (x, y)
+        for y in range(20)
+        for x in range(20)
+        if image.getpixel((x, y)) == (0, 255, 0)
+    ]
+    assert green_pixels
+    assert all(8 <= x <= 12 and 8 <= y <= 12 for x, y in green_pixels)
+    assert len(green_pixels) <= 25
+
+
 def test_controller_display_label_truncates_without_mac_suffix():
     label = _controller_display_label("An Extremely Long Controller Name")
 

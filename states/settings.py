@@ -492,7 +492,13 @@ class SettingsState(BaseState):
                     ctx.assets.font8,
                 )
                 if snapshot.get("is_scan"):
-                    self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
+                    self._draw_status_dot(
+                        draw,
+                        119,
+                        y + SETTINGS_ITEM_HEIGHT // 2,
+                        (255, 101, 140),
+                        pulse=True,
+                    )
                 continue
             label = self._controller_row_label(row, focused)
             draw.text(
@@ -575,26 +581,26 @@ class SettingsState(BaseState):
         )
 
     @staticmethod
-    def _draw_activity_icon(draw, cx, cy):
-        phase = int(time.time() * 6) % 4
-        points = [(cx, cy - 4), (cx + 4, cy), (cx, cy + 4), (cx - 4, cy)]
-        for index, (x, y) in enumerate(points):
-            color = (255, 101, 140) if index == phase else (96, 96, 96)
-            draw.rectangle((x - 1, y - 1, x + 1, y + 1), fill=color)
+    def _draw_status_dot(draw, cx, cy, color, pulse=False):
+        if pulse and int(time.time() * 4) % 2:
+            color = tuple(max(32, channel // 3) for channel in color)
+        draw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=color)
 
     def _draw_controller_status_icon(self, draw, status, cx, cy):
         status = str(status or "idle").lower()
-        if status == "connected":
-            color = (0, 255, 0)
-            draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=color)
-            draw.line((cx - 3, cy, cx - 1, cy + 2, cx + 3, cy - 3), fill=color, width=2)
-        elif status == "error":
-            color = (255, 0, 0)
-            draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=color)
-            draw.line((cx, cy - 3, cx, cy + 1), fill=color, width=2)
-            draw.point((cx, cy + 3), fill=color)
-        elif status == "connecting":
-            self._draw_activity_icon(draw, cx, cy)
+        colors = {
+            "idle": (96, 96, 96),
+            "connecting": (255, 101, 140),
+            "connected": (0, 255, 0),
+            "error": (255, 0, 0),
+        }
+        self._draw_status_dot(
+            draw,
+            cx,
+            cy,
+            colors.get(status, colors["idle"]),
+            pulse=status == "connecting",
+        )
 
     def _render_bluetooth_qr_overlay(self, ctx, image):
         if self._bluetooth_qr_surface is not None:
