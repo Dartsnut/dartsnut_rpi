@@ -392,14 +392,15 @@ def test_controller_render_shows_connected_error_and_activity_colors():
     assert (255, 101, 140) in colors
 
 
-def test_controller_display_label_truncates_and_keeps_mac_suffix():
-    label = _controller_display_label(
-        "An Extremely Long Controller Name", "AA:BB:CC:DD:EE:FF"
-    )
+def test_controller_display_label_truncates_without_mac_suffix():
+    label = _controller_display_label("An Extremely Long Controller Name")
 
-    assert len(label) <= 18
-    assert label.endswith("EE:FF")
-    assert "..." in label
+    assert label == "An Extremely Lo..."
+    assert ":" not in label
+
+
+def test_controller_display_label_uses_plain_fallback_for_missing_name():
+    assert _controller_display_label("") == "Controller"
 
 
 def test_bluetooth_qr_payload_uses_deep_link_and_url_encodes_name():

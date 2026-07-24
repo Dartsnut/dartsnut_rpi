@@ -270,23 +270,14 @@ def _draw_settings_label(draw, x, y, label, fill, font):
         current_x += len(word) * 6
 
 
-def _controller_display_label(name, mac, max_chars=18):
-    """Keep controller rows identifiable on the narrow display."""
+def _controller_display_label(name, max_chars=18):
+    """Fit a controller name on the narrow display without exposing its MAC."""
     clean_name = str(name or "").strip() or "Controller"
-    clean_mac = str(mac or "").strip().upper()
-    suffix = clean_mac[-5:] if clean_mac else ""
-    if not suffix:
+    if len(clean_name) <= max_chars:
+        return clean_name
+    if max_chars <= 3:
         return clean_name[:max_chars]
-    suffix_text = f" {suffix}"
-    available = max_chars - len(suffix_text)
-    if available <= 0:
-        return suffix[-max_chars:]
-    if len(clean_name) > available:
-        if available <= 3:
-            clean_name = clean_name[:available]
-        else:
-            clean_name = clean_name[: available - 3] + "..."
-    return clean_name + suffix_text
+    return clean_name[: max_chars - 3] + "..."
 
 
 class SettingsState(BaseState):
@@ -484,7 +475,7 @@ class SettingsState(BaseState):
                 if snapshot.get("is_scan"):
                     self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
                 continue
-            label = _controller_display_label(row.get("name"), row.get("mac"))
+            label = _controller_display_label(row.get("name"))
             draw.text(
                 (2, y + (SETTINGS_ITEM_HEIGHT - 8) // 2),
                 label,
