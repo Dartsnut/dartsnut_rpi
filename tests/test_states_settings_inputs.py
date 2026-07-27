@@ -694,7 +694,22 @@ def test_wifi_password_editor_cycles_moves_trims_and_connects():
     state.handle_input(ctx, {"btn_up": True})
     state.handle_input(ctx, {"btn_a": True})
 
-    assert ctx.wifi_controller.connect_calls == [("家庭网络", "!\"", True)]
+    assert ctx.wifi_controller.connect_calls == [("家庭网络", "AB", True)]
+
+
+def test_wifi_password_character_order_prioritizes_common_input():
+    characters = ssettings.WIFI_PASSWORD_CHARACTERS
+    expected_prefix = (
+        " "
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        + ssettings.WIFI_PASSWORD_FREQUENT_SPECIALS
+    )
+
+    assert characters.startswith(expected_prefix)
+    assert len(characters) == 95
+    assert len(set(characters)) == 95
+    assert set(characters) == {chr(code) for code in range(32, 127)}
 
 
 def test_wifi_password_character_wrap_and_cursor_clamp():
