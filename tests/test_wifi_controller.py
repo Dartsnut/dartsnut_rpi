@@ -76,3 +76,24 @@ def test_wifi_controller_suppresses_duplicate_connect_request():
 
     assert snapshot["connection_status"] == "success"
     assert snapshot["connection_ssid"] == "Home"
+
+
+def test_wifi_controller_separates_connected_network_from_scan_results():
+    controller = WifiController(
+        scan_networks=lambda: [
+            {"ssid": "Home", "rssi": 90, "secured": True, "connected": True},
+            {"ssid": "Guest", "rssi": 70, "secured": False, "connected": False},
+            {"ssid": "Home", "rssi": 60, "secured": True, "connected": False},
+        ],
+        connect_network=lambda *_args: None,
+    )
+
+    assert controller.start_scan_if_requested() is True
+    for _ in range(100):
+        snapshot = controller.get_state_snapshot()
+        if not snapshot["is_scan"]:
+            break
+        threading.Event().wait(0.01)
+
+    assert snapshot["connected_network"]["ssid"] == "Home"
+    assert [network["ssid"] for network in snapshot["networks"]] == ["Guest"]

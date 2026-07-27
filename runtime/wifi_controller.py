@@ -40,6 +40,7 @@ class WifiController:
         self._state: dict[str, Any] = {
             "is_scan": False,
             "networks": [],
+            "connected_network": None,
             "scan_error": "",
             "connection_status": "idle",
             "connection_ssid": "",
@@ -61,14 +62,26 @@ class WifiController:
 
     def _scan_worker(self) -> None:
         try:
-            networks = self._scan_networks()
+            scanned = list(self._scan_networks())
+            connected_network = next(
+                (dict(network) for network in scanned if network.get("connected")),
+                None,
+            )
+            connected_ssid = str((connected_network or {}).get("ssid") or "")
+            networks = [
+                dict(network)
+                for network in scanned
+                if not connected_ssid or str(network.get("ssid") or "") != connected_ssid
+            ]
             error = ""
         except Exception:
             networks = None
+            connected_network = None
             error = "Unable to scan"
         with self._lock:
             if networks is not None:
-                self._state["networks"] = list(networks)
+                self._state["networks"] = networks
+                self._state["connected_network"] = connected_network
             self._state["scan_error"] = error
             self._state["is_scan"] = False
 

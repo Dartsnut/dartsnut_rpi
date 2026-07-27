@@ -32,25 +32,31 @@ def parse_wifi_scan_output(output: str) -> list[dict[str, Any]]:
     strongest_by_ssid: dict[str, dict[str, Any]] = {}
     for line in str(output or "").splitlines():
         parts = _split_nmcli_terse_line(line)
-        if len(parts) < 2:
+        if len(parts) < 3:
             continue
-        ssid = parts[0]
+        connected = parts[0].strip().lower() in {"*", "yes"}
+        ssid = parts[1]
         if not ssid:
             continue
         try:
-            signal = int(parts[1])
+            signal = int(parts[2])
         except (TypeError, ValueError):
             continue
-        security = ":".join(parts[2:]).strip() if len(parts) > 2 else ""
+        security = ":".join(parts[3:]).strip() if len(parts) > 3 else ""
         network = {
             "ssid": ssid,
             "rssi": signal,
             "security": security,
             "secured": bool(security and security != "--"),
+            "connected": connected,
         }
         existing = strongest_by_ssid.get(ssid)
         if existing is None or signal > int(existing.get("rssi", -1)):
+            if existing is not None and existing.get("connected"):
+                network["connected"] = True
             strongest_by_ssid[ssid] = network
+        elif connected:
+            existing["connected"] = True
     return sorted(
         strongest_by_ssid.values(),
         key=lambda item: (-int(item["rssi"]), str(item["ssid"]).casefold()),
@@ -66,7 +72,10 @@ def scan_wifi_networks() -> list[dict[str, Any]]:
         check=True,
     )
     result = subprocess.run(
-        ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"],
+        [
+            "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
+            "dev", "wifi", "list",
+        ],
         capture_output=True,
         text=True,
         check=True,

@@ -335,6 +335,7 @@ class SettingsState(BaseState):
         self._controller_scroll_key = None
         self._controller_scroll_started_at = 0.0
         self._wifi_selected_index = 0
+        self._wifi_selected_key = "rescan"
         self._wifi_scroll_key = None
         self._wifi_scroll_started_at = 0.0
         self._wifi_selected_network = None
@@ -573,6 +574,18 @@ class SettingsState(BaseState):
                     fill=(255, 255, 255),
                 )
             color = (0, 0, 0) if focused else (255, 255, 255)
+            if row["type"] == "current":
+                self._draw_status_dot(
+                    draw, 5, y + SETTINGS_ITEM_HEIGHT // 2, (0, 255, 0)
+                )
+                self._draw_wifi_ssid_label(
+                    image, row, False, font, color, y, max_width=92, x=11
+                )
+                self._draw_wifi_signal_dots(
+                    draw, row.get("rssi", 0), 124,
+                    y + SETTINGS_ITEM_HEIGHT // 2,
+                )
+                continue
             if row["type"] == "rescan":
                 label = "SCANNING" if snapshot.get("is_scan") else "RESCAN"
                 _draw_settings_label(
@@ -641,7 +654,7 @@ class SettingsState(BaseState):
         return image
 
     def _draw_wifi_ssid_label(
-        self, image, row, focused, font, color, y, max_width
+        self, image, row, focused, font, color, y, max_width, x=2
     ):
         """Draw an SSID in a clipped viewport, scrolling the focused long row."""
         ssid = str(row.get("ssid") or "")
@@ -682,7 +695,7 @@ class SettingsState(BaseState):
                 - bbox[1],
             )
             label_draw.text((text_x, text_y), label, fill=color, font=font)
-        image.paste(label_image, (2, y))
+        image.paste(label_image, (x, y))
 
     @staticmethod
     def _fit_text_to_width(draw, text, font, max_width):
@@ -972,8 +985,9 @@ class SettingsState(BaseState):
         manager = getattr(ctx, "wifi_controller", None)
         if manager is None:
             return {
-                "is_scan": False, "networks": [], "scan_error": "",
-                "connection_status": "idle", "connection_error": "",
+                "is_scan": False, "networks": [], "connected_network": None,
+                "scan_error": "", "connection_status": "idle",
+                "connection_error": "",
                 "connection_ssid": "",
             }
         try:
@@ -983,31 +997,69 @@ class SettingsState(BaseState):
         except Exception:
             pass
         return {
-            "is_scan": False, "networks": [], "scan_error": "",
-            "connection_status": "idle", "connection_error": "",
+            "is_scan": False, "networks": [], "connected_network": None,
+            "scan_error": "", "connection_status": "idle",
+            "connection_error": "",
             "connection_ssid": "",
         }
 
     @staticmethod
     def _wifi_rows(snapshot):
-        rows = [{"type": "rescan", "key": "rescan"}]
+        rows = []
+        connected = snapshot.get("connected_network")
+        connected_ssid = ""
+        if isinstance(connected, dict):
+            connected_ssid = str(connected.get("ssid") or "")
+            if connected_ssid:
+                current = dict(connected)
+                current.update(
+                    {"type": "current", "key": f"current:{connected_ssid}"}
+                )
+                rows.append(current)
+        rows.append({"type": "rescan", "key": "rescan"})
         for network in snapshot.get("networks") or []:
-            if not isinstance(network, dict) or not str(network.get("ssid") or ""):
+            if not isinstance(network, dict):
+                continue
+            ssid = str(network.get("ssid") or "")
+            if not ssid or ssid == connected_ssid:
                 continue
             row = dict(network)
-            row.update({"type": "network", "key": f"network:{network['ssid']}"})
+            row.update({"type": "network", "key": f"network:{ssid}"})
             rows.append(row)
         return rows
 
     def _sync_wifi_selection(self, rows):
-        self._wifi_selected_index = _clamp(
-            self._wifi_selected_index, 0, max(0, len(rows) - 1)
-        )
+        selectable = [
+            (index, row)
+            for index, row in enumerate(rows)
+            if row.get("type") != "current"
+        ]
+        if not selectable:
+            self._wifi_selected_index = 0
+            self._wifi_selected_key = ""
+            return 0
+        for index, row in selectable:
+            if row.get("key") == self._wifi_selected_key:
+                self._wifi_selected_index = index
+                return index
+        self._wifi_selected_index = selectable[0][0]
+        self._wifi_selected_key = selectable[0][1]["key"]
         return self._wifi_selected_index
+
+    def _move_wifi_selection(self, rows, delta):
+        selected_index = self._sync_wifi_selection(rows)
+        selectable_indices = [
+            index for index, row in enumerate(rows) if row.get("type") != "current"
+        ]
+        position = selectable_indices.index(selected_index)
+        position = _clamp(position + delta, 0, len(selectable_indices) - 1)
+        self._wifi_selected_index = selectable_indices[position]
+        self._wifi_selected_key = rows[self._wifi_selected_index]["key"]
 
     def _enter_wifi(self, ctx):
         self._page_mode = _PAGE_WIFI
         self._wifi_selected_index = 0
+        self._wifi_selected_key = "rescan"
         self._wifi_scroll_key = None
         self._wifi_scroll_started_at = 0.0
         manager = getattr(ctx, "wifi_controller", None)
@@ -1033,6 +1085,7 @@ class SettingsState(BaseState):
             return
         self._page_mode = _PAGE_WIFI
         self._wifi_selected_index = 0
+        self._wifi_selected_key = "rescan"
         manager = getattr(ctx, "wifi_controller", None)
         if manager is not None:
             try:
@@ -1142,17 +1195,17 @@ class SettingsState(BaseState):
         snapshot = self._wifi_snapshot(ctx)
         rows = self._wifi_rows(snapshot)
         if buttons.get("btn_up"):
-            self._wifi_selected_index = max(0, self._wifi_selected_index - 1)
+            self._move_wifi_selection(rows, -1)
             return
         if buttons.get("btn_down"):
-            self._wifi_selected_index = min(
-                len(rows) - 1, self._wifi_selected_index + 1
-            )
+            self._move_wifi_selection(rows, 1)
             return
         if not buttons.get("btn_a"):
             return
         selected = rows[self._sync_wifi_selection(rows)]
         manager = getattr(ctx, "wifi_controller", None)
+        if selected["type"] == "current":
+            return
         if selected["type"] == "rescan":
             if manager is not None:
                 try:

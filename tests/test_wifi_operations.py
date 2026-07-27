@@ -8,24 +8,37 @@ from python_websocket import wifi_operations
 def test_parse_wifi_scan_output_unescapes_dedupes_and_sorts():
     output = "\n".join(
         [
-            r"Cafe\:Guest:42:--",
-            r"家庭网络:90:WPA2",
-            r"Cafe\:Guest:75:WPA2",
-            r":99:WPA2",
-            r"Weak:12:WEP",
+            r":Cafe\:Guest:42:--",
+            r"*:家庭网络:90:WPA2",
+            r":Cafe\:Guest:75:WPA2",
+            r"*:家庭网络:80:WPA2",
+            r"::99:WPA2",
+            r":Weak:12:WEP",
         ]
     )
 
     assert wifi_operations.parse_wifi_scan_output(output) == [
-        {"ssid": "家庭网络", "rssi": 90, "security": "WPA2", "secured": True},
-        {"ssid": "Cafe:Guest", "rssi": 75, "security": "WPA2", "secured": True},
-        {"ssid": "Weak", "rssi": 12, "security": "WEP", "secured": True},
+        {
+            "ssid": "家庭网络", "rssi": 90, "security": "WPA2",
+            "secured": True, "connected": True,
+        },
+        {
+            "ssid": "Cafe:Guest", "rssi": 75, "security": "WPA2",
+            "secured": True, "connected": False,
+        },
+        {
+            "ssid": "Weak", "rssi": 12, "security": "WEP",
+            "secured": True, "connected": False,
+        },
     ]
 
 
 def test_parse_wifi_scan_output_marks_open_network():
-    assert wifi_operations.parse_wifi_scan_output("Open:70:--") == [
-        {"ssid": "Open", "rssi": 70, "security": "--", "secured": False}
+    assert wifi_operations.parse_wifi_scan_output(":Open:70:--") == [
+        {
+            "ssid": "Open", "rssi": 70, "security": "--",
+            "secured": False, "connected": False,
+        }
     ]
 
 
@@ -53,15 +66,21 @@ def test_scan_wifi_networks_rescans_before_listing(monkeypatch):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        stdout = "Home:88:WPA2\n" if command[-1] == "list" else ""
+        stdout = "*:Home:88:WPA2\n" if command[-1] == "list" else ""
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(wifi_operations.subprocess, "run", fake_run)
 
     assert wifi_operations.scan_wifi_networks() == [
-        {"ssid": "Home", "rssi": 88, "security": "WPA2", "secured": True}
+        {
+            "ssid": "Home", "rssi": 88, "security": "WPA2",
+            "secured": True, "connected": True,
+        }
     ]
     assert calls == [
         ["nmcli", "dev", "wifi", "rescan"],
-        ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"],
+        [
+            "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
+            "dev", "wifi", "list",
+        ],
     ]

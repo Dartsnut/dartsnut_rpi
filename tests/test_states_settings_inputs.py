@@ -61,6 +61,7 @@ class _WifiController:
         self.state = {
             "is_scan": False,
             "networks": [],
+            "connected_network": None,
             "scan_error": "",
             "connection_status": "idle",
             "connection_ssid": "",
@@ -809,6 +810,7 @@ def test_wifi_selecting_new_network_clears_stale_connection_result():
     state = SettingsState()
     state._page_mode = "wifi"
     state._wifi_selected_index = 2
+    state._wifi_selected_key = "network:Second"
 
     state.handle_input(ctx, {"btn_a": True})
 
@@ -928,3 +930,45 @@ def test_wifi_long_unfocused_ssid_remains_static(monkeypatch):
 
     assert first.tobytes() == second.tobytes()
     assert state._wifi_scroll_key is None
+
+
+def test_wifi_rows_show_current_above_rescan_and_filter_duplicate():
+    state = SettingsState()
+    rows = state._wifi_rows(
+        {
+            "connected_network": {
+                "ssid": "Home",
+                "rssi": 88,
+                "security": "WPA2",
+                "secured": True,
+                "connected": True,
+            },
+            "networks": [
+                {"ssid": "Home", "rssi": 88, "secured": True},
+                {"ssid": "Guest", "rssi": 70, "secured": False},
+            ],
+        }
+    )
+
+    assert [row["type"] for row in rows] == ["current", "rescan", "network"]
+    assert [row.get("ssid") for row in rows] == ["Home", None, "Guest"]
+
+
+def test_wifi_current_row_is_not_selectable_or_connectable():
+    ctx = _Ctx()
+    ctx.wifi_controller.state.update(
+        connected_network={"ssid": "Home", "rssi": 88, "secured": True},
+        networks=[{"ssid": "Guest", "rssi": 70, "secured": False}],
+    )
+    state = SettingsState()
+    state._page_mode = "wifi"
+    rows = state._wifi_rows(ctx.wifi_controller.get_state_snapshot())
+
+    assert state._sync_wifi_selection(rows) == 1
+    state.handle_input(ctx, {"btn_up": True})
+    assert state._wifi_selected_index == 1
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert ctx.wifi_controller.scan_calls == 1
+    assert ctx.wifi_controller.connect_calls == []
+    assert state._page_mode == "wifi"
