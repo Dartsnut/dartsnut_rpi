@@ -255,6 +255,8 @@ SETTINGS_RESET_DEVICE_INDEX = 6
 CONTROLLER_VISIBLE_ROWS = 7
 WIFI_VISIBLE_ROWS = 7
 WIFI_PASSWORD_LENGTH = 63
+WIFI_CHARACTER_REPEAT_DELAY_SECONDS = 0.5
+WIFI_CHARACTER_REPEAT_INTERVAL_SECONDS = 0.1
 WIFI_PASSWORD_FREQUENT_SPECIALS = "!@#$%&*_-+=.?/"
 _WIFI_PASSWORD_PRIORITY_CHARACTERS = (
     " "
@@ -341,6 +343,8 @@ class SettingsState(BaseState):
         self._wifi_selected_network = None
         self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
         self._wifi_cursor_index = 0
+        self._wifi_character_repeat_direction = 0
+        self._wifi_character_repeat_next_at = None
 
     def name(self) -> str:
         return "settings"
@@ -1075,6 +1079,7 @@ class SettingsState(BaseState):
         self._wifi_selected_network = dict(network)
         self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
         self._wifi_cursor_index = 0
+        self._reset_wifi_character_repeat()
 
     def _consume_wifi_connection_result(self, ctx):
         snapshot = self._wifi_snapshot(ctx)
@@ -1145,6 +1150,7 @@ class SettingsState(BaseState):
                 self._page_mode = _PAGE_CONNECTIVITY
                 self._connectivity_select_index = 1
             elif self._page_mode == _PAGE_WIFI_PASSWORD:
+                self._reset_wifi_character_repeat()
                 self._page_mode = _PAGE_WIFI
             elif self._page_mode == _PAGE_WIFI:
                 self._page_mode = _PAGE_CONNECTIVITY
@@ -1220,6 +1226,59 @@ class SettingsState(BaseState):
                 pass
         self._enter_wifi_password(selected)
 
+    def _reset_wifi_character_repeat(self):
+        self._wifi_character_repeat_direction = 0
+        self._wifi_character_repeat_next_at = None
+
+    def _cycle_wifi_password_character(self, delta, steps=1):
+        current = self._wifi_password[self._wifi_cursor_index]
+        try:
+            index = WIFI_PASSWORD_CHARACTERS.index(current)
+        except ValueError:
+            index = 0
+        self._wifi_password[self._wifi_cursor_index] = WIFI_PASSWORD_CHARACTERS[
+            (index + delta * steps) % len(WIFI_PASSWORD_CHARACTERS)
+        ]
+
+    def _wifi_character_repeat(self, ctx, buttons):
+        """Return direction/steps for an initial press or a due held repeat."""
+        pressed_direction = 0
+        if buttons.get("btn_up"):
+            pressed_direction = 1
+        elif buttons.get("btn_down"):
+            pressed_direction = -1
+
+        now = time.monotonic()
+        if pressed_direction:
+            self._wifi_character_repeat_direction = pressed_direction
+            self._wifi_character_repeat_next_at = (
+                now + WIFI_CHARACTER_REPEAT_DELAY_SECONDS
+            )
+            return pressed_direction, 1
+
+        held = getattr(ctx, "current_button_state", None) or {}
+        held_direction = 0
+        if held.get("btn_up") and not held.get("btn_down"):
+            held_direction = 1
+        elif held.get("btn_down") and not held.get("btn_up"):
+            held_direction = -1
+
+        if held_direction != self._wifi_character_repeat_direction:
+            self._reset_wifi_character_repeat()
+            return 0, 0
+        next_at = self._wifi_character_repeat_next_at
+        if not held_direction or next_at is None or now < next_at:
+            return 0, 0
+
+        steps = int(
+            (now - next_at + 1e-9)
+            / WIFI_CHARACTER_REPEAT_INTERVAL_SECONDS
+        ) + 1
+        self._wifi_character_repeat_next_at = (
+            next_at + steps * WIFI_CHARACTER_REPEAT_INTERVAL_SECONDS
+        )
+        return held_direction, steps
+
     def _handle_wifi_password_input(self, ctx, buttons):
         snapshot = self._wifi_snapshot(ctx)
         selected_ssid = str((self._wifi_selected_network or {}).get("ssid") or "")
@@ -1227,24 +1286,18 @@ class SettingsState(BaseState):
             str(snapshot.get("connection_ssid") or "") == selected_ssid
         )
         if connection_matches and snapshot.get("connection_status") == "connecting":
+            self._reset_wifi_character_repeat()
             return
         if buttons.get("btn_left"):
+            self._reset_wifi_character_repeat()
             self._wifi_cursor_index = max(0, self._wifi_cursor_index - 1)
         elif buttons.get("btn_right"):
+            self._reset_wifi_character_repeat()
             self._wifi_cursor_index = min(
                 WIFI_PASSWORD_LENGTH - 1, self._wifi_cursor_index + 1
             )
-        elif buttons.get("btn_up") or buttons.get("btn_down"):
-            current = self._wifi_password[self._wifi_cursor_index]
-            try:
-                index = WIFI_PASSWORD_CHARACTERS.index(current)
-            except ValueError:
-                index = 0
-            delta = 1 if buttons.get("btn_up") else -1
-            self._wifi_password[self._wifi_cursor_index] = WIFI_PASSWORD_CHARACTERS[
-                (index + delta) % len(WIFI_PASSWORD_CHARACTERS)
-            ]
         elif buttons.get("btn_a"):
+            self._reset_wifi_character_repeat()
             manager = getattr(ctx, "wifi_controller", None)
             network = self._wifi_selected_network or {}
             if manager is None or not network:
@@ -1263,6 +1316,10 @@ class SettingsState(BaseState):
                 )
             except Exception:
                 pass
+        else:
+            direction, steps = self._wifi_character_repeat(ctx, buttons)
+            if steps:
+                self._cycle_wifi_password_character(direction, steps)
 
     def _handle_controllers_input(self, ctx, buttons):
         if buttons.get("btn_up"):

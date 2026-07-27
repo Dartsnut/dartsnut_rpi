@@ -972,3 +972,62 @@ def test_wifi_current_row_is_not_selectable_or_connectable():
     assert ctx.wifi_controller.scan_calls == 1
     assert ctx.wifi_controller.connect_calls == []
     assert state._page_mode == "wifi"
+
+
+def test_wifi_password_up_hold_repeats_after_delay(monkeypatch):
+    ctx = _Ctx()
+    ctx.current_button_state = {"btn_up": True}
+    state = SettingsState()
+    state._enter_wifi_password(
+        {"ssid": "Home", "rssi": 80, "security": "WPA2", "secured": True}
+    )
+    now = [10.0]
+    monkeypatch.setattr(ssettings.time, "monotonic", lambda: now[0])
+
+    state.handle_input(ctx, {"btn_up": True})
+    assert state._wifi_password[0] == "A"
+
+    now[0] = 10.499
+    state.handle_input(ctx, {})
+    assert state._wifi_password[0] == "A"
+
+    now[0] = 10.5
+    state.handle_input(ctx, {})
+    assert state._wifi_password[0] == "B"
+
+    now[0] = 10.599
+    state.handle_input(ctx, {})
+    assert state._wifi_password[0] == "B"
+
+    now[0] = 10.6
+    state.handle_input(ctx, {})
+    assert state._wifi_password[0] == "C"
+
+
+def test_wifi_password_down_hold_repeats_and_stops_on_release(monkeypatch):
+    ctx = _Ctx()
+    ctx.current_button_state = {"btn_down": True}
+    state = SettingsState()
+    state._enter_wifi_password(
+        {"ssid": "Home", "rssi": 80, "security": "WPA2", "secured": True}
+    )
+    now = [20.0]
+    monkeypatch.setattr(ssettings.time, "monotonic", lambda: now[0])
+
+    state.handle_input(ctx, {"btn_down": True})
+    initial = state._wifi_password[0]
+
+    now[0] = 20.7
+    state.handle_input(ctx, {})
+    expected_index = (
+        ssettings.WIFI_PASSWORD_CHARACTERS.index(initial) - 3
+    ) % len(ssettings.WIFI_PASSWORD_CHARACTERS)
+    assert state._wifi_password[0] == ssettings.WIFI_PASSWORD_CHARACTERS[expected_index]
+
+    ctx.current_button_state = {"btn_down": False}
+    released = state._wifi_password[0]
+    now[0] = 21.5
+    state.handle_input(ctx, {})
+    assert state._wifi_password[0] == released
+    assert state._wifi_character_repeat_direction == 0
+    assert state._wifi_character_repeat_next_at is None
