@@ -5,7 +5,9 @@ import time
 
 from pydartsnut import Dartsnut
 
-from runtime.bluetooth_qr import create_bluetooth_qr_for_device
+from runtime.bluetooth_identity import resolve_bluetooth_local_name
+from runtime.bluetooth_qr import connection_qr_payload, create_qr_surface
+from runtime.qr_status import read_qr_status
 
 
 def _load_device_info() -> dict:
@@ -18,24 +20,46 @@ def _load_device_info() -> dict:
         return {}
 
 
-def _display_connection_qr(dartsnut) -> None:
+def _desired_connection_payload(device_info: dict) -> str | None:
+    status = read_qr_status()
+    return connection_qr_payload(
+        resolve_bluetooth_local_name(device_info),
+        supabase_connected=status["supabase_connected"],
+        device_id=status["device_id"],
+    )
+
+
+def _display_connection_qr(dartsnut) -> str:
+    """Retry until an identity is available, render it, and return its payload."""
     while True:
         try:
-            qr_image = create_bluetooth_qr_for_device(_load_device_info())
-            if qr_image is not None:
-                dartsnut.update_frame_buffer(qr_image)
-                return
+            payload = _desired_connection_payload(_load_device_info())
+            if payload is not None:
+                dartsnut.update_frame_buffer(create_qr_surface(payload))
+                return payload
         except Exception:
             pass
         time.sleep(1)
 
 
+def _refresh_connection_qr_loop(dartsnut, current_payload: str) -> None:
+    """Keep the default widget QR synchronized with Supabase connectivity."""
+    while True:
+        time.sleep(1)
+        try:
+            payload = _desired_connection_payload(_load_device_info())
+            if payload is not None and payload != current_payload:
+                dartsnut.update_frame_buffer(create_qr_surface(payload))
+                current_payload = payload
+        except Exception:
+            pass
+
+
 def main() -> None:
     dartsnut = Dartsnut()
-    _display_connection_qr(dartsnut)
+    current_payload = _display_connection_qr(dartsnut)
     try:
-        while True:
-            time.sleep(10)
+        _refresh_connection_qr_loop(dartsnut, current_payload)
     except KeyboardInterrupt:
         print("default widget exiting...")
 

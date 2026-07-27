@@ -22,3 +22,10 @@ def test_noop_remote_sync_request_methods_are_safe():
     n.request_device_reset_state()
     n.start_sync_if_available({}, lambda: None, lambda _c: None)
     n.restart_sync({}, lambda: None, lambda _c: None)
+    assert n.get_device_id() == ""
+
+
+def test_supabase_remote_sync_device_id_delegates(monkeypatch):
+    monkeypatch.setattr(rsp._ssb, "get_supabase_device_id", lambda: "OVERRIDE-ID")
+
+    assert rsp.SupabaseRemoteSync().get_device_id() == "OVERRIDE-ID"

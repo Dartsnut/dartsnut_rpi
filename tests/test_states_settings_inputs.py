@@ -56,6 +56,50 @@ class _BluetoothController:
         return True
 
 
+class _WifiController:
+    def __init__(self):
+        self.state = {
+            "is_scan": False,
+            "networks": [],
+            "scan_error": "",
+            "connection_status": "idle",
+            "connection_ssid": "",
+            "connection_error": "",
+        }
+        self.scan_calls = 0
+        self.connect_calls = []
+        self.clear_calls = 0
+
+    def get_state_snapshot(self):
+        return {
+            **self.state,
+            "networks": [dict(row) for row in self.state.get("networks", [])],
+        }
+
+    def start_scan_if_requested(self):
+        self.scan_calls += 1
+        if self.state["is_scan"]:
+            return False
+        self.state["is_scan"] = True
+        return True
+
+    def start_connect_if_requested(self, ssid, password, secured):
+        self.connect_calls.append((ssid, password, secured))
+        self.state.update(
+            connection_status="connecting",
+            connection_ssid=ssid,
+            connection_error="",
+        )
+        return True
+
+    def clear_connection_result(self):
+        self.clear_calls += 1
+        if self.state["connection_status"] != "connecting":
+            self.state.update(
+                connection_status="idle", connection_ssid="", connection_error=""
+            )
+
+
 def _open_connectivity(ctx, state):
     ctx.setting_select_index = 5
     state.handle_input(ctx, {"btn_a": True})
@@ -77,11 +121,13 @@ class _Ctx:
         self.volume_calls = []
         self.display = _Display()
         self.bluetooth_controller = _BluetoothController()
+        self.wifi_controller = _WifiController()
         default_font = ImageFont.load_default()
         self.assets = SimpleNamespace(
             font8=default_font,
             font_6x8=default_font,
             font24=default_font,
+            system_font10=default_font,
             wifi_icon=Image.new("RGBA", (8, 8), (255, 255, 255, 255)),
             settings_icon=Image.new("RGBA", (16, 16), (255, 255, 255, 255)),
         )
@@ -146,13 +192,13 @@ def test_settings_bluetooth_qr_uses_local_name_and_btn_b_dismisses(monkeypatch):
     )
     monkeypatch.setattr(
         ssettings,
-        "_create_bluetooth_qr_surface",
-        lambda payload: captured.append(payload) or qr_surface,
+        "_create_connection_qr_surface",
+        lambda local_name, **kwargs: captured.append((local_name, kwargs)) or qr_surface,
     )
 
     _open_connectivity(ctx, state)
     state.handle_input(ctx, {"btn_a": True})
-    assert captured == ["PixelDart-eeff"]
+    assert captured == [("PixelDart-eeff", {"supabase_connected": False, "device_id": ""})]
     assert state.consumes_btn_b_for_overlay(ctx) is True
 
     state.handle_input(ctx, {"btn_left": True, "btn_a": True})
@@ -162,6 +208,41 @@ def test_settings_bluetooth_qr_uses_local_name_and_btn_b_dismisses(monkeypatch):
     state.handle_input(ctx, {"btn_b": True})
     assert state.consumes_btn_b_for_overlay(ctx) is False
     assert ctx.transitions == []
+
+
+def test_settings_bluetooth_qr_refreshes_when_supabase_connects(monkeypatch):
+    ctx = _Ctx()
+    state = SettingsState()
+    sync_state = {"connected": False, "device_id": ""}
+    captured = []
+
+    class _Sync:
+        def is_connected(self):
+            return sync_state["connected"]
+
+        def get_device_id(self):
+            return sync_state["device_id"]
+
+    monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _Sync())
+    monkeypatch.setattr(
+        ssettings, "resolve_bluetooth_local_name", lambda _info: "PixelDart-eeff"
+    )
+    monkeypatch.setattr(
+        ssettings,
+        "_create_connection_qr_surface",
+        lambda local_name, **kwargs: captured.append((local_name, kwargs))
+        or Image.new("RGB", (128, 128), "white"),
+    )
+
+    _open_connectivity(ctx, state)
+    state.handle_input(ctx, {"btn_a": True})
+    sync_state.update(connected=True, device_id="AA:BB")
+    state.update(ctx)
+
+    assert captured == [
+        ("PixelDart-eeff", {"supabase_connected": False, "device_id": ""}),
+        ("PixelDart-eeff", {"supabase_connected": True, "device_id": "AA:BB"}),
+    ]
 
 
 def test_settings_bluetooth_qr_home_dismisses(monkeypatch):
@@ -174,8 +255,8 @@ def test_settings_bluetooth_qr_home_dismisses(monkeypatch):
     )
     monkeypatch.setattr(
         ssettings,
-        "_create_bluetooth_qr_surface",
-        lambda payload: Image.new("RGB", (128, 128), "white"),
+        "_create_connection_qr_surface",
+        lambda local_name, **kwargs: Image.new("RGB", (128, 128), "white"),
     )
 
     _open_connectivity(ctx, state)
@@ -462,6 +543,14 @@ def test_controller_marquee_resets_when_selected_row_changes(monkeypatch):
     assert state._controller_row_label(second, True) == second["name"][:18]
 
 
+def test_connection_qr_payload_uses_bind_when_supabase_connected():
+    assert bluetooth_qr.connection_qr_payload(
+        "PixelDart-eeff",
+        supabase_connected=True,
+        device_id="AA:BB/CC",
+    ) == "dartsnut://device/bind?device_id=AA%3ABB%2FCC"
+
+
 def test_bluetooth_qr_payload_uses_deep_link_and_url_encodes_name():
     assert bluetooth_qr.bluetooth_qr_payload("PixelDart-272c") == (
         "dartsnut://device/connect?ble_name=PixelDart-272c"
@@ -545,7 +634,7 @@ def test_bluetooth_qr_render_replaces_only_main_surface(monkeypatch):
         "resolve_bluetooth_local_name",
         lambda device_info: "PixelDart-eeff",
     )
-    monkeypatch.setattr(ssettings, "_create_bluetooth_qr_surface", lambda payload: qr_surface)
+    monkeypatch.setattr(ssettings, "_create_connection_qr_surface", lambda local_name, **kwargs: qr_surface)
 
     _open_connectivity(ctx, state)
     state.handle_input(ctx, {"btn_a": True})
@@ -560,3 +649,154 @@ def test_bluetooth_qr_render_replaces_only_main_surface(monkeypatch):
         for y in range(footer.height)
         for x in range(footer.width)
     )
+
+
+def _open_wifi(ctx, state):
+    _open_connectivity(ctx, state)
+    state.handle_input(ctx, {"btn_down": True})
+    state.handle_input(ctx, {"btn_down": True})
+    state.handle_input(ctx, {"btn_a": True})
+
+
+def test_settings_wifi_navigation_starts_scan_and_returns_to_connectivity():
+    ctx = _Ctx()
+    state = SettingsState()
+
+    _open_wifi(ctx, state)
+
+    assert state._page_mode == "wifi"
+    assert ctx.wifi_controller.scan_calls == 1
+
+    state.handle_input(ctx, {"btn_b": True})
+    assert state._page_mode == "connectivity"
+    assert state._connectivity_select_index == 2
+
+
+def test_wifi_password_editor_cycles_moves_trims_and_connects():
+    ctx = _Ctx()
+    ctx.wifi_controller.state["networks"] = [
+        {"ssid": "家庭网络", "rssi": 90, "security": "WPA2", "secured": True}
+    ]
+    state = SettingsState()
+    _open_wifi(ctx, state)
+    ctx.wifi_controller.state["is_scan"] = False
+
+    state.handle_input(ctx, {"btn_down": True})
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert state._page_mode == "wifi_password"
+    assert state._wifi_cursor_index == 0
+    assert state._wifi_password == [" "] * ssettings.WIFI_PASSWORD_LENGTH
+
+    state.handle_input(ctx, {"btn_up": True})
+    state.handle_input(ctx, {"btn_right": True})
+    state.handle_input(ctx, {"btn_up": True})
+    state.handle_input(ctx, {"btn_up": True})
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert ctx.wifi_controller.connect_calls == [("家庭网络", "!\"", True)]
+
+
+def test_wifi_password_character_wrap_and_cursor_clamp():
+    ctx = _Ctx()
+    state = SettingsState()
+    state._enter_wifi_password(
+        {"ssid": "Open", "rssi": 50, "security": "--", "secured": False}
+    )
+
+    state.handle_input(ctx, {"btn_down": True})
+    assert state._wifi_password[0] == "~"
+    state.handle_input(ctx, {"btn_up": True})
+    assert state._wifi_password[0] == " "
+
+    state.handle_input(ctx, {"btn_left": True})
+    assert state._wifi_cursor_index == 0
+    state._wifi_cursor_index = ssettings.WIFI_PASSWORD_LENGTH - 1
+    state.handle_input(ctx, {"btn_right": True})
+    assert state._wifi_cursor_index == ssettings.WIFI_PASSWORD_LENGTH - 1
+
+
+def test_wifi_open_network_connects_with_blank_password():
+    ctx = _Ctx()
+    state = SettingsState()
+    state._enter_wifi_password(
+        {"ssid": "Open", "rssi": 50, "security": "--", "secured": False}
+    )
+
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert ctx.wifi_controller.connect_calls == [("Open", "", False)]
+
+
+def test_wifi_connect_success_returns_to_list_and_rescans():
+    ctx = _Ctx()
+    state = SettingsState()
+    state._enter_wifi_password(
+        {"ssid": "Home", "rssi": 80, "security": "WPA2", "secured": True}
+    )
+    ctx.wifi_controller.state.update(
+        connection_status="success", connection_ssid="Home"
+    )
+
+    state.update(ctx)
+
+    assert state._page_mode == "wifi"
+    assert ctx.wifi_controller.clear_calls == 1
+    assert ctx.wifi_controller.scan_calls == 1
+
+
+def test_wifi_connect_error_stays_on_password_screen_and_renders_unicode():
+    ctx = _Ctx()
+    state = SettingsState()
+    state._enter_wifi_password(
+        {"ssid": "家庭网络", "rssi": 80, "security": "WPA2", "secured": True}
+    )
+    ctx.wifi_controller.state.update(
+        connection_status="error",
+        connection_ssid="家庭网络",
+        connection_error="Incorrect password",
+    )
+
+    state.update(ctx)
+
+    assert state._page_mode == "wifi_password"
+    assert ctx.display.frame.size == (128, 160)
+
+
+def test_wifi_password_window_fits_variable_width_system_font():
+    ctx = _Ctx()
+    state = SettingsState()
+    state._wifi_password = ["W"] * ssettings.WIFI_PASSWORD_LENGTH
+    state._wifi_cursor_index = ssettings.WIFI_PASSWORD_LENGTH // 2
+    image = Image.new("RGB", (128, 160), "black")
+    draw = ImageDraw.Draw(image)
+
+    start, visible = state._wifi_password_window(
+        draw, ctx.assets.system_font10
+    )
+
+    assert start <= state._wifi_cursor_index < start + len(visible)
+    assert draw.textlength(visible, font=ctx.assets.system_font10) <= 118
+
+
+def test_wifi_selecting_new_network_clears_stale_connection_result():
+    ctx = _Ctx()
+    ctx.wifi_controller.state.update(
+        networks=[
+            {"ssid": "First", "rssi": 90, "security": "WPA2", "secured": True},
+            {"ssid": "Second", "rssi": 80, "security": "WPA2", "secured": True},
+        ],
+        connection_status="error",
+        connection_ssid="First",
+        connection_error="Incorrect password",
+    )
+    state = SettingsState()
+    state._page_mode = "wifi"
+    state._wifi_selected_index = 2
+
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert state._page_mode == "wifi_password"
+    assert state._wifi_selected_network["ssid"] == "Second"
+    assert ctx.wifi_controller.clear_calls == 1
+    assert ctx.wifi_controller.state["connection_status"] == "idle"

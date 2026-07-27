@@ -511,6 +511,12 @@ def test_bridge_health_updates_rest_probe_cache():
     assert ssb.get_supabase_rest_probe_ok() is True
 
 
+def test_bridge_health_device_id_cache_is_normalized():
+    ssb._set_device_id("aa:bb:cc:dd:ee:ff")
+
+    assert ssb.get_supabase_device_id() == "AA:BB:CC:DD:EE:FF"
+
+
 def test_bridge_health_probe_failure_clears_latency():
     ssb._update_rest_probe_cache(
         {
