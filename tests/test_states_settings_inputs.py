@@ -822,7 +822,8 @@ def test_wifi_rendering_disables_text_antialiasing(monkeypatch):
     state._enter_wifi_password(ctx.wifi_controller.state["networks"][0])
     state._render_wifi_password(ctx)
 
-    assert [draw.fontmode for draw in created_draws] == ["1", "1"]
+    assert created_draws
+    assert all(draw.fontmode == "1" for draw in created_draws)
 
 
 def test_wifi_signal_levels_and_colors_follow_three_tier_mapping():
@@ -852,3 +853,62 @@ def test_wifi_signal_levels_and_colors_follow_three_tier_mapping():
     draw = ImageDraw.Draw(image)
     state._draw_wifi_signal_dots(draw, 20, 124, 10)
     assert image.getpixel((124, 10)) == ssettings.WIFI_SIGNAL_COLORS[1]
+
+
+def test_wifi_long_selected_ssid_scrolls_and_resets_for_new_row(monkeypatch):
+    ctx = _Ctx()
+    state = SettingsState()
+    font = ctx.assets.system_font10
+    row = {"key": "network:first", "ssid": "First Very Long WiFi Network Name"}
+    now = [10.0]
+    monkeypatch.setattr(ssettings.time, "time", lambda: now[0])
+
+    first = Image.new("RGB", (128, 18), "black")
+    state._draw_wifi_ssid_label(
+        first, row, True, font, (0, 0, 0), 0, max_width=60
+    )
+    assert state._wifi_scroll_key == "network:first"
+    assert state._wifi_scroll_started_at == 10.0
+
+    now[0] = 11.25
+    scrolled = Image.new("RGB", (128, 18), "black")
+    state._draw_wifi_ssid_label(
+        scrolled, row, True, font, (0, 0, 0), 0, max_width=60
+    )
+    assert first.crop((2, 0, 62, 18)).tobytes() != scrolled.crop(
+        (2, 0, 62, 18)
+    ).tobytes()
+
+    next_row = {"key": "network:second", "ssid": "Second Long WiFi Network Name"}
+    state._draw_wifi_ssid_label(
+        Image.new("RGB", (128, 18), "black"),
+        next_row,
+        True,
+        font,
+        (0, 0, 0),
+        0,
+        max_width=60,
+    )
+    assert state._wifi_scroll_key == "network:second"
+    assert state._wifi_scroll_started_at == 11.25
+
+
+def test_wifi_long_unfocused_ssid_remains_static(monkeypatch):
+    ctx = _Ctx()
+    state = SettingsState()
+    row = {"key": "network:long", "ssid": "A Very Long WiFi Network Name"}
+    now = [10.0]
+    monkeypatch.setattr(ssettings.time, "time", lambda: now[0])
+
+    first = Image.new("RGB", (128, 18), "black")
+    state._draw_wifi_ssid_label(
+        first, row, False, ctx.assets.system_font10, (255, 255, 255), 0, 60
+    )
+    now[0] = 20.0
+    second = Image.new("RGB", (128, 18), "black")
+    state._draw_wifi_ssid_label(
+        second, row, False, ctx.assets.system_font10, (255, 255, 255), 0, 60
+    )
+
+    assert first.tobytes() == second.tobytes()
+    assert state._wifi_scroll_key is None

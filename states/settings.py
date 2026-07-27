@@ -323,6 +323,8 @@ class SettingsState(BaseState):
         self._controller_scroll_key = None
         self._controller_scroll_started_at = 0.0
         self._wifi_selected_index = 0
+        self._wifi_scroll_key = None
+        self._wifi_scroll_started_at = 0.0
         self._wifi_selected_network = None
         self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
         self._wifi_cursor_index = 0
@@ -568,12 +570,9 @@ class SettingsState(BaseState):
                 if snapshot.get("is_scan"):
                     self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
                 continue
-            label = self._fit_text_to_width(
-                draw, str(row.get("ssid") or ""), font, 101
+            self._draw_wifi_ssid_label(
+                image, row, focused, font, color, y, max_width=101
             )
-            bbox = draw.textbbox((0, 0), label, font=font)
-            text_y = y + max(0, (SETTINGS_ITEM_HEIGHT - (bbox[3] - bbox[1])) // 2 - bbox[1])
-            draw.text((2, text_y), label, fill=color, font=font)
             self._draw_wifi_signal_dots(
                 draw, row.get("rssi", 0), 124, y + SETTINGS_ITEM_HEIGHT // 2
             )
@@ -628,6 +627,50 @@ class SettingsState(BaseState):
             self._draw_centered_system_text(draw, "A: Connect", 91, font, (180, 180, 180))
         self._draw_footer(image, draw, ctx, "WIFI")
         return image
+
+    def _draw_wifi_ssid_label(
+        self, image, row, focused, font, color, y, max_width
+    ):
+        """Draw an SSID in a clipped viewport, scrolling the focused long row."""
+        ssid = str(row.get("ssid") or "")
+        background = (255, 255, 255) if focused else (0, 0, 0)
+        label_image = Image.new(
+            "RGB", (max_width, SETTINGS_ITEM_HEIGHT), background
+        )
+        label_draw = ImageDraw.Draw(label_image)
+        label_draw.fontmode = "1"
+        full_width = label_draw.textlength(ssid, font=font)
+        scrolling = focused and full_width > max_width
+
+        if scrolling:
+            key = str(row.get("key") or ssid)
+            now = time.time()
+            if key != self._wifi_scroll_key:
+                self._wifi_scroll_key = key
+                self._wifi_scroll_started_at = now
+            elapsed = now - self._wifi_scroll_started_at
+            gap = 18
+            cycle_width = max(1, int(full_width) + gap)
+            offset = (
+                0 if elapsed < 1.0
+                else int((elapsed - 1.0) / 0.05) % cycle_width
+            )
+            labels = ((ssid, -offset), (ssid, cycle_width - offset))
+        else:
+            label = self._fit_text_to_width(
+                label_draw, ssid, font, max_width
+            )
+            labels = ((label, 0),)
+
+        for label, text_x in labels:
+            bbox = label_draw.textbbox((0, 0), label, font=font)
+            text_y = max(
+                0,
+                (SETTINGS_ITEM_HEIGHT - (bbox[3] - bbox[1])) // 2
+                - bbox[1],
+            )
+            label_draw.text((text_x, text_y), label, fill=color, font=font)
+        image.paste(label_image, (2, y))
 
     @staticmethod
     def _fit_text_to_width(draw, text, font, max_width):
@@ -953,6 +996,8 @@ class SettingsState(BaseState):
     def _enter_wifi(self, ctx):
         self._page_mode = _PAGE_WIFI
         self._wifi_selected_index = 0
+        self._wifi_scroll_key = None
+        self._wifi_scroll_started_at = 0.0
         manager = getattr(ctx, "wifi_controller", None)
         if manager is not None:
             try:
