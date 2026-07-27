@@ -703,6 +703,7 @@ def test_wifi_password_character_order_prioritizes_common_input():
         " "
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz"
+        "0123456789"
         + ssettings.WIFI_PASSWORD_FREQUENT_SPECIALS
     )
 
