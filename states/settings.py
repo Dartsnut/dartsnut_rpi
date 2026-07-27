@@ -536,6 +536,7 @@ class SettingsState(BaseState):
     def _render_wifi(self, ctx):
         image = Image.new("RGB", (128, 160), (0, 0, 0))
         draw = ImageDraw.Draw(image)
+        draw.fontmode = "1"
         snapshot = self._wifi_snapshot(ctx)
         rows = self._wifi_rows(snapshot)
         selected_index = self._sync_wifi_selection(rows)
@@ -579,6 +580,7 @@ class SettingsState(BaseState):
     def _render_wifi_password(self, ctx):
         image = Image.new("RGB", (128, 160), (0, 0, 0))
         draw = ImageDraw.Draw(image)
+        draw.fontmode = "1"
         font = getattr(ctx.assets, "system_font10", ctx.assets.font_6x8)
         network = self._wifi_selected_network or {}
         ssid = str(network.get("ssid") or "")

@@ -800,3 +800,26 @@ def test_wifi_selecting_new_network_clears_stale_connection_result():
     assert state._wifi_selected_network["ssid"] == "Second"
     assert ctx.wifi_controller.clear_calls == 1
     assert ctx.wifi_controller.state["connection_status"] == "idle"
+
+
+def test_wifi_rendering_disables_text_antialiasing(monkeypatch):
+    ctx = _Ctx()
+    ctx.wifi_controller.state["networks"] = [
+        {"ssid": "Home", "rssi": 80, "security": "WPA2", "secured": True}
+    ]
+    state = SettingsState()
+    created_draws = []
+    original_draw = ssettings.ImageDraw.Draw
+
+    def capture_draw(*args, **kwargs):
+        draw = original_draw(*args, **kwargs)
+        created_draws.append(draw)
+        return draw
+
+    monkeypatch.setattr(ssettings.ImageDraw, "Draw", capture_draw)
+
+    state._render_wifi(ctx)
+    state._enter_wifi_password(ctx.wifi_controller.state["networks"][0])
+    state._render_wifi_password(ctx)
+
+    assert [draw.fontmode for draw in created_draws] == ["1", "1"]
