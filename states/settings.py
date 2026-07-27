@@ -256,6 +256,12 @@ CONTROLLER_VISIBLE_ROWS = 7
 WIFI_VISIBLE_ROWS = 7
 WIFI_PASSWORD_LENGTH = 63
 WIFI_PASSWORD_CHARACTERS = "".join(chr(code) for code in range(32, 127))
+WIFI_SIGNAL_LEVELS = (34, 67)
+WIFI_SIGNAL_COLORS = {
+    1: (255, 0, 0),
+    2: (255, 215, 0),
+    3: (0, 255, 0),
+}
 
 _PAGE_SETTINGS = "settings"
 _PAGE_CONNECTIVITY = "connectivity"
@@ -562,15 +568,15 @@ class SettingsState(BaseState):
                 if snapshot.get("is_scan"):
                     self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
                 continue
-            signal_text = f"{int(row.get('rssi', 0))}%"
-            signal_width = draw.textbbox((0, 0), signal_text, font=font)[2]
             label = self._fit_text_to_width(
-                draw, str(row.get("ssid") or ""), font, max(10, 121 - signal_width)
+                draw, str(row.get("ssid") or ""), font, 101
             )
             bbox = draw.textbbox((0, 0), label, font=font)
             text_y = y + max(0, (SETTINGS_ITEM_HEIGHT - (bbox[3] - bbox[1])) // 2 - bbox[1])
             draw.text((2, text_y), label, fill=color, font=font)
-            draw.text((126 - signal_width, text_y), signal_text, fill=color, font=font)
+            self._draw_wifi_signal_dots(
+                draw, row.get("rssi", 0), 124, y + SETTINGS_ITEM_HEIGHT // 2
+            )
         if len(rows) == 1 and not snapshot.get("is_scan"):
             message = snapshot.get("scan_error") or "No networks"
             self._draw_centered_system_text(draw, message, 44, font, (160, 160, 160))
@@ -743,6 +749,25 @@ class SettingsState(BaseState):
     @staticmethod
     def _draw_status_dot(draw, cx, cy, color):
         draw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=color)
+
+    @staticmethod
+    def _wifi_signal_level(rssi):
+        try:
+            signal = int(rssi)
+        except (TypeError, ValueError):
+            signal = 0
+        if signal >= WIFI_SIGNAL_LEVELS[1]:
+            return 3
+        if signal >= WIFI_SIGNAL_LEVELS[0]:
+            return 2
+        return 1
+
+    def _draw_wifi_signal_dots(self, draw, rssi, right_x, center_y):
+        level = self._wifi_signal_level(rssi)
+        color = WIFI_SIGNAL_COLORS[level]
+        first_x = right_x - (level - 1) * 7
+        for index in range(level):
+            self._draw_status_dot(draw, first_x + index * 7, center_y, color)
 
     def _draw_controller_status_icon(self, draw, status, cx, cy):
         status = str(status or "idle").lower()

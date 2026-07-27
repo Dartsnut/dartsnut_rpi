@@ -823,3 +823,32 @@ def test_wifi_rendering_disables_text_antialiasing(monkeypatch):
     state._render_wifi_password(ctx)
 
     assert [draw.fontmode for draw in created_draws] == ["1", "1"]
+
+
+def test_wifi_signal_levels_and_colors_follow_three_tier_mapping():
+    state = SettingsState()
+
+    assert state._wifi_signal_level(100) == 3
+    assert state._wifi_signal_level(67) == 3
+    assert state._wifi_signal_level(66) == 2
+    assert state._wifi_signal_level(34) == 2
+    assert state._wifi_signal_level(33) == 1
+    assert state._wifi_signal_level(None) == 1
+
+    image = Image.new("RGB", (128, 20), "black")
+    draw = ImageDraw.Draw(image)
+    state._draw_wifi_signal_dots(draw, 80, 124, 10)
+    assert image.getpixel((110, 10)) == ssettings.WIFI_SIGNAL_COLORS[3]
+    assert image.getpixel((117, 10)) == ssettings.WIFI_SIGNAL_COLORS[3]
+    assert image.getpixel((124, 10)) == ssettings.WIFI_SIGNAL_COLORS[3]
+
+    image = Image.new("RGB", (128, 20), "black")
+    draw = ImageDraw.Draw(image)
+    state._draw_wifi_signal_dots(draw, 50, 124, 10)
+    assert image.getpixel((117, 10)) == ssettings.WIFI_SIGNAL_COLORS[2]
+    assert image.getpixel((124, 10)) == ssettings.WIFI_SIGNAL_COLORS[2]
+
+    image = Image.new("RGB", (128, 20), "black")
+    draw = ImageDraw.Draw(image)
+    state._draw_wifi_signal_dots(draw, 20, 124, 10)
+    assert image.getpixel((124, 10)) == ssettings.WIFI_SIGNAL_COLORS[1]
