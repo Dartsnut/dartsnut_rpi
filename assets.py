@@ -1,5 +1,6 @@
 """Load and expose all images, fonts, and loading animation used by states and main loop."""
 import os
+import subprocess
 import time
 from PIL import Image, ImageFont
 
@@ -7,6 +8,35 @@ from PIL import Image, ImageFont
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _IMAGES_DIR = os.path.join(_BASE_DIR, "assets_media", "images")
 _FONTS_DIR = os.path.join(_BASE_DIR, "assets_media", "fonts")
+
+
+def _load_system_sans_font(size: int = 10):
+    """Load a Unicode-capable system sans-serif font with safe fallbacks."""
+    candidates = []
+    try:
+        result = subprocess.run(
+            ["fc-match", "-f", "%{file}", "sans-serif"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        matched = (result.stdout or "").strip()
+        if matched:
+            candidates.append(matched)
+    except Exception:
+        pass
+    candidates.extend(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+        ]
+    )
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size=size)
+        except Exception:
+            continue
+    return ImageFont.load_default(size=size)
 
 
 def _img(name: str) -> str:
@@ -88,10 +118,10 @@ wifi_disconnect_icon = Image.open(_img("wifi_disconnect_icon.png"))
 wifi_icon = Image.open(_img("wifi.png"))
 internet_disconnect_icon = Image.open(_img("internet_disconnect_icon.png"))
 game_select_image = Image.open(_img("game_sel.png"))
-qrcode_image = Image.open(_img("qrcode.png")).convert("RGB")
 
 # Fonts
 font8 = ImageFont.load(_font("dartsnut-6X8.pil"))
 font_6x8 = ImageFont.load(_font("font-6x8.pil"))
 font16 = ImageFont.truetype(_font("Micro5.ttf"), size=16)
 font24 = ImageFont.truetype(_font("Micro5.ttf"), size=24)
+system_font10 = _load_system_sans_font(10)

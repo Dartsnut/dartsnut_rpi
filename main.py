@@ -73,6 +73,7 @@ from runtime.remote_sync_port import (
     set_remote_sync,
 )
 from runtime.reset_workflow import request_confirm_and_forget_wifi
+from runtime.qr_status import write_qr_status
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
@@ -80,6 +81,13 @@ from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
 from runtime.controller_input import ControllerInputManager
+from runtime.wifi_controller import WifiController
+from runtime.snackbar_display import (
+    CONTROLLER_CONNECTED_MESSAGE,
+    CONTROLLER_DISCONNECTED_MESSAGE,
+    SnackbarDisplay,
+    wrap_firmware_update_with_snackbar,
+)
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
@@ -89,6 +97,7 @@ _log.info("Logging initialized (effective level: %s)", _effective_log_level)
 # Display and device (used by context and dim logic)
 # -----------------------------------------------------------------------------
 dartsnut = Dartsnut()
+display = SnackbarDisplay(dartsnut, font=assets.font8)
 
 # Dim window state (shared with set_brightness and display loop)
 dim_rt = DimWindowRuntime()
@@ -110,6 +119,7 @@ _reset_remote_confirm_event = threading.Event()
 _RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
 
 set_remote_sync(create_default_remote_sync())
+write_qr_status(False)
 
 _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
@@ -123,8 +133,26 @@ _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     publish_update=lambda p: get_remote_sync().publish_partial_state(p),
     connect_device=machine_api.connect_device_for_remote,
     connected_controllers_provider=machine_api.list_connected_paired_devices,
+    remembered_controllers_provider=machine_api.list_paired_devices_with_status,
+    on_controller_connected=lambda: display.show_snackbar(
+        CONTROLLER_CONNECTED_MESSAGE
+    ),
+    on_controller_disconnected=lambda: display.show_snackbar(
+        CONTROLLER_DISCONNECTED_MESSAGE
+    ),
 )
-_websocket_service_registry = build_default_websocket_registry()
+perform_update_with_snackbar = wrap_firmware_update_with_snackbar(
+    display, machine_api.perform_update
+)
+_websocket_service_registry = build_default_websocket_registry(
+    perform_update=perform_update_with_snackbar
+)
+_wifi_controller = WifiController(
+    scan_networks=machine_api.scan_wifi_networks,
+    connect_network=machine_api.connect_wifi_network,
+    connect_saved_network=machine_api.connect_saved_wifi,
+    forget_network=machine_api.forget_saved_wifi,
+)
 
 
 def _get_current_brightness_for_transition():
@@ -333,17 +361,21 @@ def set_time_zone(time_zone):
 # App context and lifecycle callbacks
 # -----------------------------------------------------------------------------
 ctx = AppContext(
-    display=dartsnut,
+    display=display,
     assets=assets,
     get_device_info=get_device_info,
     set_brightness=set_brightness,
     set_volume=set_volume,
     set_brightness_hardware=_set_brightness_hardware,
+    bluetooth_controller=_remote_bluetooth_scan_controller,
+    wifi_controller=_wifi_controller,
 )
 ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
+
+
 def _set_game_status_from_local_ui(game_id: str, status: str) -> None:
     from runtime.remote_device_config import note_local_game_transition
 
@@ -439,7 +471,7 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         cancel_game_download=cancel_game_download,
         local_game_version_matches=local_game_version_matches,
         remove_local_game_folder=remove_local_game_folder,
-        perform_update=machine_api.perform_update,
+        perform_update=perform_update_with_snackbar,
         get_version=machine_api.get_version,
         is_reset_in_progress=_is_reset_in_progress,
         on_reset_confirmed=_reset_remote_confirm_event.set,
@@ -766,6 +798,16 @@ def network_state_remote_loop():
         _network_state_refresh_event.wait(poll_interval_seconds)
 
 
+def controller_status_loop():
+    """Poll BlueZ once per second for paired controller status changes."""
+    while True:
+        try:
+            _remote_bluetooth_scan_controller.poll_connection_status()
+        except Exception as e:
+            _log.warning("Error polling controller connection status: %s", e)
+        time.sleep(1)
+
+
 def request_network_state_refresh():
     """
     Trigger an immediate poll cycle and force a republish of IP/SSID on next run.
@@ -774,6 +816,7 @@ def request_network_state_refresh():
 
 
 def _on_remote_connectivity_changed(connected: bool) -> None:
+    write_qr_status(connected)
     if connected and not _is_reset_in_progress():
         request_network_state_refresh()
 
@@ -784,7 +827,7 @@ def trigger_dim_check():
 
 device_info = get_device_info() or {}
 start_background_subsystems(
-    dartsnut=dartsnut,
+    dartsnut=display,
     device_info=device_info,
     get_version=machine_api.get_version,
     set_volume=set_volume,
@@ -799,6 +842,7 @@ start_background_subsystems(
     trigger_dim_check=trigger_dim_check,
     check_connection_loop=check_connection_loop,
     network_state_remote_loop=network_state_remote_loop,
+    controller_status_loop=controller_status_loop,
     apply_remote_config=_apply_remote_config,
     on_sync_game_ready=_on_sync_game_ready,
     on_remote_connectivity_changed=_on_remote_connectivity_changed,

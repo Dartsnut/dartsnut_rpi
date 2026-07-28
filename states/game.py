@@ -6,6 +6,7 @@ import time
 from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
+from runtime.bluetooth_qr import create_bluetooth_qr_for_device
 from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
 import assets
@@ -17,14 +18,23 @@ _log = logging.getLogger(__name__)
 class GameSelectState(BaseState):
     """Game selection: preview carousel; A start game, B back to menu."""
 
+    def __init__(self) -> None:
+        self._empty_game_qr = None
+
     def name(self) -> str:
         return "game_select"
 
     def update(self, ctx: AppContext) -> None:
         if len(ctx.game_list) == 0:
-            # Mirror the default empty-page experience by showing the QR code
-            # when no games are installed.
-            ctx.display.update_frame_buffer(ctx.assets.qrcode_image)
+            if self._empty_game_qr is None:
+                try:
+                    self._empty_game_qr = create_bluetooth_qr_for_device(
+                        ctx.get_device_info()
+                    )
+                except Exception as e:
+                    _log.warning("Failed to generate empty-game QR: %s", e)
+            qr_surface = self._empty_game_qr or Image.new("RGB", (128, 128), "black")
+            ctx.display.update_frame_buffer(qr_surface)
             return
         if time.time() - ctx.page_tick > 5:
             ctx.game_preview_index += 1

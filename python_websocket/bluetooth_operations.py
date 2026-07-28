@@ -1,4 +1,5 @@
 import bluetooth
+import re
 import subprocess
 import threading
 import time
@@ -10,34 +11,67 @@ from python_websocket.error_handler import (
 )
 
 
+_MAJOR_DEVICE_CLASS_MASK = 0x1F00
+_PERIPHERAL_MAJOR_DEVICE_CLASS = 0x0500
+_PERIPHERAL_MINOR_DEVICE_CLASS_MASK = 0x003F
+_JOYSTICK_MINOR_DEVICE_CLASS = 0x0004
+_GAMEPAD_MINOR_DEVICE_CLASS = 0x0008
+_CONTROLLER_MINOR_DEVICE_CLASSES = {
+    _JOYSTICK_MINOR_DEVICE_CLASS,
+    _GAMEPAD_MINOR_DEVICE_CLASS,
+}
+_CLASS_LINE_RE = re.compile(r"^\s*Class:\s*(0x[0-9a-fA-F]+|[0-9]+)", re.MULTILINE)
+
+
+def _coerce_device_class(value):
+    try:
+        if isinstance(value, str):
+            return int(value.strip(), 0)
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_game_controller_class(device_class):
+    value = _coerce_device_class(device_class)
+    if value is None:
+        return False
+    if (value & _MAJOR_DEVICE_CLASS_MASK) != _PERIPHERAL_MAJOR_DEVICE_CLASS:
+        return False
+    minor_class = value & _PERIPHERAL_MINOR_DEVICE_CLASS_MASK
+    return minor_class in _CONTROLLER_MINOR_DEVICE_CLASSES
+
+
 def _discover_filtered_devices():
-    """
-    Discover nearby Bluetooth devices and keep likely controller/audio devices.
-    Returns a list of {"address": ..., "name": ...} objects.
-    """
-    audio_keywords = ["headphone", "speaker", "audio", "controller"]
-    nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
+    """Discover nearby Classic Bluetooth gamepads and joysticks."""
+    nearby_devices = bluetooth.discover_devices(
+        duration=8,
+        lookup_names=True,
+        lookup_class=True,
+    )
 
     filtered_devices = []
     seen = set()
-    for addr, name in nearby_devices:
-        if not addr or addr in seen:
+    for device in nearby_devices:
+        if not isinstance(device, (tuple, list)) or len(device) < 3:
             continue
-        lower_name = name.lower() if isinstance(name, str) else ""
-        if any(keyword in lower_name for keyword in audio_keywords):
-            filtered_devices.append({"address": addr, "name": name or ""})
-            seen.add(addr)
+        raw_address, name, device_class = device[:3]
+        address = _normalize_bt_address(raw_address)
+        if (
+            not address
+            or address in seen
+            or not _is_game_controller_class(device_class)
+        ):
+            continue
+        filtered_devices.append({"address": address, "name": name or ""})
+        seen.add(address)
     return filtered_devices
 
 
-def get_connection_status(address):
-    """
-    Return Bluetooth connection status for a device address:
-    - "connected"
-    - "disconnected"
-    """
+def _get_bluetooth_device_properties(address):
+    """Read connection and Class-of-Device properties in one bluetoothctl call."""
     if not address:
-        return "disconnected"
+        return None
     try:
         result = subprocess.run(
             ["bluetoothctl", "info", str(address)],
@@ -45,11 +79,23 @@ def get_connection_status(address):
             text=True,
             check=False,
         )
-        if result.returncode == 0 and "connected: yes" in result.stdout.lower():
-            return "connected"
+        if result.returncode != 0:
+            return None
+        output = result.stdout or ""
+        properties = {"connected": False, "class": None}
+        properties["connected"] = "connected: yes" in output.lower()
+        match = _CLASS_LINE_RE.search(output)
+        if match:
+            properties["class"] = _coerce_device_class(match.group(1))
+        return properties
     except Exception:
-        pass
-    return "disconnected"
+        return None
+
+
+def get_connection_status(address):
+    """Return ``connected`` or ``disconnected`` for a Bluetooth address."""
+    properties = _get_bluetooth_device_properties(address)
+    return "connected" if properties and properties["connected"] else "disconnected"
 
 
 def build_remote_bluetooth_list():
@@ -76,19 +122,15 @@ def current_utc_iso_timestamp():
 
 def scan_bluetooth_devices():
     """
-    Scans for nearby Bluetooth devices and returns a list of devices
-    that are likely controllers, headphones, or Bluetooth speakers.
+    Scan for nearby Classic Bluetooth gamepads and joysticks.
     """
     try:
         return {"action": "bluetooth_scan", "devices": _discover_filtered_devices()}
     except Exception as e:
         return handle_exception("bluetooth_scan", e, "Bluetooth scan failed")
 
-def list_paired_devices():
-    """
-    Lists all Bluetooth devices that are already paired (bonded) with the system.
-    Returns a list of dictionaries with 'address' and 'name'.
-    """
+def _list_paired_devices_raw():
+    """Return every paired Bluetooth device reported by bluetoothctl."""
     paired_devices = []
     try:
         # Use bluetoothctl to get the authoritative list of paired devices
@@ -118,12 +160,79 @@ def list_paired_devices():
     return {"action": "bluetooth_list", "devices": paired_devices}
 
 
+def list_paired_devices():
+    """Return paired Bluetooth gamepads and joysticks."""
+    paired_result = _list_paired_devices_raw()
+    if not isinstance(paired_result, dict) or paired_result.get("error"):
+        return paired_result
+    devices = paired_result.get("devices")
+    if not isinstance(devices, list):
+        devices = []
+
+    controllers = []
+    seen = set()
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        address = _normalize_bt_address(device.get("address"))
+        if not address or address in seen:
+            continue
+        seen.add(address)
+        properties = _get_bluetooth_device_properties(address)
+        if properties is None:
+            continue
+        if not _is_game_controller_class(properties.get("class")):
+            continue
+        controllers.append(
+            {
+                "address": address,
+                "name": str(device.get("name") or "").strip(),
+            }
+        )
+    return {"action": "bluetooth_list", "devices": controllers}
+
+
+def list_paired_devices_with_status():
+    """Return paired devices with normalized addresses and live connection status."""
+    paired_result = _list_paired_devices_raw()
+    if not isinstance(paired_result, dict) or paired_result.get("error"):
+        return None
+    devices = paired_result.get("devices")
+    if not isinstance(devices, list):
+        return None
+
+    out = []
+    seen = set()
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        address = _normalize_bt_address(device.get("address"))
+        if not address or address in seen:
+            continue
+        seen.add(address)
+        properties = _get_bluetooth_device_properties(address)
+        if properties is None:
+            return None
+        if not _is_game_controller_class(properties.get("class")):
+            continue
+        out.append(
+            {
+                "address": address,
+                "name": str(device.get("name") or "").strip(),
+                "status": (
+                    "connected" if properties.get("connected") else "disconnected"
+                ),
+            }
+        )
+    return out
+
+
 def list_connected_paired_devices():
     """
     Paired (bonded) devices that are currently connected.
     Returns a list of {"address": "<UPPER MAC>", "name": "<str>"}, unique by address.
     """
-    paired_result = list_paired_devices()
+    paired_result = _list_paired_devices_raw()
     if not isinstance(paired_result, dict) or paired_result.get("error"):
         return []
     devices = paired_result.get("devices")
@@ -138,9 +247,15 @@ def list_connected_paired_devices():
         address = _normalize_bt_address(device.get("address"))
         if not address or address in seen:
             continue
-        if get_connection_status(address) != "connected":
-            continue
         seen.add(address)
+        properties = _get_bluetooth_device_properties(address)
+        if properties is None:
+            continue
+        if (
+            not _is_game_controller_class(properties.get("class"))
+            or not properties.get("connected")
+        ):
+            continue
         out.append(
             {
                 "address": address,

@@ -35,6 +35,30 @@ def forget_wifi() -> None:
     devops.forget_wifi()
 
 
+def scan_wifi_networks():
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.scan_wifi_networks()
+
+
+def connect_wifi_network(ssid: str, password: str, secured: bool):
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.connect_wifi_network(ssid, password, secured)
+
+
+def connect_saved_wifi(profile: str):
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.connect_saved_wifi(profile)
+
+
+def forget_saved_wifi(profile: str):
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.forget_saved_wifi(profile)
+
+
 def get_version():
     gitops = importlib.import_module("python_websocket.git_operations")
 
@@ -53,6 +77,12 @@ def build_remote_bluetooth_list():
     btops = importlib.import_module("python_websocket.bluetooth_operations")
 
     return btops.build_remote_bluetooth_list()
+
+
+def list_paired_devices_with_status():
+    btops = importlib.import_module("python_websocket.bluetooth_operations")
+
+    return btops.list_paired_devices_with_status()
 
 
 def list_connected_paired_devices():
