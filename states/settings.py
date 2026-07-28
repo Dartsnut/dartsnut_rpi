@@ -244,7 +244,7 @@ SETTINGS_ITEMS = [
 ]
 
 CONNECTIVITY_ITEMS = [
-    {"name": "Bluetooth QR", "type": "action"},
+    {"name": "Connect to App", "type": "action"},
     {"name": "Controllers", "type": "action"},
     {"name": "WiFi", "type": "action"},
 ]
