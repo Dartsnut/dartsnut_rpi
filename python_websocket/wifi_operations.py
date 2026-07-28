@@ -85,6 +85,60 @@ def parse_saved_wifi_profiles(output: str) -> list[dict[str, Any]]:
     )
 
 
+def list_saved_wifi_profiles() -> list[dict[str, Any]]:
+    """Return saved Wi-Fi profiles using fields supported by NetworkManager 1.52."""
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.SubprocessError:
+        return []
+    profiles: list[dict[str, Any]] = []
+    for line in str(result.stdout or "").splitlines():
+        parts = _split_nmcli_terse_line(line)
+        if len(parts) < 3 or parts[2].strip() != "802-11-wireless":
+            continue
+        profile = parts[0]
+        uuid = parts[1]
+        if not profile or not uuid:
+            continue
+        detail = subprocess.run(
+            [
+                "nmcli", "-g", "802-11-wireless.ssid",
+                "connection", "show", "uuid", uuid,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if detail.returncode != 0:
+            continue
+        ssid_lines = str(detail.stdout or "").splitlines()
+        ssid = (
+            _split_nmcli_terse_line(ssid_lines[0])[0]
+            if ssid_lines else ""
+        )
+        if not ssid:
+            continue
+        profiles.append(
+            {
+                "ssid": ssid,
+                "profile": profile,
+                "remembered": True,
+                "connected": False,
+            }
+        )
+    profiles_by_ssid: dict[str, dict[str, Any]] = {}
+    for item in profiles:
+        profiles_by_ssid.setdefault(str(item["ssid"]), item)
+    return sorted(
+        profiles_by_ssid.values(), key=lambda item: str(item["ssid"]).casefold()
+    )
+
+
 def scan_wifi_networks() -> list[dict[str, Any]]:
     """Rescan and return access points plus saved NetworkManager profiles."""
     subprocess.run(
@@ -107,22 +161,7 @@ def scan_wifi_networks() -> list[dict[str, Any]]:
         text=True,
         check=True,
     )
-    profiles_result = subprocess.run(
-        [
-            "nmcli",
-            "-t",
-            "-f",
-            "NAME,TYPE,802-11-wireless.ssid",
-            "connection",
-            "show",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return parse_wifi_scan_output(scan_result.stdout) + parse_saved_wifi_profiles(
-        profiles_result.stdout
-    )
+    return parse_wifi_scan_output(scan_result.stdout) + list_saved_wifi_profiles()
 
 
 def connect_saved_wifi(profile: str) -> dict[str, str]:

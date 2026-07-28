@@ -69,7 +69,12 @@ def test_scan_wifi_networks_rescans_before_listing(monkeypatch):
         if command[-1] == "list":
             stdout = "*:Home:88:WPA2\n"
         elif command[-2:] == ["connection", "show"]:
-            stdout = "Home Profile:802-11-wireless:Home\n"
+            stdout = (
+                "Home Profile:home-uuid:802-11-wireless\n"
+                "Wired:wired-uuid:802-3-ethernet\n"
+            )
+        elif command[-3:] == ["show", "uuid", "home-uuid"]:
+            stdout = "Home\n"
         else:
             stdout = ""
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -92,11 +97,84 @@ def test_scan_wifi_networks_rescans_before_listing(monkeypatch):
             "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
             "dev", "wifi", "list",
         ],
+        ["nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"],
         [
-            "nmcli", "-t", "-f", "NAME,TYPE,802-11-wireless.ssid",
-            "connection", "show",
+            "nmcli", "-g", "802-11-wireless.ssid",
+            "connection", "show", "uuid", "home-uuid",
         ],
     ]
+
+
+def test_list_saved_wifi_profiles_queries_ssid_per_wifi_profile(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs["check"]))
+        if command[-2:] == ["connection", "show"]:
+            stdout = "\n".join(
+                [
+                    r"Cafe\:Profile:cafe-uuid:802-11-wireless",
+                    r"家庭网络:home-uuid:802-11-wireless",
+                    r"Wired:wired-uuid:802-3-ethernet",
+                ]
+            )
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[-1] == "cafe-uuid":
+            return subprocess.CompletedProcess(
+                command, 0, stdout=r"Cafe\:Guest" + "\n", stderr=""
+            )
+        if command[-1] == "home-uuid":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="家庭网络\n", stderr=""
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(wifi_operations.subprocess, "run", fake_run)
+
+    assert wifi_operations.list_saved_wifi_profiles() == [
+        {
+            "ssid": "Cafe:Guest", "profile": "Cafe:Profile",
+            "remembered": True, "connected": False,
+        },
+        {
+            "ssid": "家庭网络", "profile": "家庭网络",
+            "remembered": True, "connected": False,
+        },
+    ]
+    assert calls == [
+        (["nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"], True),
+        ([
+            "nmcli", "-g", "802-11-wireless.ssid",
+            "connection", "show", "uuid", "cafe-uuid",
+        ], False),
+        ([
+            "nmcli", "-g", "802-11-wireless.ssid",
+            "connection", "show", "uuid", "home-uuid",
+        ], False),
+    ]
+
+
+def test_list_saved_wifi_profiles_tolerates_summary_failure(monkeypatch):
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(2, command, stderr="unsupported field")
+
+    monkeypatch.setattr(wifi_operations.subprocess, "run", fake_run)
+
+    assert wifi_operations.list_saved_wifi_profiles() == []
+
+
+def test_list_saved_wifi_profiles_skips_profile_detail_errors(monkeypatch):
+    def fake_run(command, **kwargs):
+        if command[-2:] == ["connection", "show"]:
+            return subprocess.CompletedProcess(
+                command, 0,
+                stdout="Broken:broken-uuid:802-11-wireless\n", stderr="",
+            )
+        return subprocess.CompletedProcess(command, 10, stdout="", stderr="gone")
+
+    monkeypatch.setattr(wifi_operations.subprocess, "run", fake_run)
+
+    assert wifi_operations.list_saved_wifi_profiles() == []
 
 
 def test_parse_saved_wifi_profiles_handles_escaped_unicode_and_dedupes():
