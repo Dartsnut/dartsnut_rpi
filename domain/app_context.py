@@ -21,6 +21,7 @@ class AppContext:
         set_volume: Callable[[int], None],
         set_brightness_hardware: Optional[Callable[[int], None]] = None,
         bluetooth_controller: Any = None,
+        wifi_controller: Any = None,
     ):
         self.display = display
         self.assets = assets
@@ -29,6 +30,7 @@ class AppContext:
         self.set_volume = set_volume
         self._set_brightness_hardware = set_brightness_hardware or set_brightness
         self.bluetooth_controller = bluetooth_controller
+        self.wifi_controller = wifi_controller
 
         # App state (replaces globals)
         self.pages = None

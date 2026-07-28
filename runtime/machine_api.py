@@ -35,6 +35,30 @@ def forget_wifi() -> None:
     devops.forget_wifi()
 
 
+def scan_wifi_networks():
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.scan_wifi_networks()
+
+
+def connect_wifi_network(ssid: str, password: str, secured: bool):
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.connect_wifi_network(ssid, password, secured)
+
+
+def connect_saved_wifi(profile: str):
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.connect_saved_wifi(profile)
+
+
+def forget_saved_wifi(profile: str):
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.forget_saved_wifi(profile)
+
+
 def get_version():
     gitops = importlib.import_module("python_websocket.git_operations")
 

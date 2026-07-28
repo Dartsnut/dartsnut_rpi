@@ -1161,11 +1161,12 @@ def ensure_supabase_sync_running(
             )
             return
         socket_path = os.environ.get("DARTSNUT_SUPABASE_SOCKET", SOCKET_PATH)
+        initial_state = _build_initial_state(device_info)
         _client = _SyncClient(
             socket_path,
             reload_config,
             on_config_updated,
-            _build_initial_state(device_info),
+            initial_state,
             _sync_engine,
             on_game_ready=on_game_ready,
         )

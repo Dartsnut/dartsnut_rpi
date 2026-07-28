@@ -8,9 +8,12 @@ from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
 from network_utils import get_primary_ipv4
-from runtime.bluetooth_identity import resolve_bluetooth_local_name
+from runtime.bluetooth_identity import (
+    resolve_bluetooth_device_id,
+    resolve_bluetooth_local_name,
+)
 from runtime.bluetooth_qr import (
-    create_bluetooth_qr_surface as _create_bluetooth_qr_surface,
+    create_connection_qr_surface as _create_connection_qr_surface,
 )
 from runtime.remote_sync_port import get_remote_sync
 from states.base import BaseState
@@ -241,8 +244,9 @@ SETTINGS_ITEMS = [
 ]
 
 CONNECTIVITY_ITEMS = [
-    {"name": "Bluetooth QR", "type": "action"},
+    {"name": "Connect to App", "type": "action"},
     {"name": "Controllers", "type": "action"},
+    {"name": "WiFi", "type": "action"},
 ]
 
 SETTINGS_LIST_MAX_HEIGHT = 128
@@ -252,12 +256,38 @@ SETTINGS_FIRST_SELECTABLE_INDEX = 3
 SETTINGS_CONNECTIVITY_INDEX = 5
 SETTINGS_RESET_DEVICE_INDEX = 6
 CONTROLLER_VISIBLE_ROWS = 7
+WIFI_VISIBLE_ROWS = 7
+WIFI_PASSWORD_LENGTH = 63
+WIFI_CHARACTER_REPEAT_DELAY_SECONDS = 0.5
+WIFI_CHARACTER_REPEAT_INTERVAL_SECONDS = 0.1
+WIFI_PASSWORD_FREQUENT_SPECIALS = "!@#$%&*_-+=.?/"
+_WIFI_PASSWORD_PRIORITY_CHARACTERS = (
+    " "
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789"
+    + WIFI_PASSWORD_FREQUENT_SPECIALS
+)
+WIFI_PASSWORD_CHARACTERS = _WIFI_PASSWORD_PRIORITY_CHARACTERS + "".join(
+    char
+    for char in (chr(code) for code in range(32, 127))
+    if char not in _WIFI_PASSWORD_PRIORITY_CHARACTERS
+)
+WIFI_SIGNAL_LEVELS = (34, 67)
+WIFI_SIGNAL_COLORS = {
+    1: (255, 0, 0),
+    2: (255, 215, 0),
+    3: (0, 255, 0),
+}
 
 _PAGE_SETTINGS = "settings"
 _PAGE_CONNECTIVITY = "connectivity"
 _PAGE_CONTROLLERS = "controllers"
+_PAGE_WIFI = "wifi"
+_PAGE_WIFI_PASSWORD = "wifi_password"
 _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
+_OVERLAY_WIFI_FORGET_CONFIRM = "wifi_forget_confirm"
 
 
 def _draw_settings_label(draw, x, y, label, fill, font):
@@ -304,11 +334,23 @@ class SettingsState(BaseState):
         self._page_mode = _PAGE_SETTINGS
         self._overlay_mode = None
         self._bluetooth_qr_surface = None
+        self._bluetooth_qr_key = None
         self._connectivity_select_index = 0
         self._controller_selected_key = "scan"
         self._controller_selected_index = 0
         self._controller_scroll_key = None
         self._controller_scroll_started_at = 0.0
+        self._wifi_selected_index = 0
+        self._wifi_selected_key = "rescan"
+        self._wifi_scroll_key = None
+        self._wifi_scroll_started_at = 0.0
+        self._wifi_selected_network = None
+        self._wifi_connection_uses_saved_profile = False
+        self._wifi_forget_network = None
+        self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
+        self._wifi_cursor_index = 0
+        self._wifi_character_repeat_direction = 0
+        self._wifi_character_repeat_next_at = None
 
     def name(self) -> str:
         return "settings"
@@ -321,13 +363,26 @@ class SettingsState(BaseState):
             settings_image = self._render_connectivity(ctx)
         elif self._page_mode == _PAGE_CONTROLLERS:
             settings_image = self._render_controllers(ctx)
+        elif self._page_mode == _PAGE_WIFI:
+            self._consume_wifi_connection_result(ctx)
+            self._consume_wifi_forget_result(ctx)
+            settings_image = self._render_wifi(ctx)
+        elif self._page_mode == _PAGE_WIFI_PASSWORD:
+            self._consume_wifi_connection_result(ctx)
+            if self._page_mode == _PAGE_WIFI:
+                settings_image = self._render_wifi(ctx)
+            else:
+                settings_image = self._render_wifi_password(ctx)
         else:
             settings_image = self._render_settings(ctx)
 
         if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
+            self._refresh_bluetooth_qr(ctx)
             settings_image = self._render_bluetooth_qr_overlay(ctx, settings_image)
         elif self._overlay_mode == _OVERLAY_RESET_CONFIRM:
             settings_image = self._render_reset_overlay(ctx, settings_image)
+        elif self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
+            settings_image = self._render_wifi_forget_overlay(ctx, settings_image)
         ctx.display.update_frame_buffer(settings_image)
 
     def _render_settings(self, ctx):
@@ -512,6 +567,210 @@ class SettingsState(BaseState):
         self._draw_footer(image, draw, ctx, "CONTROLLERS")
         return image
 
+    def _render_wifi(self, ctx):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.fontmode = "1"
+        snapshot = self._wifi_snapshot(ctx)
+        rows = self._wifi_rows(snapshot)
+        selected_index = self._sync_wifi_selection(rows)
+        start = max(0, selected_index - WIFI_VISIBLE_ROWS + 1)
+        start = min(start, max(0, len(rows) - WIFI_VISIBLE_ROWS))
+        font = getattr(ctx.assets, "system_font10", ctx.assets.font_6x8)
+        for visible_index, row in enumerate(rows[start : start + WIFI_VISIBLE_ROWS]):
+            actual_index = start + visible_index
+            y = visible_index * SETTINGS_ITEM_HEIGHT
+            focused = actual_index == selected_index
+            if focused:
+                draw.rectangle(
+                    (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
+                    fill=(255, 255, 255),
+                )
+            color = (0, 0, 0) if focused else (255, 255, 255)
+            if row["type"] in {"current", "remembered"}:
+                dot_color = (0, 255, 0) if row["type"] == "current" else (96, 96, 96)
+                self._draw_status_dot(
+                    draw, 5, y + SETTINGS_ITEM_HEIGHT // 2, dot_color
+                )
+                self._draw_wifi_ssid_label(
+                    image, row, focused, font, color, y, max_width=92, x=11
+                )
+                if "rssi" in row:
+                    self._draw_wifi_signal_dots(
+                        draw, row.get("rssi", 0), 124,
+                        y + SETTINGS_ITEM_HEIGHT // 2,
+                    )
+                continue
+            if row["type"] == "rescan":
+                label = "SCANNING" if snapshot.get("is_scan") else "RESCAN"
+                _draw_settings_label(
+                    draw, 2, y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+                    label, color, ctx.assets.font8,
+                )
+                if snapshot.get("is_scan"):
+                    self._draw_activity_icon(draw, 119, y + SETTINGS_ITEM_HEIGHT // 2)
+                continue
+            self._draw_wifi_ssid_label(
+                image, row, focused, font, color, y, max_width=101
+            )
+            self._draw_wifi_signal_dots(
+                draw, row.get("rssi", 0), 124, y + SETTINGS_ITEM_HEIGHT // 2
+            )
+        if len(rows) == 1 and not snapshot.get("is_scan"):
+            message = snapshot.get("scan_error") or "No networks"
+            self._draw_centered_system_text(draw, message, 44, font, (160, 160, 160))
+        self._draw_footer(image, draw, ctx, "WIFI")
+        return image
+
+    def _render_wifi_password(self, ctx):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.fontmode = "1"
+        font = getattr(ctx.assets, "system_font10", ctx.assets.font_6x8)
+        network = self._wifi_selected_network or {}
+        ssid = str(network.get("ssid") or "")
+        self._draw_centered_system_text(
+            draw, self._fit_text_to_width(draw, ssid, font, 124), 5, font, (255, 255, 255)
+        )
+        if not self._wifi_connection_uses_saved_profile:
+            draw.text((2, 27), "Password", fill=(180, 180, 180), font=font)
+            input_top = 43
+            input_bottom = 65
+            draw.rectangle(
+                (1, input_top, 126, input_bottom),
+                outline=(255, 255, 255), width=1,
+            )
+            visible_start, visible_text = self._wifi_password_window(draw, font)
+            text_bbox = draw.textbbox((0, 0), visible_text, font=font)
+            text_y = input_top + max(
+                1,
+                (input_bottom - input_top + 1 - (text_bbox[3] - text_bbox[1]))
+                // 2
+                - text_bbox[1],
+            )
+            draw.text((4, text_y), visible_text, fill=(255, 255, 255), font=font)
+            cursor_offset = self._wifi_cursor_index - visible_start
+            prefix = visible_text[:cursor_offset]
+            current = visible_text[cursor_offset : cursor_offset + 1] or " "
+            cursor_x = 4 + draw.textlength(prefix, font=font)
+            cursor_width = max(4, draw.textlength(current, font=font))
+            draw.rectangle(
+                (
+                    int(cursor_x), input_bottom - 2,
+                    min(125, int(cursor_x + cursor_width)), input_bottom - 1,
+                ),
+                fill=(255, 101, 140),
+            )
+            index_text = f"{self._wifi_cursor_index + 1}/{WIFI_PASSWORD_LENGTH}"
+            draw.text((2, 70), index_text, fill=(128, 128, 128), font=font)
+        snapshot = self._wifi_snapshot(ctx)
+        status = str(snapshot.get("connection_status") or "idle")
+        if str(snapshot.get("connection_ssid") or "") != ssid:
+            status = "idle"
+        if status == "connecting":
+            self._draw_centered_system_text(draw, "Connecting...", 91, font, (255, 255, 255))
+            self._draw_activity_icon(draw, 64, 114)
+        elif status == "error":
+            self._draw_centered_system_text(
+                draw, snapshot.get("connection_error") or "Unable to connect",
+                91, font, (255, 80, 80),
+            )
+        elif not self._wifi_connection_uses_saved_profile:
+            self._draw_centered_system_text(
+                draw, "A: Connect", 91, font, (180, 180, 180)
+            )
+        self._draw_footer(image, draw, ctx, "WIFI")
+        return image
+
+    def _draw_wifi_ssid_label(
+        self, image, row, focused, font, color, y, max_width, x=2
+    ):
+        """Draw an SSID in a clipped viewport, scrolling the focused long row."""
+        ssid = str(row.get("ssid") or "")
+        background = (255, 255, 255) if focused else (0, 0, 0)
+        label_image = Image.new(
+            "RGB", (max_width, SETTINGS_ITEM_HEIGHT), background
+        )
+        label_draw = ImageDraw.Draw(label_image)
+        label_draw.fontmode = "1"
+        full_width = label_draw.textlength(ssid, font=font)
+        scrolling = focused and full_width > max_width
+
+        if scrolling:
+            key = str(row.get("key") or ssid)
+            now = time.time()
+            if key != self._wifi_scroll_key:
+                self._wifi_scroll_key = key
+                self._wifi_scroll_started_at = now
+            elapsed = now - self._wifi_scroll_started_at
+            gap = 18
+            cycle_width = max(1, int(full_width) + gap)
+            offset = (
+                0 if elapsed < 1.0
+                else int((elapsed - 1.0) / 0.05) % cycle_width
+            )
+            labels = ((ssid, -offset), (ssid, cycle_width - offset))
+        else:
+            label = self._fit_text_to_width(
+                label_draw, ssid, font, max_width
+            )
+            labels = ((label, 0),)
+
+        for label, text_x in labels:
+            bbox = label_draw.textbbox((0, 0), label, font=font)
+            text_y = max(
+                0,
+                (SETTINGS_ITEM_HEIGHT - (bbox[3] - bbox[1])) // 2
+                - bbox[1],
+            )
+            label_draw.text((text_x, text_y), label, fill=color, font=font)
+        image.paste(label_image, (x, y))
+
+    @staticmethod
+    def _fit_text_to_width(draw, text, font, max_width):
+        value = str(text or "")
+        if draw.textbbox((0, 0), value, font=font)[2] <= max_width:
+            return value
+        suffix = "..."
+        while value and draw.textbbox((0, 0), value + suffix, font=font)[2] > max_width:
+            value = value[:-1]
+        return value + suffix if value else suffix
+
+    @staticmethod
+    def _draw_centered_system_text(draw, text, y, font, fill):
+        value = str(text or "")
+        bbox = draw.textbbox((0, 0), value, font=font)
+        draw.text(((128 - (bbox[2] - bbox[0])) / 2, y - bbox[1]), value, fill=fill, font=font)
+
+    def _wifi_password_window(self, draw, font, max_width=118):
+        """Return a cursor-centered slice that fits the variable-width system font."""
+        cursor = self._wifi_cursor_index
+        start = cursor
+        end = cursor + 1
+        prefer_left = True
+        while start > 0 or end < WIFI_PASSWORD_LENGTH:
+            candidates = []
+            if start > 0:
+                candidates.append(("left", start - 1, end))
+            if end < WIFI_PASSWORD_LENGTH:
+                candidates.append(("right", start, end + 1))
+            if len(candidates) == 2 and not prefer_left:
+                candidates.reverse()
+
+            expanded = False
+            for side, candidate_start, candidate_end in candidates:
+                candidate = "".join(
+                    self._wifi_password[candidate_start:candidate_end]
+                )
+                if draw.textlength(candidate, font=font) <= max_width:
+                    start, end = candidate_start, candidate_end
+                    prefer_left = side != "left"
+                    expanded = True
+                    break
+            if not expanded:
+                break
+        return start, "".join(self._wifi_password[start:end])
+
     def _controller_row_label(self, row, focused):
         if not focused:
             return _controller_display_label(row.get("name"))
@@ -588,6 +847,25 @@ class SettingsState(BaseState):
     def _draw_status_dot(draw, cx, cy, color):
         draw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=color)
 
+    @staticmethod
+    def _wifi_signal_level(rssi):
+        try:
+            signal = int(rssi)
+        except (TypeError, ValueError):
+            signal = 0
+        if signal >= WIFI_SIGNAL_LEVELS[1]:
+            return 3
+        if signal >= WIFI_SIGNAL_LEVELS[0]:
+            return 2
+        return 1
+
+    def _draw_wifi_signal_dots(self, draw, rssi, right_x, center_y):
+        level = self._wifi_signal_level(rssi)
+        color = WIFI_SIGNAL_COLORS[level]
+        first_x = right_x - (level - 1) * 7
+        for index in range(level):
+            self._draw_status_dot(draw, first_x + index * 7, center_y, color)
+
     def _draw_controller_status_icon(self, draw, status, cx, cy):
         status = str(status or "idle").lower()
         if status == "connecting":
@@ -644,6 +922,40 @@ class SettingsState(BaseState):
             fill="white",
             font=ctx.assets.font_6x8,
         )
+        return settings_rgba.convert("RGB")
+
+    def _render_wifi_forget_overlay(self, ctx, image):
+        settings_rgba = image.convert("RGBA")
+        overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 200))
+        settings_rgba.paste(overlay, (0, 0), overlay)
+        draw = ImageDraw.Draw(settings_rgba)
+        draw.fontmode = "1"
+        font = getattr(ctx.assets, "system_font10", ctx.assets.font_6x8)
+        network = self._wifi_forget_network or {}
+        ssid = self._fit_text_to_width(
+            draw, str(network.get("ssid") or "WiFi"), font, 120
+        )
+        snapshot = self._wifi_snapshot(ctx)
+        status = str(snapshot.get("forget_status") or "idle")
+        if status == "forgetting":
+            self._draw_centered_system_text(draw, ssid, 42, font, "white")
+            self._draw_centered_system_text(draw, "Forgetting...", 68, font, "white")
+            self._draw_activity_icon(draw, 64, 92)
+        elif status == "error":
+            self._draw_centered_system_text(draw, ssid, 38, font, "white")
+            self._draw_centered_system_text(
+                draw, snapshot.get("forget_error") or "Unable to forget",
+                64, font, (255, 80, 80),
+            )
+            self._draw_centered_system_text(
+                draw, "B: Close", 88, font, (180, 180, 180)
+            )
+        else:
+            self._draw_centered_system_text(draw, "Forget WiFi?", 34, font, "white")
+            self._draw_centered_system_text(draw, ssid, 58, font, "white")
+            self._draw_centered_system_text(
+                draw, "A: Confirm  B: Cancel", 84, font, (180, 180, 180)
+            )
         return settings_rgba.convert("RGB")
 
     @staticmethod
@@ -731,14 +1043,190 @@ class SettingsState(BaseState):
             except Exception:
                 pass
 
-    def _open_bluetooth_qr(self, ctx):
-        self._bluetooth_qr_surface = None
+    @staticmethod
+    def _wifi_snapshot(ctx):
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is None:
+            return {
+                "is_scan": False, "networks": [], "connected_network": None,
+                "remembered_networks": [], "scan_error": "",
+                "connection_status": "idle",
+                "connection_error": "",
+                "connection_ssid": "",
+            }
         try:
-            local_name = resolve_bluetooth_local_name(ctx.get_device_info())
-            if local_name:
-                self._bluetooth_qr_surface = _create_bluetooth_qr_surface(local_name)
+            snapshot = manager.get_state_snapshot()
+            if isinstance(snapshot, dict):
+                return snapshot
+        except Exception:
+            pass
+        return {
+            "is_scan": False, "networks": [], "connected_network": None,
+            "remembered_networks": [], "scan_error": "",
+            "connection_status": "idle",
+            "connection_error": "",
+            "connection_ssid": "",
+        }
+
+    @staticmethod
+    def _wifi_rows(snapshot):
+        rows = []
+        connected = snapshot.get("connected_network")
+        connected_ssid = ""
+        if isinstance(connected, dict):
+            connected_ssid = str(connected.get("ssid") or "")
+            if connected_ssid:
+                current = dict(connected)
+                current.update(
+                    {"type": "current", "key": f"current:{connected_ssid}"}
+                )
+                rows.append(current)
+        for network in snapshot.get("remembered_networks") or []:
+            if not isinstance(network, dict):
+                continue
+            ssid = str(network.get("ssid") or "")
+            profile = str(network.get("profile") or "")
+            if not ssid or not profile or ssid == connected_ssid:
+                continue
+            row = dict(network)
+            row.update({"type": "remembered", "key": f"remembered:{profile}"})
+            rows.append(row)
+        rows.append({"type": "rescan", "key": "rescan"})
+        remembered_ssids = {
+            str(row.get("ssid") or "")
+            for row in rows
+            if row.get("type") == "remembered"
+        }
+        for network in snapshot.get("networks") or []:
+            if not isinstance(network, dict):
+                continue
+            ssid = str(network.get("ssid") or "")
+            if not ssid or ssid == connected_ssid or ssid in remembered_ssids:
+                continue
+            row = dict(network)
+            row.update({"type": "network", "key": f"network:{ssid}"})
+            rows.append(row)
+        return rows
+
+    def _sync_wifi_selection(self, rows):
+        if not rows:
+            self._wifi_selected_index = 0
+            self._wifi_selected_key = ""
+            return 0
+        keys = [row.get("key") for row in rows]
+        if self._wifi_selected_key in keys:
+            self._wifi_selected_index = keys.index(self._wifi_selected_key)
+        else:
+            self._wifi_selected_index = _clamp(
+                self._wifi_selected_index, 0, len(rows) - 1
+            )
+            self._wifi_selected_key = rows[self._wifi_selected_index]["key"]
+        return self._wifi_selected_index
+
+    def _move_wifi_selection(self, rows, delta):
+        selected_index = self._sync_wifi_selection(rows)
+        self._wifi_selected_index = _clamp(
+            selected_index + delta, 0, len(rows) - 1
+        )
+        self._wifi_selected_key = rows[self._wifi_selected_index]["key"]
+
+    def _enter_wifi(self, ctx):
+        self._page_mode = _PAGE_WIFI
+        self._wifi_selected_index = 0
+        self._wifi_selected_key = "rescan"
+        self._wifi_scroll_key = None
+        self._wifi_scroll_started_at = 0.0
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is not None:
+            try:
+                manager.clear_connection_result()
+                manager.start_scan_if_requested()
+            except Exception:
+                pass
+
+    def _enter_wifi_password(self, network):
+        self._page_mode = _PAGE_WIFI_PASSWORD
+        self._wifi_selected_network = dict(network)
+        self._wifi_connection_uses_saved_profile = False
+        self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
+        self._wifi_cursor_index = 0
+        self._reset_wifi_character_repeat()
+
+    def _enter_wifi_saved_connect(self, ctx, network):
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is None:
+            return
+        self._page_mode = _PAGE_WIFI_PASSWORD
+        self._wifi_selected_network = dict(network)
+        self._wifi_connection_uses_saved_profile = True
+        self._reset_wifi_character_repeat()
+        try:
+            manager.clear_connection_result()
+            manager.start_connect_saved_if_requested(
+                str(network.get("profile") or ""),
+                str(network.get("ssid") or ""),
+            )
+        except Exception:
+            pass
+
+    def _consume_wifi_connection_result(self, ctx):
+        snapshot = self._wifi_snapshot(ctx)
+        if snapshot.get("connection_status") != "success":
+            return
+        selected_ssid = str((self._wifi_selected_network or {}).get("ssid") or "")
+        if str(snapshot.get("connection_ssid") or "") != selected_ssid:
+            return
+        self._page_mode = _PAGE_WIFI
+        self._wifi_selected_index = 0
+        self._wifi_selected_key = "rescan"
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is not None:
+            try:
+                manager.clear_connection_result()
+                manager.start_scan_if_requested()
+            except Exception:
+                pass
+
+    def _consume_wifi_forget_result(self, ctx):
+        snapshot = self._wifi_snapshot(ctx)
+        if snapshot.get("forget_status") != "success":
+            return
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is not None:
+            try:
+                manager.clear_forget_result()
+                manager.start_scan_if_requested()
+            except Exception:
+                pass
+        self._overlay_mode = None
+        self._wifi_forget_network = None
+        self._wifi_selected_key = "rescan"
+
+    def _refresh_bluetooth_qr(self, ctx):
+        sync = get_remote_sync()
+        connected = bool(sync.is_connected())
+        try:
+            device_info = ctx.get_device_info()
+            local_name = resolve_bluetooth_local_name(device_info)
+            device_id = resolve_bluetooth_device_id(device_info) or ""
+        except Exception:
+            local_name = None
+            device_id = ""
+        key = (connected, device_id, local_name)
+        if key == self._bluetooth_qr_key:
+            return
+        self._bluetooth_qr_key = key
+        try:
+            self._bluetooth_qr_surface = _create_connection_qr_surface(
+                local_name, supabase_connected=connected, device_id=device_id
+            )
         except Exception:
             self._bluetooth_qr_surface = None
+
+    def _open_bluetooth_qr(self, ctx):
+        self._bluetooth_qr_surface = None
+        self._bluetooth_qr_key = None
+        self._refresh_bluetooth_qr(ctx)
         self._overlay_mode = _OVERLAY_BLUETOOTH_QR
 
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:
@@ -746,6 +1234,34 @@ class SettingsState(BaseState):
             if buttons.get("btn_b") or buttons.get("btn_home"):
                 self._overlay_mode = None
                 self._bluetooth_qr_surface = None
+                self._bluetooth_qr_key = None
+            return
+
+        if self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
+            snapshot = self._wifi_snapshot(ctx)
+            status = str(snapshot.get("forget_status") or "idle")
+            if status == "forgetting":
+                return
+            if buttons.get("btn_a") and status == "idle":
+                manager = getattr(ctx, "wifi_controller", None)
+                network = self._wifi_forget_network or {}
+                if manager is not None:
+                    try:
+                        manager.start_forget_if_requested(
+                            str(network.get("profile") or ""),
+                            str(network.get("ssid") or ""),
+                        )
+                    except Exception:
+                        pass
+            elif buttons.get("btn_b") or buttons.get("btn_home"):
+                manager = getattr(ctx, "wifi_controller", None)
+                if manager is not None:
+                    try:
+                        manager.clear_forget_result()
+                    except Exception:
+                        pass
+                self._overlay_mode = None
+                self._wifi_forget_network = None
             return
 
         if self._overlay_mode == _OVERLAY_RESET_CONFIRM:
@@ -764,6 +1280,12 @@ class SettingsState(BaseState):
             if self._page_mode == _PAGE_CONTROLLERS:
                 self._page_mode = _PAGE_CONNECTIVITY
                 self._connectivity_select_index = 1
+            elif self._page_mode == _PAGE_WIFI_PASSWORD:
+                self._reset_wifi_character_repeat()
+                self._page_mode = _PAGE_WIFI
+            elif self._page_mode == _PAGE_WIFI:
+                self._page_mode = _PAGE_CONNECTIVITY
+                self._connectivity_select_index = 2
             elif self._page_mode == _PAGE_CONNECTIVITY:
                 self._page_mode = _PAGE_SETTINGS
                 ctx.setting_select_index = SETTINGS_CONNECTIVITY_INDEX
@@ -773,6 +1295,10 @@ class SettingsState(BaseState):
 
         if self._page_mode == _PAGE_CONTROLLERS:
             self._handle_controllers_input(ctx, buttons)
+        elif self._page_mode == _PAGE_WIFI:
+            self._handle_wifi_input(ctx, buttons)
+        elif self._page_mode == _PAGE_WIFI_PASSWORD:
+            self._handle_wifi_password_input(ctx, buttons)
         elif self._page_mode == _PAGE_CONNECTIVITY:
             self._handle_connectivity_input(ctx, buttons)
         else:
@@ -788,8 +1314,10 @@ class SettingsState(BaseState):
         if buttons.get("btn_a"):
             if self._connectivity_select_index == 0:
                 self._open_bluetooth_qr(ctx)
-            else:
+            elif self._connectivity_select_index == 1:
                 self._enter_controllers(ctx)
+            else:
+                self._enter_wifi(ctx)
         elif buttons.get("btn_up"):
             self._connectivity_select_index = max(
                 0, self._connectivity_select_index - 1
@@ -799,6 +1327,138 @@ class SettingsState(BaseState):
                 len(CONNECTIVITY_ITEMS) - 1,
                 self._connectivity_select_index + 1,
             )
+
+    def _handle_wifi_input(self, ctx, buttons):
+        snapshot = self._wifi_snapshot(ctx)
+        rows = self._wifi_rows(snapshot)
+        if buttons.get("btn_up"):
+            self._move_wifi_selection(rows, -1)
+            return
+        if buttons.get("btn_down"):
+            self._move_wifi_selection(rows, 1)
+            return
+        if not buttons.get("btn_a"):
+            return
+        selected = rows[self._sync_wifi_selection(rows)]
+        manager = getattr(ctx, "wifi_controller", None)
+        if selected["type"] == "current":
+            if selected.get("profile"):
+                self._wifi_forget_network = dict(selected)
+                self._overlay_mode = _OVERLAY_WIFI_FORGET_CONFIRM
+            return
+        if selected["type"] == "remembered":
+            self._enter_wifi_saved_connect(ctx, selected)
+            return
+        if selected["type"] == "rescan":
+            if manager is not None:
+                try:
+                    manager.start_scan_if_requested()
+                except Exception:
+                    pass
+            return
+        if manager is not None:
+            try:
+                manager.clear_connection_result()
+            except Exception:
+                pass
+        self._enter_wifi_password(selected)
+
+    def _reset_wifi_character_repeat(self):
+        self._wifi_character_repeat_direction = 0
+        self._wifi_character_repeat_next_at = None
+
+    def _cycle_wifi_password_character(self, delta, steps=1):
+        current = self._wifi_password[self._wifi_cursor_index]
+        try:
+            index = WIFI_PASSWORD_CHARACTERS.index(current)
+        except ValueError:
+            index = 0
+        self._wifi_password[self._wifi_cursor_index] = WIFI_PASSWORD_CHARACTERS[
+            (index + delta * steps) % len(WIFI_PASSWORD_CHARACTERS)
+        ]
+
+    def _wifi_character_repeat(self, ctx, buttons):
+        """Return direction/steps for an initial press or a due held repeat."""
+        pressed_direction = 0
+        if buttons.get("btn_up"):
+            pressed_direction = 1
+        elif buttons.get("btn_down"):
+            pressed_direction = -1
+
+        now = time.monotonic()
+        if pressed_direction:
+            self._wifi_character_repeat_direction = pressed_direction
+            self._wifi_character_repeat_next_at = (
+                now + WIFI_CHARACTER_REPEAT_DELAY_SECONDS
+            )
+            return pressed_direction, 1
+
+        held = getattr(ctx, "current_button_state", None) or {}
+        held_direction = 0
+        if held.get("btn_up") and not held.get("btn_down"):
+            held_direction = 1
+        elif held.get("btn_down") and not held.get("btn_up"):
+            held_direction = -1
+
+        if held_direction != self._wifi_character_repeat_direction:
+            self._reset_wifi_character_repeat()
+            return 0, 0
+        next_at = self._wifi_character_repeat_next_at
+        if not held_direction or next_at is None or now < next_at:
+            return 0, 0
+
+        steps = int(
+            (now - next_at + 1e-9)
+            / WIFI_CHARACTER_REPEAT_INTERVAL_SECONDS
+        ) + 1
+        self._wifi_character_repeat_next_at = (
+            next_at + steps * WIFI_CHARACTER_REPEAT_INTERVAL_SECONDS
+        )
+        return held_direction, steps
+
+    def _handle_wifi_password_input(self, ctx, buttons):
+        snapshot = self._wifi_snapshot(ctx)
+        if self._wifi_connection_uses_saved_profile:
+            return
+        selected_ssid = str((self._wifi_selected_network or {}).get("ssid") or "")
+        connection_matches = (
+            str(snapshot.get("connection_ssid") or "") == selected_ssid
+        )
+        if connection_matches and snapshot.get("connection_status") == "connecting":
+            self._reset_wifi_character_repeat()
+            return
+        if buttons.get("btn_left"):
+            self._reset_wifi_character_repeat()
+            self._wifi_cursor_index = max(0, self._wifi_cursor_index - 1)
+        elif buttons.get("btn_right"):
+            self._reset_wifi_character_repeat()
+            self._wifi_cursor_index = min(
+                WIFI_PASSWORD_LENGTH - 1, self._wifi_cursor_index + 1
+            )
+        elif buttons.get("btn_a"):
+            self._reset_wifi_character_repeat()
+            manager = getattr(ctx, "wifi_controller", None)
+            network = self._wifi_selected_network or {}
+            if manager is None or not network:
+                return
+            if connection_matches and snapshot.get("connection_status") == "error":
+                try:
+                    manager.clear_connection_result()
+                except Exception:
+                    pass
+            password = "".join(self._wifi_password).strip()
+            try:
+                manager.start_connect_if_requested(
+                    str(network.get("ssid") or ""),
+                    password,
+                    bool(network.get("secured")),
+                )
+            except Exception:
+                pass
+        else:
+            direction, steps = self._wifi_character_repeat(ctx, buttons)
+            if steps:
+                self._cycle_wifi_password_character(direction, steps)
 
     def _handle_controllers_input(self, ctx, buttons):
         if buttons.get("btn_up"):

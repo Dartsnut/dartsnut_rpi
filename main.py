@@ -73,6 +73,7 @@ from runtime.remote_sync_port import (
     set_remote_sync,
 )
 from runtime.reset_workflow import request_confirm_and_forget_wifi
+from runtime.qr_status import write_qr_status
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
@@ -80,6 +81,7 @@ from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
 from runtime.controller_input import ControllerInputManager
+from runtime.wifi_controller import WifiController
 from runtime.snackbar_display import (
     CONTROLLER_CONNECTED_MESSAGE,
     CONTROLLER_DISCONNECTED_MESSAGE,
@@ -117,6 +119,7 @@ _reset_remote_confirm_event = threading.Event()
 _RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
 
 set_remote_sync(create_default_remote_sync())
+write_qr_status(False)
 
 _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
@@ -143,6 +146,12 @@ perform_update_with_snackbar = wrap_firmware_update_with_snackbar(
 )
 _websocket_service_registry = build_default_websocket_registry(
     perform_update=perform_update_with_snackbar
+)
+_wifi_controller = WifiController(
+    scan_networks=machine_api.scan_wifi_networks,
+    connect_network=machine_api.connect_wifi_network,
+    connect_saved_network=machine_api.connect_saved_wifi,
+    forget_network=machine_api.forget_saved_wifi,
 )
 
 
@@ -359,11 +368,14 @@ ctx = AppContext(
     set_volume=set_volume,
     set_brightness_hardware=_set_brightness_hardware,
     bluetooth_controller=_remote_bluetooth_scan_controller,
+    wifi_controller=_wifi_controller,
 )
 ctx.load_game_list = lambda: load_menu_game_list(ctx)
 ctx.term_game_process = term_game_process
 ctx.start_game_process = start_game_process
 ctx.term_widget_processes = term_widget_processes
+
+
 def _set_game_status_from_local_ui(game_id: str, status: str) -> None:
     from runtime.remote_device_config import note_local_game_transition
 
@@ -804,6 +816,7 @@ def request_network_state_refresh():
 
 
 def _on_remote_connectivity_changed(connected: bool) -> None:
+    write_qr_status(connected)
     if connected and not _is_reset_in_progress():
         request_network_state_refresh()
 
