@@ -345,8 +345,8 @@ fn run_probe_tick(
     probe_idle_device_updated_at_write(client, cfg, rpc_lock, probe_state)
 }
 
-fn send_bridge_health(writer: &OutSender, state: &str, probe: &RestProbeSnapshot, device_id: &str) {
-    let mut payload = json!({ "state": state, "device_id": device_id });
+fn send_bridge_health(writer: &OutSender, state: &str, probe: &RestProbeSnapshot) {
+    let mut payload = json!({ "state": state });
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("rest_probe_ok".to_string(), json!(probe.probe_ok));
         if let Some(ms) = probe.latency_ms {
@@ -395,7 +395,7 @@ fn run_rest_probe_loop(
         } else {
             "disconnected"
         };
-        send_bridge_health(&writer, ws_state, &snapshot, &cfg.device_id);
+        send_bridge_health(&writer, ws_state, &snapshot);
         probe_in_flight.store(false, Ordering::Release);
     }
 }
@@ -625,7 +625,7 @@ fn run_realtime_loop(
             .expect("probe state lock poisoned")
             .snapshot
             .clone();
-        send_bridge_health(&writer, state, &snap, &cfg.device_id);
+        send_bridge_health(&writer, state, &snap);
     };
     let signal_probe = || {
         let _ = probe_wake_tx.send(());
@@ -979,29 +979,6 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Read;
-
-    #[test]
-    fn bridge_health_includes_authoritative_device_id() {
-        let (tx, rx) = mpsc::sync_channel::<String>(1);
-        let probe = RestProbeSnapshot {
-            probe_ok: true,
-            latency_ms: Some(42),
-        };
-
-        send_bridge_health(&tx, "connected", &probe, "OVERRIDE-ID");
-
-        let line = rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("health line");
-        let message: Value = serde_json::from_str(line.trim()).expect("health json");
-        assert_eq!(message.get("kind"), Some(&json!("bridge_health")));
-        assert_eq!(
-            message
-                .get("payload")
-                .and_then(|payload| payload.get("device_id")),
-            Some(&json!("OVERRIDE-ID"))
-        );
-    }
 
     #[test]
     fn reset_confirmation_shape_is_detected() {

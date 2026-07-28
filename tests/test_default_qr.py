@@ -44,12 +44,17 @@ def test_default_widget_desired_payload_switches_to_bind(monkeypatch):
     )
     monkeypatch.setattr(
         default_widget,
+        "resolve_bluetooth_device_id",
+        lambda _info: "AA:BB:CC:DD:EE:FF",
+    )
+    monkeypatch.setattr(
+        default_widget,
         "read_qr_status",
-        lambda: {"supabase_connected": True, "device_id": "AA:BB"},
+        lambda: {"supabase_connected": True},
     )
 
     assert default_widget._desired_connection_payload({}) == (
-        "dartsnut://device/bind?device_id=AA%3ABB"
+        "dartsnut://device/bind?device_id=AA%3ABB%3ACC%3ADD%3AEE%3AFF"
     )
 
 

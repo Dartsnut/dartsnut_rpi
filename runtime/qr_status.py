@@ -11,15 +11,11 @@ QR_STATUS_PATH = "/tmp/dartsnut_qr_status.json"
 
 def write_qr_status(
     connected: bool,
-    device_id: str = "",
     *,
     path: str = QR_STATUS_PATH,
 ) -> None:
     """Atomically publish current Supabase QR state for widget subprocesses."""
-    payload = {
-        "supabase_connected": bool(connected),
-        "device_id": str(device_id or "").strip(),
-    }
+    payload = {"supabase_connected": bool(connected)}
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
     fd, temporary_path = tempfile.mkstemp(prefix=".dartsnut_qr_", dir=directory)
@@ -45,7 +41,6 @@ def read_qr_status(*, path: str = QR_STATUS_PATH) -> dict[str, Any]:
             raise ValueError("QR status is not an object")
         return {
             "supabase_connected": bool(payload.get("supabase_connected", False)),
-            "device_id": str(payload.get("device_id") or "").strip(),
         }
     except Exception:
-        return {"supabase_connected": False, "device_id": ""}
+        return {"supabase_connected": False}

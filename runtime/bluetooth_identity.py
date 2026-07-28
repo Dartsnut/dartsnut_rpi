@@ -1,4 +1,4 @@
-"""Shared helpers for the machine's advertised Bluetooth local name."""
+"""Shared helpers for the machine's Bluetooth identity."""
 from __future__ import annotations
 
 from typing import Any, Mapping, Optional
@@ -40,14 +40,36 @@ def get_bluetooth_adapter_address() -> Optional[str]:
     return None
 
 
+def normalize_bluetooth_adapter_address(value: Any) -> Optional[str]:
+    """Return a canonical colon-separated BLE MAC address when valid."""
+    compact = str(value or "").strip().replace(":", "").replace("-", "")
+    if len(compact) != 12 or any(
+        char not in "0123456789abcdefABCDEF" for char in compact
+    ):
+        return None
+    return ":".join(
+        compact[index : index + 2].upper() for index in range(0, 12, 2)
+    )
+
+
+def resolve_bluetooth_device_id(
+    device_info: Mapping[str, Any] | None,
+) -> Optional[str]:
+    """Resolve the BLE MAC used as the device bind identifier."""
+    info = device_info or {}
+    address = normalize_bluetooth_adapter_address(
+        info.get("ble_mac") or info.get("mac_address") or info.get("id")
+    )
+    if address:
+        return address
+    return normalize_bluetooth_adapter_address(get_bluetooth_adapter_address())
+
+
 def resolve_bluetooth_local_name(
     device_info: Mapping[str, Any] | None,
 ) -> Optional[str]:
     """Resolve the machine's Bluetooth local name from device data and adapter."""
-    info = device_info or {}
-    adapter_address = str(info.get("ble_mac") or "").strip()
-    if not adapter_address:
-        adapter_address = get_bluetooth_adapter_address() or ""
-    if not adapter_address:
+    address = resolve_bluetooth_device_id(device_info)
+    if not address:
         return None
-    return build_bluetooth_local_name(info, adapter_address)
+    return build_bluetooth_local_name(device_info, address)

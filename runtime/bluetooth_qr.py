@@ -8,7 +8,10 @@ from urllib.parse import quote
 import qrcode
 from PIL import Image
 
-from runtime.bluetooth_identity import resolve_bluetooth_local_name
+from runtime.bluetooth_identity import (
+    resolve_bluetooth_device_id,
+    resolve_bluetooth_local_name,
+)
 
 
 _BLUETOOTH_QR_LOGO = Image.open(
@@ -125,10 +128,10 @@ def create_connection_qr_for_device(
     device_info: Mapping[str, Any] | None,
     *,
     supabase_connected: bool = False,
-    device_id: str = "",
 ) -> Optional[Image.Image]:
-    """Resolve local identity and create the QR appropriate for current connectivity."""
+    """Resolve the BLE identity and create the QR for current connectivity."""
     local_name = resolve_bluetooth_local_name(device_info)
+    device_id = resolve_bluetooth_device_id(device_info) or ""
     return create_connection_qr_surface(
         local_name,
         supabase_connected=supabase_connected,

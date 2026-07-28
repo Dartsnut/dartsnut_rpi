@@ -8,7 +8,10 @@ from PIL import Image, ImageDraw
 
 from domain.app_context import AppContext
 from network_utils import get_primary_ipv4
-from runtime.bluetooth_identity import resolve_bluetooth_local_name
+from runtime.bluetooth_identity import (
+    resolve_bluetooth_device_id,
+    resolve_bluetooth_local_name,
+)
 from runtime.bluetooth_qr import (
     create_connection_qr_surface as _create_connection_qr_surface,
 )
@@ -1202,12 +1205,13 @@ class SettingsState(BaseState):
     def _refresh_bluetooth_qr(self, ctx):
         sync = get_remote_sync()
         connected = bool(sync.is_connected())
-        get_device_id = getattr(sync, "get_device_id", None)
-        device_id = str(get_device_id() or "") if get_device_id else ""
         try:
-            local_name = resolve_bluetooth_local_name(ctx.get_device_info())
+            device_info = ctx.get_device_info()
+            local_name = resolve_bluetooth_local_name(device_info)
+            device_id = resolve_bluetooth_device_id(device_info) or ""
         except Exception:
             local_name = None
+            device_id = ""
         key = (connected, device_id, local_name)
         if key == self._bluetooth_qr_key:
             return

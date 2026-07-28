@@ -5,7 +5,10 @@ import time
 
 from pydartsnut import Dartsnut
 
-from runtime.bluetooth_identity import resolve_bluetooth_local_name
+from runtime.bluetooth_identity import (
+    resolve_bluetooth_device_id,
+    resolve_bluetooth_local_name,
+)
 from runtime.bluetooth_qr import connection_qr_payload, create_qr_surface
 from runtime.qr_status import read_qr_status
 
@@ -25,7 +28,7 @@ def _desired_connection_payload(device_info: dict) -> str | None:
     return connection_qr_payload(
         resolve_bluetooth_local_name(device_info),
         supabase_connected=status["supabase_connected"],
-        device_id=status["device_id"],
+        device_id=resolve_bluetooth_device_id(device_info) or "",
     )
 
 

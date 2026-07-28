@@ -119,7 +119,7 @@ _reset_remote_confirm_event = threading.Event()
 _RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
 
 set_remote_sync(create_default_remote_sync())
-write_qr_status(False, "")
+write_qr_status(False)
 
 _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
@@ -816,9 +816,7 @@ def request_network_state_refresh():
 
 
 def _on_remote_connectivity_changed(connected: bool) -> None:
-    sync = get_remote_sync()
-    get_device_id = getattr(sync, "get_device_id", None)
-    write_qr_status(connected, get_device_id() if get_device_id else "")
+    write_qr_status(connected)
     if connected and not _is_reset_in_progress():
         request_network_state_refresh()
 

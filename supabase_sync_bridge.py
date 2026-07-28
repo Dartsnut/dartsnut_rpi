@@ -29,8 +29,6 @@ _bridge_proc: Optional[subprocess.Popen] = None
 _bridge_lock = threading.Lock()
 _connected = False
 _connected_lock = threading.Lock()
-_device_id = ""
-_device_id_lock = threading.Lock()
 # Monotonic timestamp of the last frame received from the bridge over the unix
 # socket (any kind: remote_row, bridge_health, ack, ...). Used by the watchdog to
 # detect a bridge that looks "connected" but has gone silent (the realtime-wedge
@@ -116,18 +114,6 @@ def _set_connected(connected: bool) -> None:
 def is_supabase_connected() -> bool:
     with _connected_lock:
         return _connected
-
-
-def _set_device_id(value: Any) -> None:
-    global _device_id
-    normalized = _normalize_device_id(value)
-    with _device_id_lock:
-        _device_id = normalized
-
-
-def get_supabase_device_id() -> str:
-    with _device_id_lock:
-        return _device_id
 
 
 def _record_bridge_activity() -> None:
@@ -892,7 +878,6 @@ class _SyncClient:
                                     self._outbox.on_error(ref, err)
                             elif kind == "bridge_health" and isinstance(payload, dict):
                                 _update_rest_probe_cache(payload)
-                                _set_device_id(payload.get("device_id"))
                                 _set_connected(
                                     str(payload.get("state", "")).lower() == "connected"
                                 )
@@ -1177,7 +1162,6 @@ def ensure_supabase_sync_running(
             return
         socket_path = os.environ.get("DARTSNUT_SUPABASE_SOCKET", SOCKET_PATH)
         initial_state = _build_initial_state(device_info)
-        _set_device_id((initial_state.get("device_info") or {}).get("id"))
         _client = _SyncClient(
             socket_path,
             reload_config,

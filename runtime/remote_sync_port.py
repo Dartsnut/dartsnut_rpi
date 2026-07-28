@@ -35,8 +35,6 @@ class RemoteSyncPort(Protocol):
 
     def is_connected(self) -> bool: ...
 
-    def get_device_id(self) -> str: ...
-
     def set_connectivity_callback(
         self, callback: Optional[Callable[[bool], None]]
     ) -> None: ...
@@ -79,9 +77,6 @@ class NoOpRemoteSync:
 
     def is_connected(self) -> bool:
         return False
-
-    def get_device_id(self) -> str:
-        return ""
 
     def set_connectivity_callback(
         self, callback: Optional[Callable[[bool], None]]
@@ -130,9 +125,6 @@ class SupabaseRemoteSync:
 
     def is_connected(self) -> bool:
         return _ssb.is_supabase_connected()
-
-    def get_device_id(self) -> str:
-        return _ssb.get_supabase_device_id()
 
     def set_connectivity_callback(
         self, callback: Optional[Callable[[bool], None]]

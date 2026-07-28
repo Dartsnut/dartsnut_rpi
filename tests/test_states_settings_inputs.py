@@ -251,19 +251,21 @@ def test_settings_bluetooth_qr_uses_local_name_and_btn_b_dismisses(monkeypatch):
 def test_settings_bluetooth_qr_refreshes_when_supabase_connects(monkeypatch):
     ctx = _Ctx()
     state = SettingsState()
-    sync_state = {"connected": False, "device_id": ""}
+    sync_state = {"connected": False}
     captured = []
 
     class _Sync:
         def is_connected(self):
             return sync_state["connected"]
 
-        def get_device_id(self):
-            return sync_state["device_id"]
-
     monkeypatch.setattr(ssettings, "get_remote_sync", lambda: _Sync())
     monkeypatch.setattr(
         ssettings, "resolve_bluetooth_local_name", lambda _info: "PixelDart-eeff"
+    )
+    monkeypatch.setattr(
+        ssettings,
+        "resolve_bluetooth_device_id",
+        lambda _info: "AA:BB:CC:DD:EE:FF",
     )
     monkeypatch.setattr(
         ssettings,
@@ -274,12 +276,24 @@ def test_settings_bluetooth_qr_refreshes_when_supabase_connects(monkeypatch):
 
     _open_connectivity(ctx, state)
     state.handle_input(ctx, {"btn_a": True})
-    sync_state.update(connected=True, device_id="AA:BB")
+    sync_state["connected"] = True
     state.update(ctx)
 
     assert captured == [
-        ("PixelDart-eeff", {"supabase_connected": False, "device_id": ""}),
-        ("PixelDart-eeff", {"supabase_connected": True, "device_id": "AA:BB"}),
+        (
+            "PixelDart-eeff",
+            {
+                "supabase_connected": False,
+                "device_id": "AA:BB:CC:DD:EE:FF",
+            },
+        ),
+        (
+            "PixelDart-eeff",
+            {
+                "supabase_connected": True,
+                "device_id": "AA:BB:CC:DD:EE:FF",
+            },
+        ),
     ]
 
 
