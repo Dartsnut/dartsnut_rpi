@@ -62,19 +62,31 @@ class _WifiController:
             "is_scan": False,
             "networks": [],
             "connected_network": None,
+            "remembered_networks": [],
             "scan_error": "",
             "connection_status": "idle",
             "connection_ssid": "",
+            "connection_profile": "",
             "connection_error": "",
+            "forget_status": "idle",
+            "forget_profile": "",
+            "forget_ssid": "",
+            "forget_error": "",
         }
         self.scan_calls = 0
         self.connect_calls = []
+        self.saved_connect_calls = []
+        self.forget_calls = []
         self.clear_calls = 0
+        self.clear_forget_calls = 0
 
     def get_state_snapshot(self):
         return {
             **self.state,
             "networks": [dict(row) for row in self.state.get("networks", [])],
+            "remembered_networks": [
+                dict(row) for row in self.state.get("remembered_networks", [])
+            ],
         }
 
     def start_scan_if_requested(self):
@@ -97,7 +109,32 @@ class _WifiController:
         self.clear_calls += 1
         if self.state["connection_status"] != "connecting":
             self.state.update(
-                connection_status="idle", connection_ssid="", connection_error=""
+                connection_status="idle", connection_ssid="",
+                connection_profile="", connection_error=""
+            )
+
+    def start_connect_saved_if_requested(self, profile, ssid):
+        self.saved_connect_calls.append((profile, ssid))
+        self.state.update(
+            connection_status="connecting", connection_ssid=ssid,
+            connection_profile=profile, connection_error=""
+        )
+        return True
+
+    def start_forget_if_requested(self, profile, ssid):
+        self.forget_calls.append((profile, ssid))
+        self.state.update(
+            forget_status="forgetting", forget_profile=profile,
+            forget_ssid=ssid, forget_error=""
+        )
+        return True
+
+    def clear_forget_result(self):
+        self.clear_forget_calls += 1
+        if self.state["forget_status"] != "forgetting":
+            self.state.update(
+                forget_status="idle", forget_profile="", forget_ssid="",
+                forget_error=""
             )
 
 
@@ -954,24 +991,97 @@ def test_wifi_rows_show_current_above_rescan_and_filter_duplicate():
     assert [row.get("ssid") for row in rows] == ["Home", None, "Guest"]
 
 
-def test_wifi_current_row_is_not_selectable_or_connectable():
-    ctx = _Ctx()
-    ctx.wifi_controller.state.update(
-        connected_network={"ssid": "Home", "rssi": 88, "secured": True},
-        networks=[{"ssid": "Guest", "rssi": 70, "secured": False}],
+def test_wifi_rows_put_current_and_remembered_above_rescan():
+    state = SettingsState()
+    rows = state._wifi_rows(
+        {
+            "connected_network": {
+                "ssid": "Home", "profile": "home-profile",
+                "rssi": 88, "connected": True,
+            },
+            "remembered_networks": [
+                {"ssid": "Office", "profile": "office-profile", "rssi": 70}
+            ],
+            "networks": [
+                {"ssid": "Home", "rssi": 88},
+                {"ssid": "Office", "rssi": 70},
+                {"ssid": "Guest", "rssi": 60},
+            ],
+        }
     )
+
+    assert [row["type"] for row in rows] == [
+        "current", "remembered", "rescan", "network"
+    ]
+    assert [row.get("ssid") for row in rows] == [
+        "Home", "Office", None, "Guest"
+    ]
+
+
+def test_wifi_remembered_network_opens_connecting_screen_without_input():
+    ctx = _Ctx()
+    ctx.wifi_controller.state["remembered_networks"] = [
+        {"ssid": "Office", "profile": "office-profile", "rssi": 70}
+    ]
     state = SettingsState()
     state._page_mode = "wifi"
-    rows = state._wifi_rows(ctx.wifi_controller.get_state_snapshot())
+    state._wifi_selected_key = "remembered:office-profile"
 
-    assert state._sync_wifi_selection(rows) == 1
-    state.handle_input(ctx, {"btn_up": True})
-    assert state._wifi_selected_index == 1
+    state.handle_input(ctx, {"btn_a": True})
+    state.update(ctx)
+
+    assert state._page_mode == "wifi_password"
+    assert state._wifi_connection_uses_saved_profile is True
+    assert ctx.wifi_controller.saved_connect_calls == [("office-profile", "Office")]
+    frame = ctx.display.frame
+    # Password input outline would have white pixels at these corners.
+    assert frame.getpixel((1, 43)) == (0, 0, 0)
+    assert frame.getpixel((126, 65)) == (0, 0, 0)
+
+
+def test_wifi_connected_network_asks_then_forgets_on_confirm():
+    ctx = _Ctx()
+    ctx.wifi_controller.state["connected_network"] = {
+        "ssid": "Home", "profile": "home-profile", "rssi": 88,
+        "connected": True,
+    }
+    state = SettingsState()
+    state._page_mode = "wifi"
+    state._wifi_selected_key = "current:Home"
+
     state.handle_input(ctx, {"btn_a": True})
 
+    assert state._overlay_mode == "wifi_forget_confirm"
+    assert ctx.wifi_controller.forget_calls == []
+
+    state.handle_input(ctx, {"btn_a": True})
+
+    assert ctx.wifi_controller.forget_calls == [("home-profile", "Home")]
+    assert state._overlay_mode == "wifi_forget_confirm"
+
+    ctx.wifi_controller.state["forget_status"] = "success"
+    state.update(ctx)
+
+    assert state._overlay_mode is None
+    assert ctx.wifi_controller.clear_forget_calls == 1
     assert ctx.wifi_controller.scan_calls == 1
-    assert ctx.wifi_controller.connect_calls == []
-    assert state._page_mode == "wifi"
+
+
+def test_wifi_connected_forget_confirmation_can_be_cancelled():
+    ctx = _Ctx()
+    ctx.wifi_controller.state["connected_network"] = {
+        "ssid": "Home", "profile": "home-profile", "rssi": 88,
+        "connected": True,
+    }
+    state = SettingsState()
+    state._page_mode = "wifi"
+    state._wifi_selected_key = "current:Home"
+
+    state.handle_input(ctx, {"btn_a": True})
+    state.handle_input(ctx, {"btn_b": True})
+
+    assert state._overlay_mode is None
+    assert ctx.wifi_controller.forget_calls == []
 
 
 def test_wifi_password_up_hold_repeats_after_delay(monkeypatch):

@@ -1,4 +1,4 @@
-"""NetworkManager-backed Wi-Fi scan and connection operations."""
+"""NetworkManager-backed Wi-Fi scan, connect, and saved-profile operations."""
 from __future__ import annotations
 
 import subprocess
@@ -63,24 +63,94 @@ def parse_wifi_scan_output(output: str) -> list[dict[str, Any]]:
     )
 
 
+def parse_saved_wifi_profiles(output: str) -> list[dict[str, Any]]:
+    """Parse saved wireless profiles, deduplicated by exact SSID."""
+    profiles_by_ssid: dict[str, dict[str, Any]] = {}
+    for line in str(output or "").splitlines():
+        parts = _split_nmcli_terse_line(line)
+        if len(parts) < 2 or parts[1].strip() != "802-11-wireless":
+            continue
+        profile = parts[0]
+        ssid = parts[2] if len(parts) > 2 and parts[2] else profile
+        if not profile or not ssid or ssid in profiles_by_ssid:
+            continue
+        profiles_by_ssid[ssid] = {
+            "ssid": ssid,
+            "profile": profile,
+            "remembered": True,
+            "connected": False,
+        }
+    return sorted(
+        profiles_by_ssid.values(), key=lambda item: str(item["ssid"]).casefold()
+    )
+
+
 def scan_wifi_networks() -> list[dict[str, Any]]:
-    """Request a Wi-Fi rescan and return normalized available networks."""
+    """Rescan and return access points plus saved NetworkManager profiles."""
     subprocess.run(
         ["nmcli", "dev", "wifi", "rescan"],
         capture_output=True,
         text=True,
         check=True,
     )
-    result = subprocess.run(
+    scan_result = subprocess.run(
         [
-            "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
-            "dev", "wifi", "list",
+            "nmcli",
+            "-t",
+            "-f",
+            "IN-USE,SSID,SIGNAL,SECURITY",
+            "dev",
+            "wifi",
+            "list",
         ],
         capture_output=True,
         text=True,
         check=True,
     )
-    return parse_wifi_scan_output(result.stdout)
+    profiles_result = subprocess.run(
+        [
+            "nmcli",
+            "-t",
+            "-f",
+            "NAME,TYPE,802-11-wireless.ssid",
+            "connection",
+            "show",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return parse_wifi_scan_output(scan_result.stdout) + parse_saved_wifi_profiles(
+        profiles_result.stdout
+    )
+
+
+def connect_saved_wifi(profile: str) -> dict[str, str]:
+    """Activate a saved NetworkManager Wi-Fi profile without a password."""
+    normalized_profile = str(profile or "")
+    if not normalized_profile:
+        raise ValueError("WiFi profile name is missing")
+    result = subprocess.run(
+        ["nmcli", "connection", "up", "id", normalized_profile],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {"profile": normalized_profile, "message": (result.stdout or "").strip()}
+
+
+def forget_saved_wifi(profile: str) -> dict[str, str]:
+    """Delete one saved NetworkManager Wi-Fi profile."""
+    normalized_profile = str(profile or "")
+    if not normalized_profile:
+        raise ValueError("WiFi profile name is missing")
+    result = subprocess.run(
+        ["nmcli", "connection", "delete", "id", normalized_profile],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {"profile": normalized_profile, "message": (result.stdout or "").strip()}
 
 
 def connect_wifi_network(ssid: str, password: str, secured: bool) -> dict[str, str]:

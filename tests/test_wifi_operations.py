@@ -66,7 +66,12 @@ def test_scan_wifi_networks_rescans_before_listing(monkeypatch):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        stdout = "*:Home:88:WPA2\n" if command[-1] == "list" else ""
+        if command[-1] == "list":
+            stdout = "*:Home:88:WPA2\n"
+        elif command[-2:] == ["connection", "show"]:
+            stdout = "Home Profile:802-11-wireless:Home\n"
+        else:
+            stdout = ""
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(wifi_operations.subprocess, "run", fake_run)
@@ -75,7 +80,11 @@ def test_scan_wifi_networks_rescans_before_listing(monkeypatch):
         {
             "ssid": "Home", "rssi": 88, "security": "WPA2",
             "secured": True, "connected": True,
-        }
+        },
+        {
+            "ssid": "Home", "profile": "Home Profile",
+            "remembered": True, "connected": False,
+        },
     ]
     assert calls == [
         ["nmcli", "dev", "wifi", "rescan"],
@@ -83,4 +92,53 @@ def test_scan_wifi_networks_rescans_before_listing(monkeypatch):
             "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
             "dev", "wifi", "list",
         ],
+        [
+            "nmcli", "-t", "-f", "NAME,TYPE,802-11-wireless.ssid",
+            "connection", "show",
+        ],
+    ]
+
+
+def test_parse_saved_wifi_profiles_handles_escaped_unicode_and_dedupes():
+    output = "\n".join(
+        [
+            r"Home Profile:802-11-wireless:Home",
+            r"Cafe\:Saved:802-11-wireless:Cafe\:Guest",
+            r"家庭网络:802-11-wireless:家庭网络",
+            r"Duplicate:802-11-wireless:Home",
+            r"Wired:802-3-ethernet:",
+        ]
+    )
+
+    assert wifi_operations.parse_saved_wifi_profiles(output) == [
+        {
+            "ssid": "Cafe:Guest", "profile": "Cafe:Saved",
+            "remembered": True, "connected": False,
+        },
+        {
+            "ssid": "Home", "profile": "Home Profile",
+            "remembered": True, "connected": False,
+        },
+        {
+            "ssid": "家庭网络", "profile": "家庭网络",
+            "remembered": True, "connected": False,
+        },
+    ]
+
+
+def test_saved_wifi_connect_and_forget_use_profile_id(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(wifi_operations.subprocess, "run", fake_run)
+
+    wifi_operations.connect_saved_wifi("Home Profile")
+    wifi_operations.forget_saved_wifi("Home Profile")
+
+    assert calls == [
+        ["nmcli", "connection", "up", "id", "Home Profile"],
+        ["nmcli", "connection", "delete", "id", "Home Profile"],
     ]

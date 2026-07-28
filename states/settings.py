@@ -284,6 +284,7 @@ _PAGE_WIFI = "wifi"
 _PAGE_WIFI_PASSWORD = "wifi_password"
 _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
+_OVERLAY_WIFI_FORGET_CONFIRM = "wifi_forget_confirm"
 
 
 def _draw_settings_label(draw, x, y, label, fill, font):
@@ -341,6 +342,8 @@ class SettingsState(BaseState):
         self._wifi_scroll_key = None
         self._wifi_scroll_started_at = 0.0
         self._wifi_selected_network = None
+        self._wifi_connection_uses_saved_profile = False
+        self._wifi_forget_network = None
         self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
         self._wifi_cursor_index = 0
         self._wifi_character_repeat_direction = 0
@@ -359,6 +362,7 @@ class SettingsState(BaseState):
             settings_image = self._render_controllers(ctx)
         elif self._page_mode == _PAGE_WIFI:
             self._consume_wifi_connection_result(ctx)
+            self._consume_wifi_forget_result(ctx)
             settings_image = self._render_wifi(ctx)
         elif self._page_mode == _PAGE_WIFI_PASSWORD:
             self._consume_wifi_connection_result(ctx)
@@ -374,6 +378,8 @@ class SettingsState(BaseState):
             settings_image = self._render_bluetooth_qr_overlay(ctx, settings_image)
         elif self._overlay_mode == _OVERLAY_RESET_CONFIRM:
             settings_image = self._render_reset_overlay(ctx, settings_image)
+        elif self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
+            settings_image = self._render_wifi_forget_overlay(ctx, settings_image)
         ctx.display.update_frame_buffer(settings_image)
 
     def _render_settings(self, ctx):
@@ -578,17 +584,19 @@ class SettingsState(BaseState):
                     fill=(255, 255, 255),
                 )
             color = (0, 0, 0) if focused else (255, 255, 255)
-            if row["type"] == "current":
+            if row["type"] in {"current", "remembered"}:
+                dot_color = (0, 255, 0) if row["type"] == "current" else (96, 96, 96)
                 self._draw_status_dot(
-                    draw, 5, y + SETTINGS_ITEM_HEIGHT // 2, (0, 255, 0)
+                    draw, 5, y + SETTINGS_ITEM_HEIGHT // 2, dot_color
                 )
                 self._draw_wifi_ssid_label(
-                    image, row, False, font, color, y, max_width=92, x=11
+                    image, row, focused, font, color, y, max_width=92, x=11
                 )
-                self._draw_wifi_signal_dots(
-                    draw, row.get("rssi", 0), 124,
-                    y + SETTINGS_ITEM_HEIGHT // 2,
-                )
+                if "rssi" in row:
+                    self._draw_wifi_signal_dots(
+                        draw, row.get("rssi", 0), 124,
+                        y + SETTINGS_ITEM_HEIGHT // 2,
+                    )
                 continue
             if row["type"] == "rescan":
                 label = "SCANNING" if snapshot.get("is_scan") else "RESCAN"
@@ -621,25 +629,37 @@ class SettingsState(BaseState):
         self._draw_centered_system_text(
             draw, self._fit_text_to_width(draw, ssid, font, 124), 5, font, (255, 255, 255)
         )
-        draw.text((2, 27), "Password", fill=(180, 180, 180), font=font)
-        input_top = 43
-        input_bottom = 65
-        draw.rectangle((1, input_top, 126, input_bottom), outline=(255, 255, 255), width=1)
-        visible_start, visible_text = self._wifi_password_window(draw, font)
-        text_bbox = draw.textbbox((0, 0), visible_text, font=font)
-        text_y = input_top + max(1, (input_bottom - input_top + 1 - (text_bbox[3] - text_bbox[1])) // 2 - text_bbox[1])
-        draw.text((4, text_y), visible_text, fill=(255, 255, 255), font=font)
-        cursor_offset = self._wifi_cursor_index - visible_start
-        prefix = visible_text[:cursor_offset]
-        current = visible_text[cursor_offset : cursor_offset + 1] or " "
-        cursor_x = 4 + draw.textlength(prefix, font=font)
-        cursor_width = max(4, draw.textlength(current, font=font))
-        draw.rectangle(
-            (int(cursor_x), input_bottom - 2, min(125, int(cursor_x + cursor_width)), input_bottom - 1),
-            fill=(255, 101, 140),
-        )
-        index_text = f"{self._wifi_cursor_index + 1}/{WIFI_PASSWORD_LENGTH}"
-        draw.text((2, 70), index_text, fill=(128, 128, 128), font=font)
+        if not self._wifi_connection_uses_saved_profile:
+            draw.text((2, 27), "Password", fill=(180, 180, 180), font=font)
+            input_top = 43
+            input_bottom = 65
+            draw.rectangle(
+                (1, input_top, 126, input_bottom),
+                outline=(255, 255, 255), width=1,
+            )
+            visible_start, visible_text = self._wifi_password_window(draw, font)
+            text_bbox = draw.textbbox((0, 0), visible_text, font=font)
+            text_y = input_top + max(
+                1,
+                (input_bottom - input_top + 1 - (text_bbox[3] - text_bbox[1]))
+                // 2
+                - text_bbox[1],
+            )
+            draw.text((4, text_y), visible_text, fill=(255, 255, 255), font=font)
+            cursor_offset = self._wifi_cursor_index - visible_start
+            prefix = visible_text[:cursor_offset]
+            current = visible_text[cursor_offset : cursor_offset + 1] or " "
+            cursor_x = 4 + draw.textlength(prefix, font=font)
+            cursor_width = max(4, draw.textlength(current, font=font))
+            draw.rectangle(
+                (
+                    int(cursor_x), input_bottom - 2,
+                    min(125, int(cursor_x + cursor_width)), input_bottom - 1,
+                ),
+                fill=(255, 101, 140),
+            )
+            index_text = f"{self._wifi_cursor_index + 1}/{WIFI_PASSWORD_LENGTH}"
+            draw.text((2, 70), index_text, fill=(128, 128, 128), font=font)
         snapshot = self._wifi_snapshot(ctx)
         status = str(snapshot.get("connection_status") or "idle")
         if str(snapshot.get("connection_ssid") or "") != ssid:
@@ -652,8 +672,10 @@ class SettingsState(BaseState):
                 draw, snapshot.get("connection_error") or "Unable to connect",
                 91, font, (255, 80, 80),
             )
-        else:
-            self._draw_centered_system_text(draw, "A: Connect", 91, font, (180, 180, 180))
+        elif not self._wifi_connection_uses_saved_profile:
+            self._draw_centered_system_text(
+                draw, "A: Connect", 91, font, (180, 180, 180)
+            )
         self._draw_footer(image, draw, ctx, "WIFI")
         return image
 
@@ -899,6 +921,40 @@ class SettingsState(BaseState):
         )
         return settings_rgba.convert("RGB")
 
+    def _render_wifi_forget_overlay(self, ctx, image):
+        settings_rgba = image.convert("RGBA")
+        overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 200))
+        settings_rgba.paste(overlay, (0, 0), overlay)
+        draw = ImageDraw.Draw(settings_rgba)
+        draw.fontmode = "1"
+        font = getattr(ctx.assets, "system_font10", ctx.assets.font_6x8)
+        network = self._wifi_forget_network or {}
+        ssid = self._fit_text_to_width(
+            draw, str(network.get("ssid") or "WiFi"), font, 120
+        )
+        snapshot = self._wifi_snapshot(ctx)
+        status = str(snapshot.get("forget_status") or "idle")
+        if status == "forgetting":
+            self._draw_centered_system_text(draw, ssid, 42, font, "white")
+            self._draw_centered_system_text(draw, "Forgetting...", 68, font, "white")
+            self._draw_activity_icon(draw, 64, 92)
+        elif status == "error":
+            self._draw_centered_system_text(draw, ssid, 38, font, "white")
+            self._draw_centered_system_text(
+                draw, snapshot.get("forget_error") or "Unable to forget",
+                64, font, (255, 80, 80),
+            )
+            self._draw_centered_system_text(
+                draw, "B: Close", 88, font, (180, 180, 180)
+            )
+        else:
+            self._draw_centered_system_text(draw, "Forget WiFi?", 34, font, "white")
+            self._draw_centered_system_text(draw, ssid, 58, font, "white")
+            self._draw_centered_system_text(
+                draw, "A: Confirm  B: Cancel", 84, font, (180, 180, 180)
+            )
+        return settings_rgba.convert("RGB")
+
     @staticmethod
     def _controller_snapshot(ctx):
         manager = getattr(ctx, "bluetooth_controller", None)
@@ -990,7 +1046,8 @@ class SettingsState(BaseState):
         if manager is None:
             return {
                 "is_scan": False, "networks": [], "connected_network": None,
-                "scan_error": "", "connection_status": "idle",
+                "remembered_networks": [], "scan_error": "",
+                "connection_status": "idle",
                 "connection_error": "",
                 "connection_ssid": "",
             }
@@ -1002,7 +1059,8 @@ class SettingsState(BaseState):
             pass
         return {
             "is_scan": False, "networks": [], "connected_network": None,
-            "scan_error": "", "connection_status": "idle",
+            "remembered_networks": [], "scan_error": "",
+            "connection_status": "idle",
             "connection_error": "",
             "connection_ssid": "",
         }
@@ -1020,12 +1078,27 @@ class SettingsState(BaseState):
                     {"type": "current", "key": f"current:{connected_ssid}"}
                 )
                 rows.append(current)
+        for network in snapshot.get("remembered_networks") or []:
+            if not isinstance(network, dict):
+                continue
+            ssid = str(network.get("ssid") or "")
+            profile = str(network.get("profile") or "")
+            if not ssid or not profile or ssid == connected_ssid:
+                continue
+            row = dict(network)
+            row.update({"type": "remembered", "key": f"remembered:{profile}"})
+            rows.append(row)
         rows.append({"type": "rescan", "key": "rescan"})
+        remembered_ssids = {
+            str(row.get("ssid") or "")
+            for row in rows
+            if row.get("type") == "remembered"
+        }
         for network in snapshot.get("networks") or []:
             if not isinstance(network, dict):
                 continue
             ssid = str(network.get("ssid") or "")
-            if not ssid or ssid == connected_ssid:
+            if not ssid or ssid == connected_ssid or ssid in remembered_ssids:
                 continue
             row = dict(network)
             row.update({"type": "network", "key": f"network:{ssid}"})
@@ -1033,31 +1106,25 @@ class SettingsState(BaseState):
         return rows
 
     def _sync_wifi_selection(self, rows):
-        selectable = [
-            (index, row)
-            for index, row in enumerate(rows)
-            if row.get("type") != "current"
-        ]
-        if not selectable:
+        if not rows:
             self._wifi_selected_index = 0
             self._wifi_selected_key = ""
             return 0
-        for index, row in selectable:
-            if row.get("key") == self._wifi_selected_key:
-                self._wifi_selected_index = index
-                return index
-        self._wifi_selected_index = selectable[0][0]
-        self._wifi_selected_key = selectable[0][1]["key"]
+        keys = [row.get("key") for row in rows]
+        if self._wifi_selected_key in keys:
+            self._wifi_selected_index = keys.index(self._wifi_selected_key)
+        else:
+            self._wifi_selected_index = _clamp(
+                self._wifi_selected_index, 0, len(rows) - 1
+            )
+            self._wifi_selected_key = rows[self._wifi_selected_index]["key"]
         return self._wifi_selected_index
 
     def _move_wifi_selection(self, rows, delta):
         selected_index = self._sync_wifi_selection(rows)
-        selectable_indices = [
-            index for index, row in enumerate(rows) if row.get("type") != "current"
-        ]
-        position = selectable_indices.index(selected_index)
-        position = _clamp(position + delta, 0, len(selectable_indices) - 1)
-        self._wifi_selected_index = selectable_indices[position]
+        self._wifi_selected_index = _clamp(
+            selected_index + delta, 0, len(rows) - 1
+        )
         self._wifi_selected_key = rows[self._wifi_selected_index]["key"]
 
     def _enter_wifi(self, ctx):
@@ -1077,9 +1144,27 @@ class SettingsState(BaseState):
     def _enter_wifi_password(self, network):
         self._page_mode = _PAGE_WIFI_PASSWORD
         self._wifi_selected_network = dict(network)
+        self._wifi_connection_uses_saved_profile = False
         self._wifi_password = [" "] * WIFI_PASSWORD_LENGTH
         self._wifi_cursor_index = 0
         self._reset_wifi_character_repeat()
+
+    def _enter_wifi_saved_connect(self, ctx, network):
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is None:
+            return
+        self._page_mode = _PAGE_WIFI_PASSWORD
+        self._wifi_selected_network = dict(network)
+        self._wifi_connection_uses_saved_profile = True
+        self._reset_wifi_character_repeat()
+        try:
+            manager.clear_connection_result()
+            manager.start_connect_saved_if_requested(
+                str(network.get("profile") or ""),
+                str(network.get("ssid") or ""),
+            )
+        except Exception:
+            pass
 
     def _consume_wifi_connection_result(self, ctx):
         snapshot = self._wifi_snapshot(ctx)
@@ -1098,6 +1183,21 @@ class SettingsState(BaseState):
                 manager.start_scan_if_requested()
             except Exception:
                 pass
+
+    def _consume_wifi_forget_result(self, ctx):
+        snapshot = self._wifi_snapshot(ctx)
+        if snapshot.get("forget_status") != "success":
+            return
+        manager = getattr(ctx, "wifi_controller", None)
+        if manager is not None:
+            try:
+                manager.clear_forget_result()
+                manager.start_scan_if_requested()
+            except Exception:
+                pass
+        self._overlay_mode = None
+        self._wifi_forget_network = None
+        self._wifi_selected_key = "rescan"
 
     def _refresh_bluetooth_qr(self, ctx):
         sync = get_remote_sync()
@@ -1131,6 +1231,33 @@ class SettingsState(BaseState):
                 self._overlay_mode = None
                 self._bluetooth_qr_surface = None
                 self._bluetooth_qr_key = None
+            return
+
+        if self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
+            snapshot = self._wifi_snapshot(ctx)
+            status = str(snapshot.get("forget_status") or "idle")
+            if status == "forgetting":
+                return
+            if buttons.get("btn_a") and status == "idle":
+                manager = getattr(ctx, "wifi_controller", None)
+                network = self._wifi_forget_network or {}
+                if manager is not None:
+                    try:
+                        manager.start_forget_if_requested(
+                            str(network.get("profile") or ""),
+                            str(network.get("ssid") or ""),
+                        )
+                    except Exception:
+                        pass
+            elif buttons.get("btn_b") or buttons.get("btn_home"):
+                manager = getattr(ctx, "wifi_controller", None)
+                if manager is not None:
+                    try:
+                        manager.clear_forget_result()
+                    except Exception:
+                        pass
+                self._overlay_mode = None
+                self._wifi_forget_network = None
             return
 
         if self._overlay_mode == _OVERLAY_RESET_CONFIRM:
@@ -1211,6 +1338,12 @@ class SettingsState(BaseState):
         selected = rows[self._sync_wifi_selection(rows)]
         manager = getattr(ctx, "wifi_controller", None)
         if selected["type"] == "current":
+            if selected.get("profile"):
+                self._wifi_forget_network = dict(selected)
+                self._overlay_mode = _OVERLAY_WIFI_FORGET_CONFIRM
+            return
+        if selected["type"] == "remembered":
+            self._enter_wifi_saved_connect(ctx, selected)
             return
         if selected["type"] == "rescan":
             if manager is not None:
@@ -1281,6 +1414,8 @@ class SettingsState(BaseState):
 
     def _handle_wifi_password_input(self, ctx, buttons):
         snapshot = self._wifi_snapshot(ctx)
+        if self._wifi_connection_uses_saved_profile:
+            return
         selected_ssid = str((self._wifi_selected_network or {}).get("ssid") or "")
         connection_matches = (
             str(snapshot.get("connection_ssid") or "") == selected_ssid

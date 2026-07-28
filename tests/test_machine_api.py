@@ -31,6 +31,30 @@ def test_device_wrappers_delegate(monkeypatch):
     assert calls == ["forget"]
 
 
+def test_wifi_wrappers_delegate(monkeypatch):
+    calls = []
+    fake_mod = types.SimpleNamespace(
+        scan_wifi_networks=lambda: [{"ssid": "Home"}],
+        connect_wifi_network=lambda ssid, password, secured: calls.append(
+            ("connect", ssid, password, secured)
+        ),
+        connect_saved_wifi=lambda profile: calls.append(("saved", profile)),
+        forget_saved_wifi=lambda profile: calls.append(("forget", profile)),
+    )
+    monkeypatch.setitem(sys.modules, "python_websocket.wifi_operations", fake_mod)
+
+    assert machine_api.scan_wifi_networks() == [{"ssid": "Home"}]
+    machine_api.connect_wifi_network("Home", "secret", True)
+    machine_api.connect_saved_wifi("Home Profile")
+    machine_api.forget_saved_wifi("Home Profile")
+
+    assert calls == [
+        ("connect", "Home", "secret", True),
+        ("saved", "Home Profile"),
+        ("forget", "Home Profile"),
+    ]
+
+
 def test_git_wrappers_delegate(monkeypatch):
     fake_mod = types.SimpleNamespace(
         get_version=lambda: {"version": "1.2.3"},

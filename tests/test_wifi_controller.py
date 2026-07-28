@@ -97,3 +97,78 @@ def test_wifi_controller_separates_connected_network_from_scan_results():
 
     assert snapshot["connected_network"]["ssid"] == "Home"
     assert [network["ssid"] for network in snapshot["networks"]] == ["Guest"]
+
+
+def test_wifi_controller_lists_remembered_and_filters_available_duplicates():
+    controller = WifiController(
+        scan_networks=lambda: [
+            {
+                "ssid": "Home", "rssi": 90, "secured": True,
+                "connected": True,
+            },
+            {
+                "ssid": "Office", "rssi": 75, "secured": True,
+                "connected": False,
+            },
+            {
+                "ssid": "Guest", "rssi": 60, "secured": False,
+                "connected": False,
+            },
+            {
+                "ssid": "Home", "profile": "home-profile",
+                "remembered": True, "connected": False,
+            },
+            {
+                "ssid": "Office", "profile": "office-profile",
+                "remembered": True, "connected": False,
+            },
+        ],
+        connect_network=lambda *_args: None,
+    )
+
+    assert controller.start_scan_if_requested() is True
+    for _ in range(100):
+        snapshot = controller.get_state_snapshot()
+        if not snapshot["is_scan"]:
+            break
+        threading.Event().wait(0.01)
+
+    assert snapshot["connected_network"]["profile"] == "home-profile"
+    assert snapshot["remembered_networks"] == [
+        {
+            "ssid": "Office", "rssi": 75, "secured": True,
+            "connected": False, "profile": "office-profile",
+            "remembered": True,
+        }
+    ]
+    assert [item["ssid"] for item in snapshot["networks"]] == ["Guest"]
+
+
+def test_wifi_controller_saved_connect_and_forget_transitions():
+    saved_calls = []
+    forget_calls = []
+    controller = WifiController(
+        scan_networks=lambda: [],
+        connect_network=lambda *_args: None,
+        connect_saved_network=lambda profile: saved_calls.append(profile),
+        forget_network=lambda profile: forget_calls.append(profile),
+    )
+
+    assert controller.start_connect_saved_if_requested("office", "Office") is True
+    for _ in range(100):
+        snapshot = controller.get_state_snapshot()
+        if snapshot["connection_status"] != "connecting":
+            break
+        threading.Event().wait(0.01)
+    assert snapshot["connection_status"] == "success"
+    assert snapshot["connection_profile"] == "office"
+    assert saved_calls == ["office"]
+
+    assert controller.start_forget_if_requested("office", "Office") is True
+    for _ in range(100):
+        snapshot = controller.get_state_snapshot()
+        if snapshot["forget_status"] != "forgetting":
+            break
+        threading.Event().wait(0.01)
+    assert snapshot["forget_status"] == "success"
+    assert forget_calls == ["office"]

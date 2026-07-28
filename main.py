@@ -150,6 +150,8 @@ _websocket_service_registry = build_default_websocket_registry(
 _wifi_controller = WifiController(
     scan_networks=machine_api.scan_wifi_networks,
     connect_network=machine_api.connect_wifi_network,
+    connect_saved_network=machine_api.connect_saved_wifi,
+    forget_network=machine_api.forget_saved_wifi,
 )
 
 
