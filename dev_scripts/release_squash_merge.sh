@@ -334,9 +334,12 @@ assert_index_excludes_legacy_requirements() {
 }
 
 assert_release_imports_resolve() {
-  local tmpdir
+  local tmpdir cleanup_command
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' EXIT INT TERM
+  cleanup_command="rm -rf -- $(printf '%q' "${tmpdir}")"
+  # Capture the temp path now: EXIT runs after this function's local variables
+  # have gone out of scope, and `set -u` would otherwise make the cleanup fail.
+  trap "${cleanup_command}" EXIT
   git checkout-index --prefix="${tmpdir}/" -a
   log "verifying release import graph from staged allowlist"
   PYTHONPATH="${tmpdir}" python3 - <<'PY'
@@ -356,7 +359,8 @@ for module in (
 ):
     importlib.import_module(module)
 PY
-  rm -rf "${tmpdir}"
+  rm -rf -- "${tmpdir}"
+  trap - EXIT
 }
 
 tag_release_commit() {
