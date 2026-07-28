@@ -55,6 +55,7 @@ ALLOWLIST=(
   remote_sync_bridge.py
   supabase_sync_bridge.py
   update_repair.py
+  update_sources.py
   setup.sh
   update.sh
   core
