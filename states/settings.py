@@ -568,15 +568,42 @@ class SettingsState(BaseState):
         return image
 
     def _render_calibration_warning(self, ctx, background):
-        overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 235))
-        draw = ImageDraw.Draw(overlay)
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
         font = ctx.assets.font8
-        lines = ["CALIBRATION", "TAKES A WHILE", "SCREEN BRIGHT", "REMOVE DARTS", "A START  B BACK"]
-        for index, line in enumerate(lines):
-            draw.text((2, 12 + index * 20), line, fill=(255, 255, 255), font=font)
-        result = background.convert("RGBA")
-        result.alpha_composite(overlay)
-        return result.convert("RGB")
+        accent = (255, 101, 140)
+
+        # Hardware notice: one strong band, then short centered instructions.
+        draw.rectangle((0, 0, 127, 18), fill=accent)
+        self._draw_centered_settings_label(
+            draw, 5, "DISPLAY CALIBRATION", (0, 0, 0), font
+        )
+        draw.polygon(((64, 25), (54, 45), (74, 45)), fill=accent)
+        draw.rectangle((63, 31, 64, 38), fill=(0, 0, 0))
+        draw.rectangle((63, 41, 64, 42), fill=(0, 0, 0))
+
+        for y, line in (
+            (52, "TAKES UP TO 46 MIN"),
+            (67, "SCREEN GETS BRIGHT"),
+            (82, "REMOVE ALL DARTS"),
+            (97, "BEFORE START"),
+        ):
+            self._draw_centered_settings_label(draw, y, line, (255, 255, 255), font)
+
+        draw.line((14, 115, 113, 115), fill=(96, 96, 96), width=1)
+        self._draw_centered_settings_label(
+            draw, 120, "A START   B BACK", (180, 180, 180), font
+        )
+        self._draw_footer(image, draw, ctx, "DISPLAY")
+        return image
+
+    @staticmethod
+    def _draw_centered_settings_label(draw, y, label, fill, font):
+        words = str(label).upper().split()
+        if not words:
+            return
+        text_width = sum(len(word) * 6 for word in words) + 4 * (len(words) - 1)
+        _draw_settings_label(draw, max(0, (128 - text_width) // 2), y, label, fill, font)
 
     def _start_calibration(self, ctx):
         if self._calibration is not None and self._calibration.status.state == "running":
