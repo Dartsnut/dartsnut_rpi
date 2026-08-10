@@ -165,7 +165,7 @@ def test_settings_display_submenu_and_brightness_level():
 
 
 def test_display_submenu_uses_two_even_rows():
-    assert ssettings.DISPLAY_ITEM_HEIGHT == 64
+    assert ssettings.SETTINGS_ITEM_HEIGHT == 18
     ctx = _Ctx()
     state = SettingsState()
     _open_display(ctx, state)
@@ -173,13 +173,13 @@ def test_display_submenu_uses_two_even_rows():
     state.update(ctx)
     first = ctx.display.frame
     assert first.getpixel((0, 0)) == (255, 255, 255)
-    assert first.getpixel((0, 63)) == (255, 255, 255)
+    assert first.getpixel((0, 17)) == (255, 255, 255)
 
     state.handle_input(ctx, {"btn_down": True})
     state.update(ctx)
     second = ctx.display.frame
-    assert second.getpixel((0, 64)) == (255, 255, 255)
-    assert second.getpixel((0, 127)) == (255, 255, 255)
+    assert second.getpixel((0, 18)) == (255, 255, 255)
+    assert second.getpixel((0, 35)) == (255, 255, 255)
 
 
 def _open_controllers(ctx, state):

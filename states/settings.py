@@ -268,9 +268,6 @@ CONNECTIVITY_ITEMS = [
 SETTINGS_LIST_MAX_HEIGHT = 128
 SETTINGS_NUM_ROWS = 7
 SETTINGS_ITEM_HEIGHT = SETTINGS_LIST_MAX_HEIGHT // SETTINGS_NUM_ROWS
-DISPLAY_LIST_MAX_HEIGHT = 128
-DISPLAY_NUM_ROWS = len(DISPLAY_ITEMS)
-DISPLAY_ITEM_HEIGHT = DISPLAY_LIST_MAX_HEIGHT // DISPLAY_NUM_ROWS
 SETTINGS_FIRST_SELECTABLE_INDEX = 3
 SETTINGS_DISPLAY_INDEX = 4
 SETTINGS_CONNECTIVITY_INDEX = 5
@@ -540,27 +537,27 @@ class SettingsState(BaseState):
         if status is not None and status.state == "running":
             return Image.new("RGB", (128, 160), (255, 255, 255))
         for idx, item in enumerate(DISPLAY_ITEMS):
-            y = idx * DISPLAY_ITEM_HEIGHT
+            y = idx * SETTINGS_ITEM_HEIGHT
             focused = idx == self._display_selected_index
             color = (0, 0, 0) if focused else (255, 255, 255)
             if focused:
-                draw.rectangle((0, y, 127, y + DISPLAY_ITEM_HEIGHT - 1), fill=(255, 255, 255))
+                draw.rectangle((0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1), fill=(255, 255, 255))
             _draw_settings_label(
                 draw,
                 2,
-                y + (DISPLAY_ITEM_HEIGHT - 8) // 2,
+                y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
                 item["name"],
                 color,
                 font,
             )
             if item["name"] == "Brightness":
-                self._draw_level_boxes(draw, y, DISPLAY_ITEM_HEIGHT, 10, level)
+                self._draw_level_boxes(draw, y, SETTINGS_ITEM_HEIGHT, 10, level)
             elif item["name"] == "Calibration":
                 calibration = load_calibration_state(device_info)
                 label = "DONE" if calibration else "START"
                 text_width = draw.textbbox((0, 0), label, font=font)[2]
                 draw.text(
-                    (126 - text_width, y + (DISPLAY_ITEM_HEIGHT - 8) // 2),
+                    (126 - text_width, y + (SETTINGS_ITEM_HEIGHT - 8) // 2),
                     label,
                     fill=color,
                     font=font,
