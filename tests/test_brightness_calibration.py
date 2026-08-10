@@ -13,6 +13,7 @@ from runtime.brightness import (
     select_evenly,
 )
 from runtime.brightness_calibration import BrightnessCalibration
+from runtime.brightness_calibration import sweep_brightness_values
 
 
 def test_calibration_file_isolated_and_atomic(tmp_path):
@@ -41,6 +42,10 @@ def test_level_update_stays_in_calibration_file(tmp_path):
 def test_mapping_and_even_pass_selection():
     assert nearest_index(44, [10, 20, 40, 60]) == 2
     assert select_evenly(range(10, 101)) == [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+
+def test_sweep_uses_ten_visible_brightness_steps():
+    assert sweep_brightness_values(10, 100) == [100, 90, 80, 70, 60, 50, 40, 30, 20, 10]
 
 
 def test_sweep_detects_hit_and_saves_passing_values():

@@ -19,6 +19,20 @@ BRIGHTNESS_MIN = 10
 BASELINE_TIMEOUT_SECONDS = 5.0
 PASS_DURATION_SECONDS = 300.0
 POLL_SECONDS = 0.005
+SWEEP_LEVEL_COUNT = 10
+
+
+def sweep_brightness_values(brightness_min: int, brightness_max: int) -> list[int]:
+    """Return ten evenly spaced raw levels, highest first."""
+    low = min(int(brightness_min), int(brightness_max))
+    high = max(int(brightness_min), int(brightness_max))
+    if low == high:
+        return [high]
+    values = [
+        round(high - index * (high - low) / (SWEEP_LEVEL_COUNT - 1))
+        for index in range(SWEEP_LEVEL_COUNT)
+    ]
+    return list(dict.fromkeys(values))
 
 
 @dataclass
@@ -26,7 +40,7 @@ class CalibrationStatus:
     state: str = "idle"
     current_brightness: int | None = None
     completed: int = 0
-    total: int = BRIGHTNESS_MAX - BRIGHTNESS_MIN + 1
+    total: int = SWEEP_LEVEL_COUNT
     passed: list[int] = field(default_factory=list)
     failed: list[int] = field(default_factory=list)
     error: str = ""
@@ -70,12 +84,13 @@ class BrightnessCalibration:
         self._on_success = on_success
         self._minimum = min(brightness_min, brightness_max)
         self._maximum = max(brightness_min, brightness_max)
+        self._sweep_values = sweep_brightness_values(self._minimum, self._maximum)
         self._baseline_timeout = max(0.0, baseline_timeout_seconds)
         self._pass_duration = max(0.0, pass_duration_seconds)
         self._poll_seconds = max(0.001, poll_seconds)
         self._cancel = threading.Event()
         self._lock = threading.RLock()
-        self._status = CalibrationStatus(total=self._maximum - self._minimum + 1)
+        self._status = CalibrationStatus(total=len(self._sweep_values))
         self._thread: threading.Thread | None = None
         self._prior_brightness: int | None = None
         self._prior_frame: Any = None
@@ -103,7 +118,7 @@ class BrightnessCalibration:
             self._prior_brightness = prior_brightness
             self._prior_frame = prior_frame
             self._status = CalibrationStatus(
-                state="running", total=self._maximum - self._minimum + 1
+                state="running", total=len(self._sweep_values)
             )
             self._thread = threading.Thread(target=self._run, daemon=True, name="brightness-calibration")
             self._thread.start()
@@ -151,7 +166,7 @@ class BrightnessCalibration:
         values: list[int] | None = None
         success = False
         try:
-            for offset, brightness in enumerate(range(self._maximum, self._minimum - 1, -1), start=1):
+            for offset, brightness in enumerate(self._sweep_values, start=1):
                 self._set_status(current_brightness=brightness, completed=offset)
                 if self._cancel.is_set():
                     self._set_status(state="cancelled")

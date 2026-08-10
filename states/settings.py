@@ -583,7 +583,7 @@ class SettingsState(BaseState):
         draw.rectangle((63, 41, 64, 42), fill=(0, 0, 0))
 
         for y, line in (
-            (52, "TAKES UP TO 46 MIN"),
+            (52, "TAKES UP TO 51 MIN"),
             (67, "SCREEN GETS BRIGHT"),
             (82, "REMOVE ALL DARTS"),
             (97, "BEFORE START"),
