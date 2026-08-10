@@ -1276,6 +1276,53 @@ mod tests {
     }
 
     #[test]
+    fn successful_game_patch_suppresses_extra_idle_heartbeat() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let body = b"[]";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let cfg = SupabaseConfig {
+            url: format!("http://127.0.0.1:{}", addr.port()),
+            key: "test-key".to_string(),
+            device_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        };
+        let client = Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .expect("client");
+        let rpc_lock = Arc::new(Mutex::new(()));
+        let probe_state = Arc::new(Mutex::new(ProbeState::default()));
+
+        rpc_apply_patch_recorded(
+            &client,
+            &cfg,
+            json!({"games": [{"id": "pico8", "status": "playing"}]}),
+            false,
+            None,
+            &rpc_lock,
+            &probe_state,
+        )
+        .expect("game patch");
+        let _ = server.join();
+
+        let snap = run_probe_tick(&client, &cfg, &rpc_lock, &probe_state);
+        assert!(snap.probe_ok);
+        assert!(snap.latency_ms.is_some());
+    }
+
+    #[test]
     fn probe_idle_device_updated_at_write_records_latency_on_rpc_success() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");

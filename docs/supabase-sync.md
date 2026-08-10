@@ -120,6 +120,15 @@ Legacy kinds `config` / `config_initial` are still accepted on the Python side f
 - All v2 patch RPCs (socket thread and idle probe) share one mutex so concurrent writes cannot race.
 - Read-only `remote_devices` GET (row existence during initial connect) does not update latency.
 
+### Rough device online time
+
+- `device_uptime` stores one lifetime aggregate row per device: `online_seconds` and the latest `last_seen_at`.
+- `device_uptime` is read-only through the public Supabase API; only the bridge patch RPC can mutate presence accounting.
+- Successful bridge-originated v2 RPCs (`supabase_bridge`, `supabase_bridge_init`, and `supabase_bridge_heartbeat`) update presence atomically with the remote-state write.
+- Each gap up to 90 seconds contributes to `online_seconds`; longer gaps reset the sampling window and contribute nothing, so outages are not counted as online time.
+- First observation records `last_seen_at` without adding time. Repeated immediate writes add zero and are safe for rough accounting.
+- This is bridge-observed uptime, not guaranteed physical display power-on time. Read `device_uptime.online_seconds` and divide by 3600 for approximate display hours.
+
 ## Watchdog command control
 
 - The `remote_device_commands` row is a latest-wins command slot for shell commands.

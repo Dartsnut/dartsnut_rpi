@@ -270,6 +270,129 @@ def test_apply_remote_device_patch_v2_partial_does_not_create_missing_row():
     ]
 
 
+def test_apply_remote_device_patch_v2_tracks_rough_bridge_uptime():
+    base_url, api_key = _require_contract_env()
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    device_id = f"ITEST-UPTIME-{uuid.uuid4()}"
+    rpc_url = f"{base_url}/rest/v1/rpc/apply_remote_device_patch_v2"
+    uptime_url = f"{base_url}/rest/v1/device_uptime"
+    remote_url = f"{base_url}/rest/v1/remote_devices"
+
+    first = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {"brightness": 70},
+            "p_full": True,
+            "p_source": "supabase_bridge_init",
+        },
+        timeout=15,
+    )
+    assert first.status_code in (200, 201), first.text
+
+    def read_uptime() -> dict:
+        response = requests.get(
+            uptime_url,
+            headers=headers,
+            params={"device_id": f"eq.{device_id}", "select": "online_seconds,last_seen_at"},
+            timeout=15,
+        )
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        assert len(rows) == 1
+        return rows[0]
+
+    initial = read_uptime()
+    assert initial["online_seconds"] == 0
+
+    direct_write = requests.patch(
+        uptime_url,
+        headers={**headers, "Prefer": "return=representation"},
+        params={"device_id": f"eq.{device_id}"},
+        json={"online_seconds": 999999, "last_seen_at": "2099-01-01T00:00:00Z"},
+        timeout=15,
+    )
+    assert direct_write.status_code in (401, 403), direct_write.text
+
+    second = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {"brightness": 71},
+            "p_full": False,
+            "p_source": "supabase_bridge",
+        },
+        timeout=15,
+    )
+    assert second.status_code in (200, 201), second.text
+    counted = read_uptime()
+    assert counted["online_seconds"] == 0
+
+    immediate_retry = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {"brightness": 71},
+            "p_full": False,
+            "p_source": "supabase_bridge",
+        },
+        timeout=15,
+    )
+    assert immediate_retry.status_code in (200, 201), immediate_retry.text
+    after_retry = read_uptime()
+    assert 0 <= after_retry["online_seconds"] - counted["online_seconds"] <= 5
+
+    second_heartbeat = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {"brightness": 72},
+            "p_full": False,
+            "p_source": "supabase_bridge_heartbeat",
+        },
+        timeout=15,
+    )
+    assert second_heartbeat.status_code in (200, 201), second_heartbeat.text
+    after_stale_gap = read_uptime()
+    assert 0 <= after_stale_gap["online_seconds"] - after_retry["online_seconds"] <= 5
+
+    # Non-bridge writes preserve state behavior but do not change uptime.
+    app_write = requests.post(
+        rpc_url,
+        headers=headers,
+        json={
+            "p_device_id": device_id,
+            "p_patch": {"volume": 25},
+            "p_full": False,
+            "p_source": "mobile_app_test",
+        },
+        timeout=15,
+    )
+    assert app_write.status_code in (200, 201), app_write.text
+    after_app = read_uptime()
+    assert after_app["online_seconds"] == after_stale_gap["online_seconds"]
+
+    state_query = requests.get(
+        remote_url,
+        headers=headers,
+        params={"device_id": f"eq.{device_id}", "select": "state,last_update_source"},
+        timeout=15,
+    )
+    assert state_query.status_code == 200, state_query.text
+    state = state_query.json()[0]
+    assert state["state"]["brightness"] == 72
+    assert state["state"]["volume"] == 25
+    assert state["last_update_source"] == "mobile_app_test"
+
+
 def test_remote_device_commands_table_contract():
     base_url, api_key = _require_contract_env()
     headers = {
