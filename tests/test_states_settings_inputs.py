@@ -143,6 +143,27 @@ def _open_connectivity(ctx, state):
     state.handle_input(ctx, {"btn_a": True})
 
 
+def _open_display(ctx, state):
+    ctx.setting_select_index = 4
+    state.handle_input(ctx, {"btn_a": True})
+
+
+def test_settings_display_submenu_and_brightness_level():
+    ctx = _Ctx()
+    ctx.set_brightness_level = lambda level: ctx.brightness_calls.append(level)
+    state = SettingsState()
+
+    _open_display(ctx, state)
+    state.handle_input(ctx, {"btn_right": True})
+
+    assert ctx.brightness_calls == [9]
+    state.handle_input(ctx, {"btn_down": True})
+    state.handle_input(ctx, {"btn_a": True})
+    assert state.consumes_btn_b_for_overlay(ctx) is True
+    state.handle_input(ctx, {"btn_b": True})
+    assert state.consumes_btn_b_for_overlay(ctx) is False
+
+
 def _open_controllers(ctx, state):
     _open_connectivity(ctx, state)
     state.handle_input(ctx, {"btn_down": True})

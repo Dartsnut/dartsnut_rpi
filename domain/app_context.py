@@ -19,6 +19,9 @@ class AppContext:
         get_device_info: Callable[[], dict],
         set_brightness: Callable[[int], None],
         set_volume: Callable[[int], None],
+        set_brightness_level: Optional[Callable[[int], None]] = None,
+        get_darts: Optional[Callable[[], Any]] = None,
+        get_raw_dart_bytes: Optional[Callable[[], bytes]] = None,
         set_brightness_hardware: Optional[Callable[[int], None]] = None,
         bluetooth_controller: Any = None,
         wifi_controller: Any = None,
@@ -28,6 +31,9 @@ class AppContext:
         self.get_device_info = get_device_info
         self.set_brightness = set_brightness
         self.set_volume = set_volume
+        self.set_brightness_level = set_brightness_level or set_brightness
+        self.get_darts = get_darts
+        self.get_raw_dart_bytes = get_raw_dart_bytes
         self._set_brightness_hardware = set_brightness_hardware or set_brightness
         self.bluetooth_controller = bluetooth_controller
         self.wifi_controller = wifi_controller

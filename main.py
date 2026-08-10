@@ -79,6 +79,7 @@ from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.brightness import calibrated_raw_for_index, default_raw_for_index, default_values_for_device, nearest_index
 from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
 from runtime.controller_input import ControllerInputManager
 from runtime.wifi_controller import WifiController
@@ -243,6 +244,10 @@ def _set_brightness_hardware(brightness):
     dartsnut.set_brightness(brightness)
 
 
+def _get_raw_dart_bytes():
+    return bytes(dartsnut.shm_pdo_buf[1:49])
+
+
 def _schedule_setting_remote_sync(key: str, value: int) -> None:
     """Apply local setting guard immediately; publish to remote after debounce."""
     from runtime.remote_device_config import note_local_setting_change
@@ -270,12 +275,15 @@ def set_brightness(brightness):
         # When in dim window, only update stored brightness and remote sync; keep hardware dimmed.
         try:
             v = int(brightness)
-            should_publish = _current_device_int("brightness") != v
+            info = get_device_info() or {}
+            index = nearest_index(v, default_values_for_device(info))
+            canonical = default_raw_for_index(index, info)
+            should_publish = _current_device_int("brightness") != canonical
             if service is not None:
-                service.set_brightness(brightness)
-            dim_rt.brightness_before_dim = brightness
+                service.set_brightness_level(index)
+            dim_rt.brightness_before_dim = calibrated_raw_for_index(index, info)
             if should_publish:
-                _schedule_setting_remote_sync("brightness", v)
+                _schedule_setting_remote_sync("brightness", canonical)
         except Exception as e:
             _log.warning("Error updating device brightness while dimmed: %s", e)
         return
@@ -283,13 +291,16 @@ def set_brightness(brightness):
     # Outside dim window: apply immediately and persist via service.
     try:
         v = int(brightness)
-        should_publish = _current_device_int("brightness") != v
+        info = get_device_info() or {}
+        index = nearest_index(v, default_values_for_device(info))
+        canonical = default_raw_for_index(index, info)
+        should_publish = _current_device_int("brightness") != canonical
         if service is not None:
-            service.set_brightness(brightness)
+            service.set_brightness_level(index)
         else:
-            _set_brightness_hardware(v)
+            _set_brightness_hardware(calibrated_raw_for_index(index, info))
         if should_publish:
-            _schedule_setting_remote_sync("brightness", v)
+            _schedule_setting_remote_sync("brightness", canonical)
     except Exception as e:
         _log.warning("Error updating brightness: %s", e)
 
@@ -366,6 +377,9 @@ ctx = AppContext(
     get_device_info=get_device_info,
     set_brightness=set_brightness,
     set_volume=set_volume,
+    set_brightness_level=lambda level: get_machine_state_service().set_brightness_level(level),
+    get_darts=dartsnut.get_darts,
+    get_raw_dart_bytes=_get_raw_dart_bytes,
     set_brightness_hardware=_set_brightness_hardware,
     bluetooth_controller=_remote_bluetooth_scan_controller,
     wifi_controller=_wifi_controller,
@@ -864,6 +878,17 @@ init_machine_state_service(
     get_device_info=get_device_info,
     reload_pages_from_conf=reload_pages_from_conf,
 )
+# Matrix process starts from legacy device.json raw brightness. Re-apply mapped
+# calibrated hardware value after service initialization when calibration exists.
+try:
+    _startup_info = get_device_info() or {}
+    _startup_index = nearest_index(
+        _startup_info.get("brightness", 50),
+        default_values_for_device(_startup_info),
+    )
+    _set_brightness_hardware(calibrated_raw_for_index(_startup_index, _startup_info))
+except Exception as _startup_brightness_error:
+    _log.warning("Failed to apply calibrated startup brightness: %s", _startup_brightness_error)
 init_widgets(ctx)
 
 

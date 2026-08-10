@@ -23,6 +23,13 @@ from typing import Any, Callable, Dict, List, Optional
 from domain.app_context import AppContext
 from runtime.api_token_store import delete_api_token_file
 from runtime import device_json_identity
+from runtime.brightness import (
+    calibrated_raw_for_index,
+    default_raw_for_index,
+    default_values_for_device,
+    nearest_index,
+    save_brightness_level,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -117,17 +124,40 @@ class MachineStateService:
         Smooth transition timing/state is still handled in main.py; this method
         just sets the immediate hardware value and JSON field.
         """
+        device_info = self._get_device_info() or {}
+        index = nearest_index(brightness, default_values_for_device(device_info))
+        canonical = default_raw_for_index(index, device_info)
         try:
-            self._set_brightness_hardware(brightness)
+            self._set_brightness_hardware(calibrated_raw_for_index(index, device_info))
         except Exception as e:
             _log.warning("Failed to set brightness hardware: %s", e)
 
         try:
-            device_info = self._get_device_info() or {}
+            # Keep legacy API payload in device.json; hardware uses mapped curve.
             device_info["brightness"] = str(brightness)
             self._write_device_info(device_info)
         except Exception as e:
             _log.error("Error updating brightness in device.json: %s", e)
+
+    def set_brightness_level(self, level: int) -> None:
+        """Set local 0–9 brightness index, storing legacy raw value in device.json."""
+        device_info = self._get_device_info() or {}
+        try:
+            index = max(0, min(9, int(level)))
+        except (TypeError, ValueError):
+            index = 5
+        raw = calibrated_raw_for_index(index, device_info)
+        default_raw = default_raw_for_index(index, device_info)
+        try:
+            self._set_brightness_hardware(raw)
+        except Exception as exc:
+            _log.warning("Failed to set brightness hardware: %s", exc)
+        device_info["brightness"] = str(default_raw)
+        self._write_device_info(device_info)
+        try:
+            save_brightness_level(index, device_info)
+        except Exception as exc:
+            _log.warning("Failed to persist brightness level: %s", exc)
 
     def set_volume(self, volume: int) -> None:
         """

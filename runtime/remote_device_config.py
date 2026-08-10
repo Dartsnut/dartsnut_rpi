@@ -893,6 +893,7 @@ class RemoteDeviceConfigApplier:
                 try:
                     key = "brightness" if "brightness" in config else "Brightness"
                     brightness_val = int(config.get(key))
+                    device_info = ctx.get_device_info() or {}
                     current = None
                     try:
                         current = int((ctx.get_device_info() or {}).get("brightness"))

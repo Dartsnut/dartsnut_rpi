@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.brightness import default_raw_for_index, default_values_for_device, nearest_index
 from runtime.sync.engine import SyncEngine
 from runtime.sync.outbox import SyncOutbox
 from runtime.sync.reducer import ReducedGameReady
@@ -581,6 +582,8 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         brightness = int(brightness_raw)
     except Exception:
         brightness = 0
+    brightness_index = nearest_index(brightness, default_values_for_device(device_info))
+    brightness = default_raw_for_index(brightness_index, device_info)
     try:
         volume = int(volume_raw)
     except Exception:
