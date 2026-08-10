@@ -164,6 +164,24 @@ def test_settings_display_submenu_and_brightness_level():
     assert state.consumes_btn_b_for_overlay(ctx) is False
 
 
+def test_display_submenu_uses_two_even_rows():
+    assert ssettings.DISPLAY_ITEM_HEIGHT == 64
+    ctx = _Ctx()
+    state = SettingsState()
+    _open_display(ctx, state)
+
+    state.update(ctx)
+    first = ctx.display.frame
+    assert first.getpixel((0, 0)) == (255, 255, 255)
+    assert first.getpixel((0, 63)) == (255, 255, 255)
+
+    state.handle_input(ctx, {"btn_down": True})
+    state.update(ctx)
+    second = ctx.display.frame
+    assert second.getpixel((0, 64)) == (255, 255, 255)
+    assert second.getpixel((0, 127)) == (255, 255, 255)
+
+
 def _open_controllers(ctx, state):
     _open_connectivity(ctx, state)
     state.handle_input(ctx, {"btn_down": True})
