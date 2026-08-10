@@ -44,8 +44,8 @@ def test_mapping_and_even_pass_selection():
     assert select_evenly(range(10, 101)) == [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 
-def test_sweep_uses_ten_visible_brightness_steps():
-    assert sweep_brightness_values(10, 100) == [100, 90, 80, 70, 60, 50, 40, 30, 20, 10]
+def test_sweep_tests_every_raw_brightness_level():
+    assert sweep_brightness_values(10, 100) == list(range(100, 9, -1))
 
 
 def test_sweep_detects_hit_and_saves_passing_values():

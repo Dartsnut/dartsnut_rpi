@@ -19,20 +19,13 @@ BRIGHTNESS_MIN = 10
 BASELINE_TIMEOUT_SECONDS = 5.0
 PASS_DURATION_SECONDS = 300.0
 POLL_SECONDS = 0.005
-SWEEP_LEVEL_COUNT = 10
 
 
 def sweep_brightness_values(brightness_min: int, brightness_max: int) -> list[int]:
-    """Return ten evenly spaced raw levels, highest first."""
+    """Return every raw brightness level, highest first."""
     low = min(int(brightness_min), int(brightness_max))
     high = max(int(brightness_min), int(brightness_max))
-    if low == high:
-        return [high]
-    values = [
-        round(high - index * (high - low) / (SWEEP_LEVEL_COUNT - 1))
-        for index in range(SWEEP_LEVEL_COUNT)
-    ]
-    return list(dict.fromkeys(values))
+    return list(range(high, low - 1, -1))
 
 
 @dataclass
@@ -40,7 +33,7 @@ class CalibrationStatus:
     state: str = "idle"
     current_brightness: int | None = None
     completed: int = 0
-    total: int = SWEEP_LEVEL_COUNT
+    total: int = BRIGHTNESS_MAX - BRIGHTNESS_MIN + 1
     passed: list[int] = field(default_factory=list)
     failed: list[int] = field(default_factory=list)
     error: str = ""
