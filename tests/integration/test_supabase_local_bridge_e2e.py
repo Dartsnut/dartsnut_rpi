@@ -200,6 +200,17 @@ def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
 
     _wait_until(_state_updated, desc="Supabase row brightness update")
 
+    uptime = requests.get(
+        f"{base_url}/rest/v1/device_uptime",
+        headers=headers,
+        params={"device_id": f"eq.{device_id}", "select": "online_seconds,last_seen_at"},
+        timeout=10,
+    )
+    assert uptime.status_code == 200, uptime.text
+    assert len(uptime.json()) == 1
+    assert uptime.json()[0]["online_seconds"] >= 0
+    assert uptime.json()[0]["last_seen_at"]
+
 
 # Supabase-originated patch reaches Python callback
 def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_bridge_runtime):
