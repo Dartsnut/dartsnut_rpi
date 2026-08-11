@@ -101,7 +101,7 @@ def test_handle_action_validates_brightness_and_calls_callback():
     asyncio.run(
         handle_action_message(
             websocket=object(),
-            message={"action": "set_brightness", "req_id": 3, "brightness": "42"},
+            message={"action": "set_brightness", "req_id": 3, "brightness": "4"},
             registry=_registry([]),
             endpoint_config=WebsocketEndpointConfig(
                 set_brightness=lambda v: bright.append(v)
@@ -110,7 +110,7 @@ def test_handle_action_validates_brightness_and_calls_callback():
         )
     )
 
-    assert bright == [42]
+    assert bright == [4]
     assert sent[0][1]["message"] == "Success"
 
 
@@ -123,7 +123,7 @@ def test_handle_action_invalid_brightness_returns_expected_error_shape():
     asyncio.run(
         handle_action_message(
             websocket=object(),
-            message={"action": "set_brightness", "req_id": 4, "brightness": "105"},
+            message={"action": "set_brightness", "req_id": 4, "brightness": "10"},
             registry=_registry([]),
             endpoint_config=WebsocketEndpointConfig(),
             send_response=send_response,
@@ -133,7 +133,7 @@ def test_handle_action_invalid_brightness_returns_expected_error_shape():
     assert sent[0][0] == 4
     assert sent[0][1]["action"] == "set_brightness"
     assert sent[0][1]["error_code"] == "3005"
-    assert "Brightness must be between 10 and 100" in sent[0][1]["error"]
+    assert "Brightness must be between 0 and 9" in sent[0][1]["error"]
 
 
 def test_handle_action_unknown_action_returns_error():

@@ -47,9 +47,9 @@ async def set_brightness_service(
 ) -> MachineResult:
     action = "set_brightness"
     try:
-        brightness = int(message.get("brightness", "0"))
-        if not 10 <= brightness <= 100:
-            return error(action, ErrorCode.INVALID_BRIGHTNESS, "Brightness must be between 10 and 100")
+        brightness = int(message.get("brightness", "-1"))
+        if not 0 <= brightness <= 9:
+            return error(action, ErrorCode.INVALID_BRIGHTNESS, "Brightness must be between 0 and 9")
         if endpoint_config.set_brightness:
             await asyncio.to_thread(endpoint_config.set_brightness, brightness)
         return ok(action, message="Success")

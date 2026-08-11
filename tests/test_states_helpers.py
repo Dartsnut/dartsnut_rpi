@@ -1,10 +1,11 @@
 from types import SimpleNamespace
 
-from PIL import Image, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from states import menu as smenu
 from states import settings as ssettings
 from states import widget as swidget
+from runtime.brightness import raw_brightness_for_level
 
 
 class _Display:
@@ -49,11 +50,9 @@ def test_settings_rssi_and_level_mappings():
     assert ssettings._latency_to_color(600) == (0, 255, 0)
     assert ssettings._latency_to_color(601) == (255, 0, 0)
 
-    # Brightness level mapping and inverse
-    lvl = ssettings._brightness_raw_to_level("bad")
-    assert 1 <= lvl <= 10
-    assert ssettings._brightness_level_to_raw(1) == 10
-    assert ssettings._brightness_level_to_raw(99) == 95
+    # Brightness uses logical levels directly; hardware mapping stays separate.
+    assert raw_brightness_for_level(0, {"hardware_version": "444e"}) == 10
+    assert raw_brightness_for_level(9, {"hardware_version": "444e"}) == 95
 
     # Volume mapping and inverse
     v_lvl = ssettings._volume_raw_to_level("bad")
@@ -66,22 +65,21 @@ def test_brightness_level_mapping_uses_444f_values():
     di_444f = {"hardware_version": "444f"}
     di_444e = {"hardware_version": "444e"}
 
-    assert ssettings._brightness_level_to_raw_for_device(2, di_444f) == 13
-    assert ssettings._brightness_level_to_raw_for_device(2, di_444e) == 13
-    assert ssettings._brightness_raw_to_level_for_device(42, di_444f) == 6
+    assert raw_brightness_for_level(2, di_444f) == 18
+    assert raw_brightness_for_level(2, di_444e) == 16
 
 
 def test_brightness_display_boxes_keep_nine_slots_with_lowest_level_empty():
     di_default = {"hardware_version": "444e"}
     di_444f = {"hardware_version": "444f"}
 
-    assert ssettings._brightness_raw_to_display_boxes_for_device(10, di_default) == 0
-    assert ssettings._brightness_raw_to_display_boxes_for_device(20, di_default) == 3
-    assert ssettings._brightness_raw_to_display_boxes_for_device(100, di_default) == 9
-
-    assert ssettings._brightness_raw_to_display_boxes_for_device(10, di_444f) == 0
-    assert ssettings._brightness_raw_to_display_boxes_for_device(21, di_444f) == 3
-    assert ssettings._brightness_raw_to_display_boxes_for_device(95, di_444f) == 9
+    # UI receives logical levels directly, with level 0 empty and level 9 full.
+    empty = Image.new("RGB", (128, 18), (0, 0, 0))
+    ssettings.SettingsState._draw_level_boxes(ImageDraw.Draw(empty), 0, 18, 10, 0)
+    assert empty.getpixel((68, 6)) == (0, 0, 0)
+    full = Image.new("RGB", (128, 18), (0, 0, 0))
+    ssettings.SettingsState._draw_level_boxes(ImageDraw.Draw(full), 0, 18, 10, 9)
+    assert full.getpixel((68, 6)) == (255, 101, 140)
 
 
 def test_bridge_active_wifi_icon_color(monkeypatch):

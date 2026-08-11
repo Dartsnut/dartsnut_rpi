@@ -17,6 +17,12 @@ from runtime.bluetooth_qr import (
 )
 from runtime.remote_sync_port import get_remote_sync
 from states.base import BaseState
+from runtime.brightness import (
+    clamp_brightness_level,
+    raw_brightness_for_level,
+    save_calibration,
+    load_calibration_state,
+)
 
 try:
     from supabase_sync_bridge import (
@@ -122,8 +128,6 @@ def _tint_icon_rgba(icon_rgba, color):
     return Image.merge("RGBA", (R, G, B, a))
 
 
-BRIGHTNESS_LEVEL_VALUES = [10, 13, 16, 22, 32, 45, 61, 69, 80, 95]
-BRIGHTNESS_LEVEL_VALUES_444F = [10, 13, 18, 22, 31, 42, 45, 58, 63, 80]
 VOLUME_LEVEL_VALUES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 
@@ -133,77 +137,6 @@ def _clamp(value, min_value, max_value):
     if value > max_value:
         return max_value
     return value
-
-
-def _brightness_values_for_device(device_info):
-    version = str((device_info or {}).get("hardware_version", "")).strip().lower()
-    if version == "444f":
-        return BRIGHTNESS_LEVEL_VALUES_444F
-    return BRIGHTNESS_LEVEL_VALUES
-
-
-def _brightness_raw_to_level(brightness_raw):
-    """Map raw brightness (any int) to nearest level 1-10."""
-    try:
-        value = int(brightness_raw)
-    except (TypeError, ValueError):
-        value = 50
-    value = _clamp(value, BRIGHTNESS_LEVEL_VALUES[0], BRIGHTNESS_LEVEL_VALUES[-1])
-    closest_index = 0
-    smallest_diff = abs(BRIGHTNESS_LEVEL_VALUES[0] - value)
-    for idx, v in enumerate(BRIGHTNESS_LEVEL_VALUES[1:], start=1):
-        diff = abs(v - value)
-        if diff < smallest_diff:
-            smallest_diff = diff
-            closest_index = idx
-    return closest_index + 1
-
-
-def _brightness_level_to_raw(level):
-    """Map brightness level (1-10) to canonical raw brightness."""
-    try:
-        level_int = int(level)
-    except (TypeError, ValueError):
-        level_int = 5
-    level_int = _clamp(level_int, 1, len(BRIGHTNESS_LEVEL_VALUES))
-    return BRIGHTNESS_LEVEL_VALUES[level_int - 1]
-
-
-def _brightness_raw_to_level_for_device(brightness_raw, device_info):
-    values = _brightness_values_for_device(device_info)
-    try:
-        value = int(brightness_raw)
-    except (TypeError, ValueError):
-        value = 50
-    value = _clamp(value, values[0], values[-1])
-    closest_index = 0
-    smallest_diff = abs(values[0] - value)
-    for idx, v in enumerate(values[1:], start=1):
-        diff = abs(v - value)
-        if diff < smallest_diff:
-            smallest_diff = diff
-            closest_index = idx
-    return closest_index + 1
-
-
-def _brightness_level_to_raw_for_device(level, device_info):
-    values = _brightness_values_for_device(device_info)
-    try:
-        level_int = int(level)
-    except (TypeError, ValueError):
-        level_int = 5
-    level_int = _clamp(level_int, 1, len(values))
-    return values[level_int - 1]
-
-
-def _brightness_raw_to_display_boxes_for_device(brightness_raw, device_info):
-    """Map 10 device brightness levels onto 9 UI boxes.
-
-    The lowest device brightness level renders as 0 filled boxes, and each
-    higher step fills one additional box.
-    """
-    level = _brightness_raw_to_level_for_device(brightness_raw, device_info)
-    return _clamp(level - 1, 0, 9)
 
 
 def _volume_raw_to_level(volume_raw):
@@ -237,10 +170,15 @@ SETTINGS_ITEMS = [
     {"name": "Name", "type": "info"},
     {"name": "IP", "type": "info"},
     {"name": "Version", "type": "info"},
-    {"name": "Brightness", "type": "value"},
-    {"name": "Volume", "type": "value"},
+    {"name": "Volumn", "type": "value"},
+    {"name": "Display", "type": "action"},
     {"name": "Connectivity", "type": "action"},
     {"name": "Reset device", "type": "action"},
+]
+
+DISPLAY_ITEMS = [
+    {"name": "Brightness", "type": "value"},
+    {"name": "Calibration", "type": "action"},
 ]
 
 CONNECTIVITY_ITEMS = [
@@ -253,6 +191,7 @@ SETTINGS_LIST_MAX_HEIGHT = 128
 SETTINGS_NUM_ROWS = 7
 SETTINGS_ITEM_HEIGHT = SETTINGS_LIST_MAX_HEIGHT // SETTINGS_NUM_ROWS
 SETTINGS_FIRST_SELECTABLE_INDEX = 3
+SETTINGS_DISPLAY_INDEX = 4
 SETTINGS_CONNECTIVITY_INDEX = 5
 SETTINGS_RESET_DEVICE_INDEX = 6
 CONTROLLER_VISIBLE_ROWS = 7
@@ -281,6 +220,7 @@ WIFI_SIGNAL_COLORS = {
 }
 
 _PAGE_SETTINGS = "settings"
+_PAGE_DISPLAY = "display"
 _PAGE_CONNECTIVITY = "connectivity"
 _PAGE_CONTROLLERS = "controllers"
 _PAGE_WIFI = "wifi"
@@ -288,6 +228,8 @@ _PAGE_WIFI_PASSWORD = "wifi_password"
 _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
 _OVERLAY_WIFI_FORGET_CONFIRM = "wifi_forget_confirm"
+_OVERLAY_CALIBRATION_WARNING = "calibration_warning"
+_OVERLAY_CALIBRATION_SUCCESS = "calibration_success"
 
 
 def _draw_settings_label(draw, x, y, label, fill, font):
@@ -351,6 +293,9 @@ class SettingsState(BaseState):
         self._wifi_cursor_index = 0
         self._wifi_character_repeat_direction = 0
         self._wifi_character_repeat_next_at = None
+        self._display_selected_index = 0
+        self._calibration = None
+        self._calibration_notice = ""
 
     def name(self) -> str:
         return "settings"
@@ -359,7 +304,9 @@ class SettingsState(BaseState):
         return self._overlay_mode is not None
 
     def update(self, ctx: AppContext) -> None:
-        if self._page_mode == _PAGE_CONNECTIVITY:
+        if self._page_mode == _PAGE_DISPLAY:
+            settings_image = self._render_display(ctx)
+        elif self._page_mode == _PAGE_CONNECTIVITY:
             settings_image = self._render_connectivity(ctx)
         elif self._page_mode == _PAGE_CONTROLLERS:
             settings_image = self._render_controllers(ctx)
@@ -383,6 +330,10 @@ class SettingsState(BaseState):
             settings_image = self._render_reset_overlay(ctx, settings_image)
         elif self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
             settings_image = self._render_wifi_forget_overlay(ctx, settings_image)
+        elif self._overlay_mode == _OVERLAY_CALIBRATION_WARNING:
+            settings_image = self._render_calibration_warning(ctx, settings_image)
+        elif self._overlay_mode == _OVERLAY_CALIBRATION_SUCCESS:
+            settings_image = self._render_calibration_success(ctx, settings_image)
         ctx.display.update_frame_buffer(settings_image)
 
     def _render_settings(self, ctx):
@@ -391,10 +342,10 @@ class SettingsState(BaseState):
         device_info = {}
         try:
             device_info = ctx.get_device_info()
-            brightness = int(device_info.get("brightness", 50))
+            brightness = clamp_brightness_level(device_info.get("brightness", 5))
             volume = int(device_info.get("volume", 50))
         except Exception:
-            brightness = 50
+            brightness = 5
             volume = 50
         ip_address = get_primary_ipv4()
         try:
@@ -478,12 +429,7 @@ class SettingsState(BaseState):
                     fill=text_color,
                     font=font_6x8,
                 )
-            elif item["name"] == "Brightness":
-                brightness_level = _brightness_raw_to_display_boxes_for_device(
-                    brightness, device_info
-                )
-                self._draw_level_boxes(draw, y, item_height, 9, brightness_level)
-            elif item["name"] == "Volume":
+            elif item["name"] == "Volumn":
                 volume_level = _volume_raw_to_level(volume)
                 self._draw_level_boxes(draw, y, item_height, 10, volume_level)
             elif item["name"] == "IP":
@@ -504,6 +450,163 @@ class SettingsState(BaseState):
                 )
         self._draw_footer(settings_image, draw, ctx, "SETTINGS")
         return settings_image
+
+    def _render_display(self, ctx):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        font = ctx.assets.font8
+        device_info = ctx.get_device_info() or {}
+        level = clamp_brightness_level(device_info.get("brightness", 5))
+        status = self._calibration.status if self._calibration is not None else None
+        if status is not None and status.state == "running":
+            return Image.new("RGB", (128, 160), (255, 255, 255))
+        for idx, item in enumerate(DISPLAY_ITEMS):
+            y = idx * SETTINGS_ITEM_HEIGHT
+            focused = idx == self._display_selected_index
+            color = (0, 0, 0) if focused else (255, 255, 255)
+            if focused:
+                draw.rectangle((0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1), fill=(255, 255, 255))
+            _draw_settings_label(
+                draw,
+                2,
+                y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+                item["name"],
+                color,
+                font,
+            )
+            if item["name"] == "Brightness":
+                self._draw_level_boxes(draw, y, SETTINGS_ITEM_HEIGHT, 10, level)
+            elif item["name"] == "Calibration":
+                calibration = load_calibration_state(device_info)
+                label = "DONE" if calibration else "START"
+                text_width = draw.textbbox((0, 0), label, font=font)[2]
+                draw.text(
+                    (126 - text_width, y + (SETTINGS_ITEM_HEIGHT - 8) // 2),
+                    label,
+                    fill=color,
+                    font=font,
+                )
+        if self._calibration_notice:
+            draw.text((2, 76), self._calibration_notice[:20], fill=(255, 160, 0), font=font)
+        self._draw_footer(image, draw, ctx, "DISPLAY")
+        return image
+
+    def _render_calibration_warning(self, ctx, background):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        font = ctx.assets.font8
+        accent = (255, 101, 140)
+
+        # Hardware notice: one strong band, then short centered instructions.
+        draw.rectangle((0, 0, 127, 18), fill=accent)
+        self._draw_centered_settings_label(
+            draw, 5, "DISPLAY CALIBRATION", (0, 0, 0), font
+        )
+        draw.polygon(((64, 25), (54, 45), (74, 45)), fill=accent)
+        draw.rectangle((63, 31, 64, 38), fill=(0, 0, 0))
+        draw.rectangle((63, 41, 64, 42), fill=(0, 0, 0))
+
+        for y, line in (
+            (52, "UP TO 7.6 HOURS"),
+            (67, "SCREEN GETS BRIGHT"),
+            (82, "REMOVE ALL DARTS"),
+            (97, "BEFORE START"),
+        ):
+            self._draw_centered_settings_label(draw, y, line, (255, 255, 255), font)
+
+        draw.line((14, 115, 113, 115), fill=(96, 96, 96), width=1)
+        self._draw_centered_settings_label(
+            draw, 120, "A START   B BACK", (180, 180, 180), font
+        )
+        self._draw_footer(image, draw, ctx, "DISPLAY")
+        return image
+
+    def _render_calibration_success(self, ctx, background):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        font = ctx.assets.font8
+        accent = (68, 214, 127)
+
+        draw.rectangle((0, 0, 127, 18), fill=accent)
+        self._draw_centered_settings_label(
+            draw, 5, "DISPLAY CALIBRATION", (0, 0, 0), font
+        )
+
+        draw.ellipse((50, 25, 78, 53), outline=accent, width=2)
+        draw.line((57, 39, 62, 44), fill=accent, width=2)
+        draw.line((62, 44, 72, 33), fill=accent, width=2)
+
+        for y, line in (
+            (63, "CALIBRATION"),
+            (78, "COMPLETED"),
+            (93, "SUCCESSFULLY"),
+        ):
+            self._draw_centered_settings_label(draw, y, line, (255, 255, 255), font)
+
+        draw.line((14, 115, 113, 115), fill=(96, 96, 96), width=1)
+        self._draw_centered_settings_label(
+            draw, 120, "A MAIN MENU", (180, 180, 180), font
+        )
+        self._draw_footer(image, draw, ctx, "DISPLAY")
+        return image
+
+    @staticmethod
+    def _draw_centered_settings_label(draw, y, label, fill, font):
+        words = str(label).upper().split()
+        if not words:
+            return
+        text_width = sum(len(word) * 6 for word in words) + 4 * (len(words) - 1)
+        _draw_settings_label(draw, max(0, (128 - text_width) // 2), y, label, fill, font)
+
+    def _start_calibration(self, ctx):
+        if self._calibration is not None and self._calibration.status.state == "running":
+            return
+        from runtime.brightness_calibration import BrightnessCalibration
+
+        device_info = ctx.get_device_info() or {}
+        prior = clamp_brightness_level(device_info.get("brightness", 5))
+        prior_raw = raw_brightness_for_level(prior, device_info)
+        dart_reader = getattr(ctx, "get_raw_dart_bytes", None) or getattr(ctx, "get_darts", lambda: [])
+
+        def on_success(values):
+            save_calibration(values, device_info, current_level=prior)
+            ctx.set_brightness_hardware(values[prior])
+            self._calibration_notice = "SAVED"
+            self._overlay_mode = _OVERLAY_CALIBRATION_SUCCESS
+
+        self._calibration = BrightnessCalibration(
+            frame_writer=ctx.display.update_frame_buffer,
+            brightness_setter=ctx.set_brightness_hardware,
+            dart_reader=dart_reader,
+            on_success=on_success,
+        )
+        self._calibration.start(prior_raw)
+
+    def _handle_display_input(self, ctx, buttons):
+        status = self._calibration.status if self._calibration is not None else None
+        if status is not None and status.state == "running":
+            if buttons.get("btn_b") or buttons.get("btn_home"):
+                self._calibration.cancel()
+            return
+        if buttons.get("btn_a"):
+            if self._display_selected_index == 1:
+                self._overlay_mode = _OVERLAY_CALIBRATION_WARNING
+            return
+        if buttons.get("btn_up"):
+            self._display_selected_index = max(0, self._display_selected_index - 1)
+        elif buttons.get("btn_down"):
+            self._display_selected_index = min(len(DISPLAY_ITEMS) - 1, self._display_selected_index + 1)
+        elif buttons.get("btn_left") or buttons.get("btn_right"):
+            if self._display_selected_index != 0:
+                return
+            info = ctx.get_device_info() or {}
+            current = clamp_brightness_level(info.get("brightness", 5))
+            delta = -1 if buttons.get("btn_left") else 1
+            setter = getattr(ctx, "set_brightness_level", None)
+            if setter is not None:
+                setter(max(0, min(9, current + delta)))
+            else:
+                ctx.set_brightness(max(0, min(9, current + delta)))
 
     def _render_connectivity(self, ctx):
         image = Image.new("RGB", (128, 160), (0, 0, 0))
@@ -1237,6 +1340,20 @@ class SettingsState(BaseState):
                 self._bluetooth_qr_key = None
             return
 
+        if self._overlay_mode == _OVERLAY_CALIBRATION_WARNING:
+            if buttons.get("btn_a"):
+                self._overlay_mode = None
+                self._start_calibration(ctx)
+            elif buttons.get("btn_b") or buttons.get("btn_home"):
+                self._overlay_mode = None
+            return
+
+        if self._overlay_mode == _OVERLAY_CALIBRATION_SUCCESS:
+            if buttons.get("btn_a"):
+                self._overlay_mode = None
+                self._transition_to_main_menu(ctx)
+            return
+
         if self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
             snapshot = self._wifi_snapshot(ctx)
             status = str(snapshot.get("forget_status") or "idle")
@@ -1274,10 +1391,19 @@ class SettingsState(BaseState):
             return
 
         if buttons.get("btn_home"):
+            if self._calibration is not None and self._calibration.status.state == "running":
+                self._calibration.cancel()
+                return
             self._transition_to_main_menu(ctx)
             return
         if buttons.get("btn_b"):
-            if self._page_mode == _PAGE_CONTROLLERS:
+            if self._calibration is not None and self._calibration.status.state == "running":
+                self._calibration.cancel()
+                return
+            if self._page_mode == _PAGE_DISPLAY:
+                self._page_mode = _PAGE_SETTINGS
+                ctx.setting_select_index = SETTINGS_DISPLAY_INDEX
+            elif self._page_mode == _PAGE_CONTROLLERS:
                 self._page_mode = _PAGE_CONNECTIVITY
                 self._connectivity_select_index = 1
             elif self._page_mode == _PAGE_WIFI_PASSWORD:
@@ -1301,6 +1427,8 @@ class SettingsState(BaseState):
             self._handle_wifi_password_input(ctx, buttons)
         elif self._page_mode == _PAGE_CONNECTIVITY:
             self._handle_connectivity_input(ctx, buttons)
+        elif self._page_mode == _PAGE_DISPLAY:
+            self._handle_display_input(ctx, buttons)
         else:
             self._handle_settings_input(ctx, buttons)
 
@@ -1504,6 +1632,12 @@ class SettingsState(BaseState):
             self._connectivity_select_index = 0
         elif (
             buttons.get("btn_a")
+            and ctx.setting_select_index == SETTINGS_DISPLAY_INDEX
+        ):
+            self._page_mode = _PAGE_DISPLAY
+            self._display_selected_index = 0
+        elif (
+            buttons.get("btn_a")
             and ctx.setting_select_index == SETTINGS_RESET_DEVICE_INDEX
         ):
             self._overlay_mode = _OVERLAY_RESET_CONFIRM
@@ -1511,31 +1645,20 @@ class SettingsState(BaseState):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
             if idx == 3:
-                raw_brightness = int(di.get("brightness", "50"))
-                level = _brightness_raw_to_level_for_device(raw_brightness, di)
-                new_level = max(1, level - 1)
-                ctx.set_brightness(
-                    _brightness_level_to_raw_for_device(new_level, di)
-                )
-            elif idx == 4:
                 raw_volume = int(di.get("volume", "50"))
                 level = _volume_raw_to_level(raw_volume)
                 ctx.set_volume(_volume_level_to_raw(max(0, level - 1)))
+            elif idx == 4:
+                return
         elif buttons.get("btn_right"):
             idx = ctx.setting_select_index
             di = ctx.get_device_info()
             if idx == 3:
-                raw_brightness = int(di.get("brightness", "50"))
-                level = _brightness_raw_to_level_for_device(raw_brightness, di)
-                new_level = min(len(_brightness_values_for_device(di)), level + 1)
-                ctx.set_brightness(
-                    _brightness_level_to_raw_for_device(new_level, di)
-                )
-            elif idx == 4:
                 raw_volume = int(di.get("volume", "50"))
                 level = _volume_raw_to_level(raw_volume)
-                new_level = min(len(VOLUME_LEVEL_VALUES) - 1, level + 1)
-                ctx.set_volume(_volume_level_to_raw(new_level))
+                ctx.set_volume(_volume_level_to_raw(min(len(VOLUME_LEVEL_VALUES) - 1, level + 1)))
+            elif idx == 4:
+                return
         elif buttons.get("btn_up"):
             ctx.setting_select_index = max(
                 SETTINGS_FIRST_SELECTABLE_INDEX,

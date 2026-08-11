@@ -14,7 +14,7 @@ def test_device_action_updates_brightness_and_publishes_remote(
         or fake_remote_sync.publish_partial_state({"brightness": int(v)})
     )
     result = run_action(
-        message={"action": "set_brightness", "req_id": 1, "brightness": 72},
+        message={"action": "set_brightness", "req_id": 1, "brightness": 7},
         registry=websocket_registry,
         endpoint_config=endpoint_config,
     )
@@ -22,8 +22,8 @@ def test_device_action_updates_brightness_and_publishes_remote(
     assert result["req_id"] == 1
     assert result["payload"]["action"] == "set_brightness"
     assert result["payload"]["message"] == "Success"
-    assert local_state["brightness"] == 72
-    assert fake_remote_sync.published[-1] == {"brightness": 72}
+    assert local_state["brightness"] == 7
+    assert fake_remote_sync.published[-1] == {"brightness": 7}
 
 
 def test_device_action_updates_volume_and_publishes_remote(

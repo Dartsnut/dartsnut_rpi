@@ -41,7 +41,7 @@ def test_remote_config_applies_multi_field_snapshot(remote_config_harness, app_c
     )
 
     assert machine_state.pages == [{"uuid": "p1", "widgets": []}]
-    assert machine_state.brightness == 77
+    assert machine_state.brightness == 8
     assert machine_state.volume == 31
     assert machine_state.device_name == "BasementBoard"
     assert machine_state.dim_window["dim_window_enabled"] is True
@@ -72,7 +72,7 @@ def test_external_change_from_supabase_inbound_config_updates_local_machine(
     )
 
     assert events["reload_called"] is True
-    assert state.brightness == 81
+    assert state.brightness == 8
     assert state.volume == 66
     assert state.device_name == "LivingRoom"
     assert state.dim_window["dim_window_enabled"] is True

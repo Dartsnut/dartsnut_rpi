@@ -3,6 +3,9 @@ import logging
 import os
 import re
 import subprocess
+
+from runtime.brightness import normalize_inbound_brightness
+from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -93,8 +96,13 @@ def get_brightness():
         with open(_device_info_path(), "r") as file:
             device_info = json.load(file)
         
-        # Extract brightness value, default to 50 if missing
-        brightness = int(device_info.get("brightness", "50"))
+        hardware_version = resolve_pixeldarts_hardware_version()
+        if hardware_version:
+            device_info = dict(device_info)
+            device_info["hardware_version"] = hardware_version
+        brightness = normalize_inbound_brightness(
+            device_info.get("brightness", "5"), device_info
+        )[0]
         return {"action": "get_brightness", "brightness": brightness}
     except FileNotFoundError as e:
         return handle_exception("get_brightness", e, "Device info file not found")

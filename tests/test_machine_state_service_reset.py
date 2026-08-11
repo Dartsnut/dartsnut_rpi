@@ -45,7 +45,8 @@ def test_reset_device_to_factory_fields_keeps_only_required_keys(tmp_path, monke
     assert payload["serial"] == "SN001"
     assert payload["model"] == "PixelBoard"
     assert payload["id"] == "AA:BB:CC:DD:EE:FF"
-    assert payload["brightness"] == 100
+    assert payload["brightness"] == 9
+    assert payload["brightness_format"] == "level_0_9"
     assert payload["volume"] == 100
     assert payload["ssid"] == ""
     assert payload["ip_address"] == ""
@@ -165,13 +166,46 @@ def test_set_brightness_preserves_existing_identity_fields(tmp_path, monkeypatch
         reload_pages_from_conf=lambda _ctx: None,
     )
 
-    service.set_brightness(90)
+    service.set_brightness(8)
 
     with open("device.json", "r", encoding="utf-8") as f:
         payload = json.load(f)
     assert payload["serial"] == "SN-ORIGINAL"
     assert payload["model"] == "PixelBoard"
-    assert payload["brightness"] == "90"
+    assert payload["brightness"] == "8"
+    assert payload["brightness_format"] == "level_0_9"
+
+
+def test_set_brightness_uses_custom_calibration_curve(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("device.json", "w", encoding="utf-8") as f:
+        json.dump({"brightness": "4", "hardware_version": "444f"}, f)
+    with open("brightness_calibration.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "format_version": 1,
+                "hardware_version": "444f",
+                "values": [10, 15, 21, 27, 34, 45, 59, 69, 84, 95],
+                "current_level": 4,
+            },
+            f,
+        )
+    hardware = []
+    service = MachineStateService(
+        ctx=None,
+        set_brightness_hardware=hardware.append,
+        get_device_info=lambda: {
+            "brightness": "4",
+            "hardware_version": "444f",
+        },
+        reload_pages_from_conf=lambda _ctx: None,
+    )
+
+    service.set_brightness(8)
+
+    assert hardware == [84]
+    with open("device.json", "r", encoding="utf-8") as f:
+        assert json.load(f)["brightness"] == "8"
 
 
 def test_set_volume_does_not_introduce_identity_when_missing(tmp_path, monkeypatch):

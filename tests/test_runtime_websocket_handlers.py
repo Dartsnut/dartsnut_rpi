@@ -120,7 +120,7 @@ def test_try_handle_control_and_ops_cover_non_response_actions():
         try_handle_control_actions(
             action="set_brightness",
             req_id=1,
-            message={"brightness": "50"},
+            message={"brightness": "5"},
             endpoint_config=cfg,
             send_response=send_response,
         )

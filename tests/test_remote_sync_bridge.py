@@ -42,7 +42,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
     )
 
     assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
-    assert state["brightness"] == 70
+    assert state["brightness"] == 7
     assert state["volume"] == 50
     assert state["pages"] == []
     assert state["games"] == []
@@ -79,7 +79,7 @@ def test_request_device_reset_state_sends_expected_payload(monkeypatch, tmp_path
     assert payload["ssid"] == ""
     assert payload["pages"] == []
     assert payload["games"] == []
-    assert payload["brightness"] == 100
+    assert payload["brightness"] == 9
     assert payload["volume"] == 100
     assert payload["dim_window"] == {
         "dim_window_enabled": False,
