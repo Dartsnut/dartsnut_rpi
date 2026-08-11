@@ -23,6 +23,13 @@ from typing import Any, Callable, Dict, List, Optional
 from domain.app_context import AppContext
 from runtime.api_token_store import delete_api_token_file
 from runtime import device_json_identity
+from runtime.brightness import (
+    BRIGHTNESS_FORMAT_KEY,
+    LOGICAL_BRIGHTNESS_FORMAT,
+    clamp_brightness_level,
+    raw_brightness_for_level,
+    save_brightness_level,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -113,21 +120,26 @@ class MachineStateService:
 
     def set_brightness(self, brightness: int) -> None:
         """
-        Set brightness on hardware and persist to device.json.
-        Smooth transition timing/state is still handled in main.py; this method
-        just sets the immediate hardware value and JSON field.
+        Set logical 0–9 brightness on hardware and persist to device.json.
         """
+        device_info = self._get_device_info() or {}
+        level = clamp_brightness_level(brightness)
         try:
-            self._set_brightness_hardware(brightness)
+            self._set_brightness_hardware(raw_brightness_for_level(level, device_info))
         except Exception as e:
             _log.warning("Failed to set brightness hardware: %s", e)
 
         try:
-            device_info = self._get_device_info() or {}
-            device_info["brightness"] = str(brightness)
+            device_info["brightness"] = str(level)
+            device_info[BRIGHTNESS_FORMAT_KEY] = LOGICAL_BRIGHTNESS_FORMAT
             self._write_device_info(device_info)
+            save_brightness_level(level, device_info)
         except Exception as e:
             _log.error("Error updating brightness in device.json: %s", e)
+
+    def set_brightness_level(self, level: int) -> None:
+        """Compatibility alias for logical brightness levels 0–9."""
+        self.set_brightness(level)
 
     def set_volume(self, volume: int) -> None:
         """
@@ -330,7 +342,8 @@ class MachineStateService:
         try:
             existing = self._read_device_info() or {}
             payload = dict(existing)
-            payload["brightness"] = 100
+            payload["brightness"] = 9
+            payload[BRIGHTNESS_FORMAT_KEY] = LOGICAL_BRIGHTNESS_FORMAT
             payload["volume"] = 100
             payload["ssid"] = ""
             payload["ip_address"] = ""

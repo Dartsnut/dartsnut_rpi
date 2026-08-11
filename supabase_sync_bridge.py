@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.brightness import normalize_inbound_brightness
 from runtime.sync.engine import SyncEngine
 from runtime.sync.outbox import SyncOutbox
 from runtime.sync.reducer import ReducedGameReady
@@ -578,9 +579,9 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     brightness_raw = device_info.get("brightness")
     volume_raw = device_info.get("volume")
     try:
-        brightness = int(brightness_raw)
-    except Exception:
-        brightness = 0
+        brightness = normalize_inbound_brightness(brightness_raw, device_info)[0]
+    except (TypeError, ValueError):
+        brightness = 5
     try:
         volume = int(volume_raw)
     except Exception:
@@ -986,6 +987,21 @@ def publish_device_state_update(
 ) -> None:
     if not isinstance(partial_state, dict) or not partial_state:
         return
+    partial_state = dict(partial_state)
+    if "brightness" in partial_state:
+        try:
+            local_info = _load_device_json()
+            hardware_version = resolve_pixeldarts_hardware_version()
+            if hardware_version:
+                local_info = dict(local_info)
+                local_info["hardware_version"] = hardware_version
+            partial_state["brightness"] = normalize_inbound_brightness(
+                partial_state["brightness"], local_info
+            )[0]
+        except (TypeError, ValueError):
+            partial_state.pop("brightness", None)
+    if not partial_state:
+        return
     global _sync_engine, _client
     if _sync_engine is not None:
         sanitized = _sanitize_firmware_partial_patch(partial_state, source=source)
@@ -1114,7 +1130,7 @@ def request_device_reset_state() -> None:
             "ssid": "",
             "pages": [],
             "games": [],
-            "brightness": 100,
+            "brightness": 9,
             "volume": 100,
             "dim_window": {
                 "dim_window_enabled": False,

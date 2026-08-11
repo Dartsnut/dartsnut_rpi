@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
 from domain.game_remote_sync import handle_incoming_game_status
+from runtime.brightness import normalize_inbound_brightness
 
 _log = logging.getLogger(__name__)
 
@@ -892,23 +893,30 @@ class RemoteDeviceConfigApplier:
             if "brightness" in config or "Brightness" in config:
                 try:
                     key = "brightness" if "brightness" in config else "Brightness"
-                    brightness_val = int(config.get(key))
+                    brightness_level, was_legacy_raw = normalize_inbound_brightness(
+                        config.get(key), ctx.get_device_info() or {}
+                    )
+                    device_info = ctx.get_device_info() or {}
                     current = None
                     try:
                         current = int((ctx.get_device_info() or {}).get("brightness"))
                     except Exception:
                         current = None
                     setting_source = str(config.get("last_update_source", "") or "").strip().lower()
-                    if current != brightness_val and should_accept_remote_setting(
+                    accepted = should_accept_remote_setting(
                         rt,
                         "brightness",
-                        brightness_val,
+                        brightness_level,
                         cfg_ts,
                         source=setting_source,
-                    ):
-                        service.set_brightness(brightness_val)
-                except Exception:
-                    pass
+                    )
+                    if accepted:
+                        if current != brightness_level:
+                            service.set_brightness(brightness_level)
+                        if was_legacy_raw:
+                            deps.publish_partial_state({"brightness": brightness_level})
+                except (TypeError, ValueError):
+                    _log.warning("remote config: invalid brightness value=%r", config.get(key))
 
             if "volume" in config:
                 try:
