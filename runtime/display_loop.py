@@ -17,6 +17,7 @@ from typing import Any, Callable, Type
 from PIL import Image
 
 from domain.app_context import AppContext
+from runtime.brightness import raw_brightness_for_level
 
 _log = logging.getLogger(__name__)
 _UI_STATE_SNAPSHOT_PATH = "/tmp/dartsnut_ui_state.json"
@@ -223,7 +224,7 @@ def run_main_loop(
                         restore = (
                             dim_rt.brightness_before_dim
                             if dim_rt.brightness_before_dim is not None
-                            else int(di.get("brightness", 50))
+                            else raw_brightness_for_level(di.get("brightness", 5), di)
                         )
                         start_brightness_transition(restore)
                         dim_rt.currently_in_dim_window = False
@@ -237,7 +238,7 @@ def run_main_loop(
                             restore = (
                                 dim_rt.brightness_before_dim
                                 if dim_rt.brightness_before_dim is not None
-                                else int(di.get("brightness", 50))
+                                else raw_brightness_for_level(di.get("brightness", 5), di)
                             )
                             start_brightness_transition(restore)
                             dim_rt.currently_in_dim_window = False
@@ -258,8 +259,8 @@ def run_main_loop(
                                 and not dim_rt.dim_force_normal_brightness
                             ):
                                 if not dim_rt.currently_in_dim_window:
-                                    dim_rt.brightness_before_dim = int(
-                                        di.get("brightness", 50)
+                                    dim_rt.brightness_before_dim = raw_brightness_for_level(
+                                        di.get("brightness", 5), di
                                     )
                                 start_brightness_transition(dim_lvl)
                                 dim_rt.currently_in_dim_window = True
@@ -268,7 +269,7 @@ def run_main_loop(
                                 restore = (
                                     dim_rt.brightness_before_dim
                                     if dim_rt.brightness_before_dim is not None
-                                    else int(di.get("brightness", 50))
+                                    else raw_brightness_for_level(di.get("brightness", 5), di)
                                 )
                                 start_brightness_transition(restore)
                                 dim_rt.currently_in_dim_window = False
@@ -354,7 +355,7 @@ def run_main_loop(
                     restore = (
                         dim_rt.brightness_before_dim
                         if dim_rt.brightness_before_dim is not None
-                        else int(di.get("brightness", 50))
+                        else raw_brightness_for_level(di.get("brightness", 5), di)
                     )
                     start_brightness_transition(restore)
                     buttons["btn_a"] = False

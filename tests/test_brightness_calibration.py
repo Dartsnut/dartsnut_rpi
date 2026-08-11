@@ -4,10 +4,12 @@ import json
 import time
 
 from runtime.brightness import (
-    calibrated_raw_for_index,
+    clamp_brightness_level,
     load_calibration,
     load_calibration_state,
-    nearest_index,
+    migrate_brightness_file,
+    normalize_inbound_brightness,
+    raw_brightness_for_level,
     save_brightness_level,
     save_calibration,
     select_evenly,
@@ -40,8 +42,29 @@ def test_level_update_stays_in_calibration_file(tmp_path):
 
 
 def test_mapping_and_even_pass_selection():
-    assert nearest_index(44, [10, 20, 40, 60]) == 2
+    assert clamp_brightness_level(-1) == 0
+    assert clamp_brightness_level(99) == 9
+    assert raw_brightness_for_level(0, {"hardware_version": "444e"}) == 10
+    assert raw_brightness_for_level(9, {"hardware_version": "444f"}) == 80
+    assert normalize_inbound_brightness(4, {"hardware_version": "444e"}) == (4, False)
+    assert normalize_inbound_brightness(44, {"hardware_version": "444e"}) == (5, True)
     assert select_evenly(range(10, 101)) == [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+
+def test_legacy_device_brightness_migrates_once(tmp_path):
+    path = tmp_path / "device.json"
+    path.write_text('{"brightness":"80"}', encoding="utf-8")
+
+    assert migrate_brightness_file(str(path), {"hardware_version": "444f"}) is True
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["brightness"] == "9"
+    assert payload["brightness_format"] == "level_0_9"
+    assert migrate_brightness_file(str(path), {"hardware_version": "444f"}) is False
+
+
+def test_legacy_inbound_uses_hardware_default_curve():
+    assert normalize_inbound_brightness(80, {"hardware_version": "444e"}) == (8, True)
+    assert normalize_inbound_brightness(80, {"hardware_version": "444f"}) == (9, True)
 
 
 def test_sweep_tests_every_raw_brightness_level():

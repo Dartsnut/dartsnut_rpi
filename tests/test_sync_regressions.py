@@ -111,7 +111,7 @@ def test_outbox_retries_when_send_returns_false():
 
     outbox = SyncOutbox(send_fn, backoff_seconds=(0.01, 0.02))
     outbox.start()
-    ref = outbox.enqueue({"brightness": 50})
+    ref = outbox.enqueue({"brightness": 5})
     import time
 
     deadline = time.monotonic() + 2.0
@@ -121,7 +121,7 @@ def test_outbox_retries_when_send_returns_false():
         time.sleep(0.05)
     outbox.stop()
     assert len(calls) >= 2
-    assert calls[0][1] == {"brightness": 50}
+    assert calls[0][1] == {"brightness": 5}
 
 
 def test_outbox_ack_removes_pending():

@@ -216,8 +216,8 @@ def test_calibration_success_overlay_appears_and_a_returns_main(monkeypatch):
     captured["on_success"](values)
 
     assert state._overlay_mode == ssettings._OVERLAY_CALIBRATION_SUCCESS
-    assert saved == [(values, ctx.get_device_info(), 8)]
-    assert hardware_values == [84]
+    assert saved == [(values, ctx.get_device_info(), 9)]
+    assert hardware_values == [95]
 
     state.update(ctx)
     assert ctx.display.frame.getpixel((0, 0)) == (68, 214, 127)
@@ -241,7 +241,7 @@ class _Ctx:
     def __init__(self):
         self.transitions = []
         self.setting_select_index = 3
-        self._device_info = {"brightness": "79", "volume": "90", "model": "PixelDart"}
+        self._device_info = {"brightness": "9", "volume": "90", "model": "PixelDart"}
         self.reset_called = 0
         self.brightness_calls = []
         self.volume_calls = []
@@ -437,15 +437,15 @@ def test_settings_brightness_and_volume_adjustments_left_right():
     ctx = _Ctx()
     state = SettingsState()
 
-    ctx.setting_select_index = 3
-    state.handle_input(ctx, {"btn_left": True})
-    assert ctx.brightness_calls[-1] == 69
-
-    ctx._device_info["brightness"] = "100"
+    _open_display(ctx, state)
     state.handle_input(ctx, {"btn_right": True})
-    assert ctx.brightness_calls[-1] == 95
+    assert ctx.brightness_calls[-1] == 9
 
-    ctx.setting_select_index = 4
+    state.handle_input(ctx, {"btn_left": True})
+    assert ctx.brightness_calls[-1] == 8
+
+    state.handle_input(ctx, {"btn_b": True})
+    ctx.setting_select_index = 3
     ctx._device_info["volume"] = "90"
     state.handle_input(ctx, {"btn_left": True})
     assert ctx.volume_calls[-1] == 80

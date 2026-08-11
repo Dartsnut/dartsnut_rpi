@@ -13,6 +13,8 @@ BRIGHTNESS_LEVEL_VALUES_444F = [10, 13, 18, 22, 31, 42, 45, 58, 63, 80]
 BRIGHTNESS_LEVEL_COUNT = 10
 CALIBRATION_FILE_NAME = "brightness_calibration.json"
 CALIBRATION_FORMAT_VERSION = 1
+BRIGHTNESS_FORMAT_KEY = "brightness_format"
+LOGICAL_BRIGHTNESS_FORMAT = "level_0_9"
 
 
 def calibration_path(path: str | None = None) -> str:
@@ -140,33 +142,77 @@ def values_for_device(device_info: dict[str, Any] | None) -> list[int]:
     return load_calibration(device_info) or default_values_for_device(device_info)
 
 
-def nearest_index(raw_value: Any, values: Iterable[int]) -> int:
-    curve = [int(value) for value in values]
-    if not curve:
-        return 0
+def clamp_brightness_level(level: Any, default: int = 5) -> int:
     try:
-        raw = int(raw_value)
+        parsed = int(level)
     except (TypeError, ValueError):
-        raw = curve[len(curve) // 2]
-    return min(range(len(curve)), key=lambda index: (abs(curve[index] - raw), index))
+        parsed = default
+    return max(0, min(BRIGHTNESS_LEVEL_COUNT - 1, parsed))
 
 
-def default_raw_for_index(index: Any, device_info: dict[str, Any] | None) -> int:
-    curve = default_values_for_device(device_info)
-    try:
-        index = int(index)
-    except (TypeError, ValueError):
-        index = 5
-    return curve[max(0, min(len(curve) - 1, index))]
-
-
-def calibrated_raw_for_index(index: Any, device_info: dict[str, Any] | None) -> int:
+def raw_brightness_for_level(level: Any, device_info: dict[str, Any] | None) -> int:
     curve = values_for_device(device_info)
+    return curve[clamp_brightness_level(level)]
+
+
+def _legacy_raw_to_level(raw_value: int, device_info: dict[str, Any] | None) -> int:
+    curve = default_values_for_device(device_info)
+    return min(range(len(curve)), key=lambda level: (abs(curve[level] - raw_value), level))
+
+
+def normalize_inbound_brightness(
+    value: Any, device_info: dict[str, Any] | None
+) -> tuple[int, bool]:
+    """Normalize logical 0–9 or legacy raw 10–100 inbound brightness."""
     try:
-        index = int(index)
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("brightness must be an integer") from exc
+    if 0 <= parsed <= 9:
+        return parsed, False
+    if 10 <= parsed <= 100:
+        return _legacy_raw_to_level(parsed, device_info), True
+    raise ValueError("brightness must be between 0 and 100")
+
+
+def migrate_brightness_file(path: str, device_info: dict[str, Any] | None = None) -> bool:
+    """Convert one legacy device.json brightness field to logical 0–9."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get(BRIGHTNESS_FORMAT_KEY) == LOGICAL_BRIGHTNESS_FORMAT:
+        return False
+    raw_value = payload.get("brightness", 5)
+    try:
+        parsed = int(raw_value)
     except (TypeError, ValueError):
-        index = 5
-    return curve[max(0, min(len(curve) - 1, index))]
+        parsed = 5
+    if 0 <= parsed <= 9:
+        level = parsed
+    elif 10 <= parsed <= 100:
+        level = _legacy_raw_to_level(parsed, device_info)
+    else:
+        level = 5
+    payload["brightness"] = str(level)
+    payload[BRIGHTNESS_FORMAT_KEY] = LOGICAL_BRIGHTNESS_FORMAT
+    directory = os.path.dirname(path) or "."
+    fd, temporary = tempfile.mkstemp(prefix=".device.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    return True
 
 
 def select_evenly(values: Iterable[int], count: int = BRIGHTNESS_LEVEL_COUNT) -> list[int]:

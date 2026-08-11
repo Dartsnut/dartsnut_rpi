@@ -52,7 +52,7 @@ def test_startup_volume_failure_does_not_abort_background_subsystems():
     ):
         start_background_subsystems(
             dartsnut=FakeDartsnut(),
-            device_info={"brightness": "80", "volume": "30"},
+            device_info={"brightness": "8", "volume": "30"},
             get_version=lambda: {"version": "test"},
             set_volume=lambda _value: None,
             start_ble_server=lambda *_args, **_kwargs: None,

@@ -37,7 +37,7 @@ def test_apply_remote_device_patch_merges_and_sets_source():
         headers=headers,
         json={
             "p_device_id": device_id,
-            "p_patch": {"brightness": 70},
+            "p_patch": {"brightness": 7},
             "p_full": False,
             "p_source": "integration_test",
         },
@@ -68,7 +68,7 @@ def test_apply_remote_device_patch_merges_and_sets_source():
     rows = query.json()
     assert len(rows) == 1
     row = rows[0]
-    assert row["state"]["brightness"] == 70
+    assert row["state"]["brightness"] == 7
     assert row["state"]["volume"] == 25
     assert row["last_update_source"] == "integration_test"
 
@@ -248,7 +248,7 @@ def test_apply_remote_device_patch_v2_partial_does_not_create_missing_row():
             "p_device_id": device_id,
             "p_patch": {
                 "volume": 50,
-                "brightness": 40,
+                "brightness": 4,
                 "games": [{"id": "g1", "status": "ready", "version": "1"}],
             },
             "p_full": True,

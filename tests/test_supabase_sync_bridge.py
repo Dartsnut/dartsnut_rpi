@@ -31,7 +31,7 @@ def test_build_initial_state_includes_remote_parity_fields(monkeypatch):
     )
 
     assert state["device_info"]["id"] == "AA:BB:CC:DD:EE:FF"
-    assert state["brightness"] == 70
+    assert state["brightness"] == 7
     assert state["volume"] == 50
     assert state["pages"] == []
     assert state["games"] == []
@@ -375,11 +375,11 @@ def test_sync_client_send_state_includes_source_when_present():
 
     conn = _Conn()
     client._conn = conn
-    ok = client.send_state({"brightness": 70}, source="supabase_bridge_init")
+    ok = client.send_state({"brightness": 7}, source="supabase_bridge_init")
     assert ok is True
     sent = json.loads(conn.writes[0].decode("utf-8").strip())
     assert sent["kind"] in ("device_state", "rpc_patch")
-    assert sent["payload"]["brightness"] == 70
+    assert sent["payload"]["brightness"] == 7
     assert sent["source"] == "supabase_bridge_init"
 
 
@@ -422,7 +422,7 @@ def test_sync_client_ready_still_sends_initial_state(tmp_path):
         socket_path=socket_path,
         reload_config=lambda: None,
         on_config_updated=lambda _cfg: None,
-        initial_state={"volume": 50, "brightness": 40},
+        initial_state={"volume": 50, "brightness": 4},
         sync_engine=engine,
     )
     client.start_server()
@@ -451,7 +451,7 @@ def test_sync_client_ready_still_sends_initial_state(tmp_path):
     assert sent["kind"] == "initial_state"
     assert sent["full"] is True
     assert sent["payload"]["volume"] == 50
-    assert sent["payload"]["brightness"] == 40
+    assert sent["payload"]["brightness"] == 4
 
 
 def test_build_initial_state_prefers_lsusb_over_stale_device_json(monkeypatch):

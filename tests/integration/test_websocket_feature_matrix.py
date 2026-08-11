@@ -24,7 +24,7 @@ import pytest
             "download_app",
         ),
         ({"action": "get_download_progress", "req_id": 13, "game_ids": ["g1"]}, "get_download_progress"),
-        ({"action": "set_brightness", "req_id": 14, "brightness": "50"}, "set_brightness"),
+        ({"action": "set_brightness", "req_id": 14, "brightness": "5"}, "set_brightness"),
         ({"action": "set_volume", "req_id": 15, "volume": "35"}, "set_volume"),
         ({"action": "set_time_zone", "req_id": 16, "time_zone": "UTC"}, "set_time_zone"),
         ({"action": "locate_device", "req_id": 17}, "locate_device"),

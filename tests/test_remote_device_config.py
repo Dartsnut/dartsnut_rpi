@@ -102,10 +102,57 @@ def _settings_applier(current_device_info):
     return RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState()), service
 
 
-def test_apply_same_brightness_does_not_write_local_settings():
-    applier, service = _settings_applier({"brightness": "55"})
+def test_apply_legacy_brightness_normalizes_and_publishes_level():
+    published = []
+    current = {"brightness": "5", "hardware_version": "444f"}
+    ctx = AppContext(
+        display=MagicMock(),
+        assets=MagicMock(),
+        get_device_info=lambda: dict(current),
+        set_brightness=lambda _b: None,
+        set_volume=lambda _v: None,
+    )
+    service = MagicMock()
+    deps = RemoteDeviceConfigDependencies(
+        app_ctx=ctx,
+        get_machine_state_service=lambda: service,
+        bluetooth_scan_controller=MagicMock(),
+        publish_partial_state=lambda patch: published.append(dict(patch)),
+        request_set_game_status=lambda *_a: None,
+        set_time_zone=lambda _tz: None,
+        term_game_process=lambda _g: None,
+        ensure_game_downloaded=lambda *_a: True,
+        cancel_game_download=lambda _gid: None,
+        local_game_version_matches=lambda *_a: False,
+        perform_update=lambda: {},
+        get_version=lambda: {},
+        is_reset_in_progress=lambda: False,
+        on_reset_confirmed=lambda: None,
+    )
 
-    applier.apply({"brightness": 55})
+    RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState()).apply(
+        {"brightness": 80}
+    )
+
+    service.set_brightness.assert_called_once_with(9)
+    assert published == [{"brightness": 9}]
+
+
+def test_apply_logical_brightness_does_not_publish_correction():
+    published = []
+    applier, service = _settings_applier({"brightness": "4"})
+    applier._deps.publish_partial_state = lambda patch: published.append(dict(patch))
+
+    applier.apply({"brightness": 5})
+
+    service.set_brightness.assert_called_once_with(5)
+    assert published == []
+
+
+def test_apply_same_brightness_does_not_write_local_settings():
+    applier, service = _settings_applier({"brightness": "6"})
+
+    applier.apply({"brightness": 6})
 
     service.set_brightness.assert_not_called()
 
@@ -119,11 +166,11 @@ def test_apply_same_volume_does_not_write_local_settings():
 
 
 def test_apply_changed_volume_and_brightness_writes_local_settings():
-    applier, service = _settings_applier({"brightness": "50", "volume": "40"})
+    applier, service = _settings_applier({"brightness": "5", "volume": "40"})
 
-    applier.apply({"brightness": 55, "volume": 44})
+    applier.apply({"brightness": 6, "volume": 44})
 
-    service.set_brightness.assert_called_once_with(55)
+    service.set_brightness.assert_called_once_with(6)
     service.set_volume.assert_called_once_with(44)
 
 
@@ -889,8 +936,8 @@ def test_apply_updates_brightness_via_service():
         on_reset_confirmed=lambda: None,
     )
     applier = RemoteDeviceConfigApplier(deps, RemoteConfigRuntimeState())
-    applier.apply({"brightness": 77})
-    svc.set_brightness.assert_called_once_with(77)
+    applier.apply({"brightness": 7})
+    svc.set_brightness.assert_called_once_with(7)
 
 
 def test_apply_bluetooth_connecting_rows_trigger_connect_for_both_lists():

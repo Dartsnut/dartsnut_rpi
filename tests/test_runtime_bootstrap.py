@@ -47,7 +47,7 @@ def test_ensure_device_info_id_assigns_factory_serial_when_model_only(
     monkeypatch.chdir(tmp_path)
     device_path = tmp_path / "device.json"
     device_path.write_text(
-        json.dumps({"model": "PixelBoard", "brightness": "100"}),
+        json.dumps({"model": "PixelBoard", "brightness": "9"}),
         encoding="utf-8",
     )
 
@@ -66,7 +66,7 @@ def test_ensure_device_info_id_assigns_factory_serial_when_model_only(
     persisted = json.loads(device_path.read_text(encoding="utf-8"))
     assert persisted["serial"] == device_json_identity.FACTORY_PLACEHOLDER_SERIAL
     assert persisted["model"] == "PixelBoard"
-    assert persisted["brightness"] == "100"
+    assert persisted["brightness"] == "9"
 
 
 def test_ensure_device_info_id_persists_when_incoming_identity_complete(

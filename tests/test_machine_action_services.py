@@ -15,7 +15,7 @@ from runtime.websocket_ports import WebsocketEndpointConfig
 def test_set_brightness_invalid_range_returns_error():
     result = asyncio.run(
         set_brightness_service(
-            message={"brightness": "9"},
+            message={"brightness": "10"},
             endpoint_config=WebsocketEndpointConfig(),
         )
     )

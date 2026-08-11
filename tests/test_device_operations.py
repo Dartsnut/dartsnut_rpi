@@ -6,11 +6,11 @@ from python_websocket import device_operations as dops
 def test_get_brightness_and_volume(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "device.json").write_text(
-        json.dumps({"brightness": "40", "volume": "30"}), encoding="utf-8"
+        json.dumps({"brightness": "4", "volume": "30"}), encoding="utf-8"
     )
     bright = dops.get_brightness()
     volume = dops.get_volume()
-    assert bright["brightness"] == 40
+    assert bright["brightness"] == 4
     assert volume["volume"] == 30
 
 

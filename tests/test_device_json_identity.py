@@ -7,7 +7,7 @@ from runtime import device_json_identity
 def test_verify_repairs_missing_model_from_boot(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "device.json"
-    path.write_text(json.dumps({"brightness": "50"}), encoding="utf-8")
+    path.write_text(json.dumps({"brightness": "5"}), encoding="utf-8")
 
     monkeypatch.setattr(
         device_json_identity,
@@ -19,7 +19,7 @@ def test_verify_repairs_missing_model_from_boot(tmp_path, monkeypatch):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["serial"] == "S1"
     assert data["model"] == "PixelDart"
-    assert data["brightness"] == "50"
+    assert data["brightness"] == "5"
 
 
 def test_verify_overwrites_wrong_model_with_boot(tmp_path, monkeypatch):

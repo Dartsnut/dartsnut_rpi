@@ -24,10 +24,10 @@ from domain.app_context import AppContext
 from runtime.api_token_store import delete_api_token_file
 from runtime import device_json_identity
 from runtime.brightness import (
-    calibrated_raw_for_index,
-    default_raw_for_index,
-    default_values_for_device,
-    nearest_index,
+    BRIGHTNESS_FORMAT_KEY,
+    LOGICAL_BRIGHTNESS_FORMAT,
+    clamp_brightness_level,
+    raw_brightness_for_level,
     save_brightness_level,
 )
 
@@ -120,44 +120,26 @@ class MachineStateService:
 
     def set_brightness(self, brightness: int) -> None:
         """
-        Set brightness on hardware and persist to device.json.
-        Smooth transition timing/state is still handled in main.py; this method
-        just sets the immediate hardware value and JSON field.
+        Set logical 0–9 brightness on hardware and persist to device.json.
         """
         device_info = self._get_device_info() or {}
-        index = nearest_index(brightness, default_values_for_device(device_info))
-        canonical = default_raw_for_index(index, device_info)
+        level = clamp_brightness_level(brightness)
         try:
-            self._set_brightness_hardware(calibrated_raw_for_index(index, device_info))
+            self._set_brightness_hardware(raw_brightness_for_level(level, device_info))
         except Exception as e:
             _log.warning("Failed to set brightness hardware: %s", e)
 
         try:
-            # Keep legacy API payload in device.json; hardware uses mapped curve.
-            device_info["brightness"] = str(brightness)
+            device_info["brightness"] = str(level)
+            device_info[BRIGHTNESS_FORMAT_KEY] = LOGICAL_BRIGHTNESS_FORMAT
             self._write_device_info(device_info)
+            save_brightness_level(level, device_info)
         except Exception as e:
             _log.error("Error updating brightness in device.json: %s", e)
 
     def set_brightness_level(self, level: int) -> None:
-        """Set local 0–9 brightness index, storing legacy raw value in device.json."""
-        device_info = self._get_device_info() or {}
-        try:
-            index = max(0, min(9, int(level)))
-        except (TypeError, ValueError):
-            index = 5
-        raw = calibrated_raw_for_index(index, device_info)
-        default_raw = default_raw_for_index(index, device_info)
-        try:
-            self._set_brightness_hardware(raw)
-        except Exception as exc:
-            _log.warning("Failed to set brightness hardware: %s", exc)
-        device_info["brightness"] = str(default_raw)
-        self._write_device_info(device_info)
-        try:
-            save_brightness_level(index, device_info)
-        except Exception as exc:
-            _log.warning("Failed to persist brightness level: %s", exc)
+        """Compatibility alias for logical brightness levels 0–9."""
+        self.set_brightness(level)
 
     def set_volume(self, volume: int) -> None:
         """
@@ -360,7 +342,8 @@ class MachineStateService:
         try:
             existing = self._read_device_info() or {}
             payload = dict(existing)
-            payload["brightness"] = 100
+            payload["brightness"] = 9
+            payload[BRIGHTNESS_FORMAT_KEY] = LOGICAL_BRIGHTNESS_FORMAT
             payload["volume"] = 100
             payload["ssid"] = ""
             payload["ip_address"] = ""

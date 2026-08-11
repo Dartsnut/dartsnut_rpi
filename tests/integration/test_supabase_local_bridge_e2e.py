@@ -148,7 +148,7 @@ def local_bridge_runtime(monkeypatch):
     device_id = f"ITEST-{uuid.uuid4()}".upper()
     device_info = {
         "id": device_id,
-        "brightness": "50",
+        "brightness": "5",
         "volume": "50",
         "name": "LocalE2E",
         "updated_at": "2026-03-30T00:00:00",
@@ -178,7 +178,7 @@ def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
     device_id = local_bridge_runtime["device_id"]
     headers = {"apikey": api_key, "Authorization": f"Bearer {api_key}"}
 
-    ssb.publish_device_state_update({"brightness": 73})
+    ssb.publish_device_state_update({"brightness": 7})
 
     def _state_updated() -> bool:
         r = requests.get(
@@ -196,7 +196,7 @@ def test_local_bridge_e2e_device_publish_updates_supabase(local_bridge_runtime):
         if not rows:
             return False
         row = rows[0]
-        return row.get("state", {}).get("brightness") == 73 and bool(row.get("last_update_source"))
+        return row.get("state", {}).get("brightness") == 7 and bool(row.get("last_update_source"))
 
     _wait_until(_state_updated, desc="Supabase row brightness update")
 
@@ -218,7 +218,7 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
 
     payload = {
         "p_device_id": device_id,
-        "p_patch": {"brightness": 64, "volume": 21},
+        "p_patch": {"brightness": 6, "volume": 21},
         "p_full": False,
         "p_source": "mobile_app_test",
     }
@@ -230,7 +230,7 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
             return False
         latest = incoming_configs[-1]
         return (
-            latest.get("brightness") == 64
+            latest.get("brightness") == 6
             and latest.get("volume") == 21
             and bool(latest.get("updated_at"))
             and bool(latest.get("last_update_source"))
@@ -239,7 +239,7 @@ def test_local_bridge_e2e_external_supabase_patch_reaches_python_callback(local_
 
     _wait_until(_callback_received, desc="Python inbound config callback")
     latest = incoming_configs[-1]
-    assert latest.get("brightness") == 64
+    assert latest.get("brightness") == 6
     assert latest.get("volume") == 21
     assert latest.get("updated_at")
     assert latest.get("last_update_source") == "mobile_app_test"

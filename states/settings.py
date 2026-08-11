@@ -18,9 +18,8 @@ from runtime.bluetooth_qr import (
 from runtime.remote_sync_port import get_remote_sync
 from states.base import BaseState
 from runtime.brightness import (
-    calibrated_raw_for_index,
-    default_values_for_device,
-    nearest_index,
+    clamp_brightness_level,
+    raw_brightness_for_level,
     save_calibration,
     load_calibration_state,
 )
@@ -138,83 +137,6 @@ def _clamp(value, min_value, max_value):
     if value > max_value:
         return max_value
     return value
-
-
-def _brightness_values_for_device(device_info):
-    return default_values_for_device(device_info)
-
-
-def _brightness_raw_to_level(brightness_raw):
-    """Legacy helper: map raw brightness to nearest level 1-10."""
-    try:
-        value = int(brightness_raw)
-    except (TypeError, ValueError):
-        value = 50
-    value = _clamp(value, BRIGHTNESS_LEVEL_VALUES[0], BRIGHTNESS_LEVEL_VALUES[-1])
-    closest_index = 0
-    smallest_diff = abs(BRIGHTNESS_LEVEL_VALUES[0] - value)
-    for idx, v in enumerate(BRIGHTNESS_LEVEL_VALUES[1:], start=1):
-        diff = abs(v - value)
-        if diff < smallest_diff:
-            smallest_diff = diff
-            closest_index = idx
-    return closest_index + 1
-
-
-def _brightness_level_to_raw(level):
-    """Legacy helper: map brightness level (1-10) to canonical raw brightness."""
-    try:
-        level_int = int(level)
-    except (TypeError, ValueError):
-        level_int = 5
-    values = default_values_for_device(None)
-    level_int = _clamp(level_int, 1, len(values))
-    return values[level_int - 1]
-
-
-def _brightness_raw_to_level_for_device(brightness_raw, device_info):
-    values = _brightness_values_for_device(device_info)
-    try:
-        value = int(brightness_raw)
-    except (TypeError, ValueError):
-        value = 50
-    value = _clamp(value, values[0], values[-1])
-    closest_index = 0
-    smallest_diff = abs(values[0] - value)
-    for idx, v in enumerate(values[1:], start=1):
-        diff = abs(v - value)
-        if diff < smallest_diff:
-            smallest_diff = diff
-            closest_index = idx
-    return closest_index + 1
-
-
-def _brightness_level_to_raw_for_device(level, device_info):
-    values = _brightness_values_for_device(device_info)
-    try:
-        level_int = int(level)
-    except (TypeError, ValueError):
-        level_int = 5
-    level_int = _clamp(level_int, 1, len(values))
-    return values[level_int - 1]
-
-
-def _brightness_raw_to_display_boxes_for_device(brightness_raw, device_info):
-    """Map 10 device brightness levels onto 9 UI boxes.
-
-    The lowest device brightness level renders as 0 filled boxes, and each
-    higher step fills one additional box.
-    """
-    level = _brightness_raw_to_level_for_device(brightness_raw, device_info)
-    return _clamp(level - 1, 0, 9)
-
-
-def _brightness_raw_to_index_for_device(brightness_raw, device_info):
-    return nearest_index(brightness_raw, default_values_for_device(device_info))
-
-
-def _brightness_index_to_raw_for_device(index, device_info):
-    return calibrated_raw_for_index(index, device_info)
 
 
 def _volume_raw_to_level(volume_raw):
@@ -420,10 +342,10 @@ class SettingsState(BaseState):
         device_info = {}
         try:
             device_info = ctx.get_device_info()
-            brightness = int(device_info.get("brightness", 50))
+            brightness = clamp_brightness_level(device_info.get("brightness", 5))
             volume = int(device_info.get("volume", 50))
         except Exception:
-            brightness = 50
+            brightness = 5
             volume = 50
         ip_address = get_primary_ipv4()
         try:
@@ -534,8 +456,7 @@ class SettingsState(BaseState):
         draw = ImageDraw.Draw(image)
         font = ctx.assets.font8
         device_info = ctx.get_device_info() or {}
-        raw_brightness = int(device_info.get("brightness", 50))
-        level = _brightness_raw_to_index_for_device(raw_brightness, device_info)
+        level = clamp_brightness_level(device_info.get("brightness", 5))
         status = self._calibration.status if self._calibration is not None else None
         if status is not None and status.state == "running":
             return Image.new("RGB", (128, 160), (255, 255, 255))
@@ -643,13 +564,13 @@ class SettingsState(BaseState):
         from runtime.brightness_calibration import BrightnessCalibration
 
         device_info = ctx.get_device_info() or {}
-        prior = int(device_info.get("brightness", 50))
+        prior = clamp_brightness_level(device_info.get("brightness", 5))
+        prior_raw = raw_brightness_for_level(prior, device_info)
         dart_reader = getattr(ctx, "get_raw_dart_bytes", None) or getattr(ctx, "get_darts", lambda: [])
 
         def on_success(values):
-            index = _brightness_raw_to_index_for_device(prior, device_info)
-            save_calibration(values, device_info, current_level=index)
-            ctx.set_brightness_hardware(values[index])
+            save_calibration(values, device_info, current_level=prior)
+            ctx.set_brightness_hardware(values[prior])
             self._calibration_notice = "SAVED"
             self._overlay_mode = _OVERLAY_CALIBRATION_SUCCESS
 
@@ -659,7 +580,7 @@ class SettingsState(BaseState):
             dart_reader=dart_reader,
             on_success=on_success,
         )
-        self._calibration.start(prior)
+        self._calibration.start(prior_raw)
 
     def _handle_display_input(self, ctx, buttons):
         status = self._calibration.status if self._calibration is not None else None
@@ -679,13 +600,13 @@ class SettingsState(BaseState):
             if self._display_selected_index != 0:
                 return
             info = ctx.get_device_info() or {}
-            current = _brightness_raw_to_index_for_device(info.get("brightness", 50), info)
+            current = clamp_brightness_level(info.get("brightness", 5))
             delta = -1 if buttons.get("btn_left") else 1
             setter = getattr(ctx, "set_brightness_level", None)
             if setter is not None:
                 setter(max(0, min(9, current + delta)))
             else:
-                ctx.set_brightness(_brightness_index_to_raw_for_device(max(0, min(9, current + delta)), info))
+                ctx.set_brightness(max(0, min(9, current + delta)))
 
     def _render_connectivity(self, ctx):
         image = Image.new("RGB", (128, 160), (0, 0, 0))

@@ -79,7 +79,11 @@ from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
-from runtime.brightness import calibrated_raw_for_index, default_raw_for_index, default_values_for_device, nearest_index
+from runtime.brightness import (
+    clamp_brightness_level,
+    migrate_brightness_file,
+    raw_brightness_for_level,
+)
 from runtime.settings_sync_debounce import SettingsSyncDebouncer, SETTING_SYNC_DEBOUNCE_SECONDS
 from runtime.controller_input import ControllerInputManager
 from runtime.wifi_controller import WifiController
@@ -161,13 +165,14 @@ def _get_current_brightness_for_transition():
     if _brightness_last_set is not None:
         return _brightness_last_set
     try:
-        return int(get_device_info().get("brightness", 50))
+        info = get_device_info() or {}
+        return raw_brightness_for_level(info.get("brightness", 5), info)
     except Exception:
-        return 50
+        return 45
 
 
 def _start_brightness_transition(target):
-    """Start or replace a 1-second smooth transition to target brightness (0-100)."""
+    """Start or replace a 1-second smooth transition to raw hardware brightness."""
     global _brightness_transition_start_time, _brightness_transition_start_value, _brightness_transition_target
     now = time.time()
     if (
@@ -229,6 +234,14 @@ def get_device_info():
         if not isinstance(base, dict):
             return {}
         hardware_version = resolve_pixeldarts_hardware_version()
+        migration_info = dict(base)
+        if hardware_version:
+            migration_info["hardware_version"] = hardware_version
+        if migrate_brightness_file(file_path, migration_info):
+            with open(file_path, "r") as file:
+                base = json.load(file)
+            get_device_info._cached_device_info = base
+            get_device_info._last_mtime = os.path.getmtime(file_path)
         if hardware_version:
             merged = dict(base)
             merged["hardware_version"] = hardware_version
@@ -274,33 +287,31 @@ def set_brightness(brightness):
     if dim_rt.currently_in_dim_window:
         # When in dim window, only update stored brightness and remote sync; keep hardware dimmed.
         try:
-            v = int(brightness)
+            level = clamp_brightness_level(brightness)
             info = get_device_info() or {}
-            index = nearest_index(v, default_values_for_device(info))
-            canonical = default_raw_for_index(index, info)
-            should_publish = _current_device_int("brightness") != canonical
+            should_publish = _current_device_int("brightness") != level
             if service is not None:
-                service.set_brightness_level(index)
-            dim_rt.brightness_before_dim = calibrated_raw_for_index(index, info)
+                service.set_brightness(level)
+            else:
+                _set_brightness_hardware(raw_brightness_for_level(level, info))
+            dim_rt.brightness_before_dim = raw_brightness_for_level(level, info)
             if should_publish:
-                _schedule_setting_remote_sync("brightness", canonical)
+                _schedule_setting_remote_sync("brightness", level)
         except Exception as e:
             _log.warning("Error updating device brightness while dimmed: %s", e)
         return
 
     # Outside dim window: apply immediately and persist via service.
     try:
-        v = int(brightness)
+        level = clamp_brightness_level(brightness)
         info = get_device_info() or {}
-        index = nearest_index(v, default_values_for_device(info))
-        canonical = default_raw_for_index(index, info)
-        should_publish = _current_device_int("brightness") != canonical
+        should_publish = _current_device_int("brightness") != level
         if service is not None:
-            service.set_brightness_level(index)
+            service.set_brightness(level)
         else:
-            _set_brightness_hardware(calibrated_raw_for_index(index, info))
+            _set_brightness_hardware(raw_brightness_for_level(level, info))
         if should_publish:
-            _schedule_setting_remote_sync("brightness", canonical)
+            _schedule_setting_remote_sync("brightness", level)
     except Exception as e:
         _log.warning("Error updating brightness: %s", e)
 
@@ -878,15 +889,12 @@ init_machine_state_service(
     get_device_info=get_device_info,
     reload_pages_from_conf=reload_pages_from_conf,
 )
-# Matrix process starts from legacy device.json raw brightness. Re-apply mapped
-# calibrated hardware value after service initialization when calibration exists.
+# Matrix process starts from logical device.json brightness. Apply mapped hardware
+# value after service initialization when calibration exists.
 try:
     _startup_info = get_device_info() or {}
-    _startup_index = nearest_index(
-        _startup_info.get("brightness", 50),
-        default_values_for_device(_startup_info),
-    )
-    _set_brightness_hardware(calibrated_raw_for_index(_startup_index, _startup_info))
+    _startup_level = clamp_brightness_level(_startup_info.get("brightness", 5))
+    _set_brightness_hardware(raw_brightness_for_level(_startup_level, _startup_info))
 except Exception as _startup_brightness_error:
     _log.warning("Failed to apply calibrated startup brightness: %s", _startup_brightness_error)
 init_widgets(ctx)
