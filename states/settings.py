@@ -307,6 +307,7 @@ _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
 _OVERLAY_WIFI_FORGET_CONFIRM = "wifi_forget_confirm"
 _OVERLAY_CALIBRATION_WARNING = "calibration_warning"
+_OVERLAY_CALIBRATION_SUCCESS = "calibration_success"
 
 
 def _draw_settings_label(draw, x, y, label, fill, font):
@@ -409,6 +410,8 @@ class SettingsState(BaseState):
             settings_image = self._render_wifi_forget_overlay(ctx, settings_image)
         elif self._overlay_mode == _OVERLAY_CALIBRATION_WARNING:
             settings_image = self._render_calibration_warning(ctx, settings_image)
+        elif self._overlay_mode == _OVERLAY_CALIBRATION_SUCCESS:
+            settings_image = self._render_calibration_success(ctx, settings_image)
         ctx.display.update_frame_buffer(settings_image)
 
     def _render_settings(self, ctx):
@@ -597,6 +600,35 @@ class SettingsState(BaseState):
         self._draw_footer(image, draw, ctx, "DISPLAY")
         return image
 
+    def _render_calibration_success(self, ctx, background):
+        image = Image.new("RGB", (128, 160), (0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        font = ctx.assets.font8
+        accent = (68, 214, 127)
+
+        draw.rectangle((0, 0, 127, 18), fill=accent)
+        self._draw_centered_settings_label(
+            draw, 5, "DISPLAY CALIBRATION", (0, 0, 0), font
+        )
+
+        draw.ellipse((50, 25, 78, 53), outline=accent, width=2)
+        draw.line((57, 39, 62, 44), fill=accent, width=2)
+        draw.line((62, 44, 72, 33), fill=accent, width=2)
+
+        for y, line in (
+            (63, "CALIBRATION"),
+            (78, "COMPLETED"),
+            (93, "SUCCESSFULLY"),
+        ):
+            self._draw_centered_settings_label(draw, y, line, (255, 255, 255), font)
+
+        draw.line((14, 115, 113, 115), fill=(96, 96, 96), width=1)
+        self._draw_centered_settings_label(
+            draw, 120, "A MAIN MENU", (180, 180, 180), font
+        )
+        self._draw_footer(image, draw, ctx, "DISPLAY")
+        return image
+
     @staticmethod
     def _draw_centered_settings_label(draw, y, label, fill, font):
         words = str(label).upper().split()
@@ -619,6 +651,7 @@ class SettingsState(BaseState):
             save_calibration(values, device_info, current_level=index)
             ctx.set_brightness_hardware(values[index])
             self._calibration_notice = "SAVED"
+            self._overlay_mode = _OVERLAY_CALIBRATION_SUCCESS
 
         self._calibration = BrightnessCalibration(
             frame_writer=ctx.display.update_frame_buffer,
@@ -1392,6 +1425,12 @@ class SettingsState(BaseState):
                 self._start_calibration(ctx)
             elif buttons.get("btn_b") or buttons.get("btn_home"):
                 self._overlay_mode = None
+            return
+
+        if self._overlay_mode == _OVERLAY_CALIBRATION_SUCCESS:
+            if buttons.get("btn_a"):
+                self._overlay_mode = None
+                self._transition_to_main_menu(ctx)
             return
 
         if self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:

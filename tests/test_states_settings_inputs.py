@@ -182,6 +182,55 @@ def test_display_submenu_uses_two_even_rows():
     assert second.getpixel((0, 35)) == (255, 255, 255)
 
 
+def test_calibration_success_overlay_appears_and_a_returns_main(monkeypatch):
+    import runtime.brightness_calibration as calibration_module
+
+    captured = {}
+
+    class _Calibration:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self, prior_brightness):
+            captured["prior_brightness"] = prior_brightness
+            return True
+
+    saved = []
+    hardware_values = []
+    monkeypatch.setattr(calibration_module, "BrightnessCalibration", _Calibration)
+    monkeypatch.setattr(
+        ssettings,
+        "save_calibration",
+        lambda values, device_info, current_level: saved.append(
+            (values, device_info, current_level)
+        ),
+    )
+
+    ctx = _Ctx()
+    ctx.set_brightness_hardware = hardware_values.append
+    ctx.get_raw_dart_bytes = lambda: bytes([0xFF] * 48)
+    state = SettingsState()
+
+    state._start_calibration(ctx)
+    values = [10, 15, 21, 27, 34, 45, 59, 69, 84, 95]
+    captured["on_success"](values)
+
+    assert state._overlay_mode == ssettings._OVERLAY_CALIBRATION_SUCCESS
+    assert saved == [(values, ctx.get_device_info(), 8)]
+    assert hardware_values == [84]
+
+    state.update(ctx)
+    assert ctx.display.frame.getpixel((0, 0)) == (68, 214, 127)
+
+    state.handle_input(ctx, {"btn_b": True})
+    assert state._overlay_mode == ssettings._OVERLAY_CALIBRATION_SUCCESS
+    assert ctx.transitions == []
+
+    state.handle_input(ctx, {"btn_a": True})
+    assert state._overlay_mode is None
+    assert ctx.transitions == ["MenuState"]
+
+
 def _open_controllers(ctx, state):
     _open_connectivity(ctx, state)
     state.handle_input(ctx, {"btn_down": True})
