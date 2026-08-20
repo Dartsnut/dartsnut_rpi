@@ -14,7 +14,7 @@ class _Shm:
 class _Assets:
     def __init__(self, color: str = "yellow"):
         self.loading_small = Image.new("RGB", (128, 32), color)
-        self.loading_big = Image.new("RGB", (128, 128), color)
+        self.loading_big = Image.new("RGB", (128, 64), color)
 
     def get_current_loading_frame(self):
         return self.loading_small
@@ -136,3 +136,75 @@ def test_exited_widget_process_replaces_cached_frame_with_loading_indicator():
 
     result = Image.frombytes("RGB", (128, 160), bytes(page["framebuffer"]))
     assert result.getpixel((0, 0)) == (255, 255, 0)
+
+
+def test_unavailable_128_widget_clears_cached_frame_without_touching_mini_widget():
+    unavailable = {
+        "process": None,
+        "shm": None,
+        "widget": {
+            "id": "simple_clock_128_128",
+            "position": [0, 0, 127, 127],
+        },
+        "loading": False,
+        "has_small_widget": None,
+    }
+    mini = {
+        "process": object(),
+        "shm": _Shm(64, 32),
+        "widget": {"id": "mini", "position": [0, 128, 63, 159]},
+        "loading": False,
+        "has_small_widget": None,
+    }
+    mini["shm"].buf[1:] = Image.new("RGB", (64, 32), "green").tobytes()
+    mini["shm"].buf[0] = 0
+    cached = Image.new("RGB", (128, 160), "red")
+    page = {
+        "framebuffer": bytearray(cached.tobytes()),
+        "widgets": [unavailable, mini],
+    }
+
+    update_widget_page_framebuffer(page, _Assets())
+
+    result = Image.frombytes("RGB", (128, 160), bytes(page["framebuffer"]))
+    assert result.getpixel((0, 0)) == (0, 0, 0)
+    assert result.getpixel((64, 64)) == (255, 255, 0)
+    assert result.getpixel((0, 128)) == (0, 128, 0)
+    assert result.getpixel((64, 128)) == (255, 0, 0)
+
+
+def test_removed_widget_region_stays_cleared_in_cached_page():
+    clock = {
+        "process": object(),
+        "shm": _Shm(128, 128),
+        "widget": {
+            "id": "simple_clock_128_128",
+            "position": [0, 0, 127, 127],
+        },
+        "loading": False,
+        "has_small_widget": None,
+    }
+    clock["shm"].buf[1:] = Image.new("RGB", (128, 128), "red").tobytes()
+    clock["shm"].buf[0] = 0
+    mini = {
+        "process": object(),
+        "shm": _Shm(64, 32),
+        "widget": {"id": "mini", "position": [0, 128, 63, 159]},
+        "loading": False,
+        "has_small_widget": None,
+    }
+    mini["shm"].buf[1:] = Image.new("RGB", (64, 32), "green").tobytes()
+    mini["shm"].buf[0] = 0
+    page = {
+        "framebuffer": bytearray(128 * 160 * 3),
+        "widgets": [clock, mini],
+    }
+
+    update_widget_page_framebuffer(page, _Assets())
+    page["widgets"] = [mini]
+    update_widget_page_framebuffer(page, _Assets())
+    update_widget_page_framebuffer(page, _Assets())
+
+    result = Image.frombytes("RGB", (128, 160), bytes(page["framebuffer"]))
+    assert result.getpixel((64, 64)) == (0, 0, 0)
+    assert result.getpixel((0, 128)) == (0, 128, 0)
