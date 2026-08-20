@@ -374,6 +374,7 @@ def set_time_zone(time_zone):
         if current_tz == tz:
             return None
         subprocess.run(["sudo", "timedatectl", "set-timezone", tz], check=True)
+        time.tzset()
     except subprocess.CalledProcessError as e:
         _log.error("Failed to set time zone: %s", e)
     return None
