@@ -42,20 +42,28 @@ _widget_background_download_inflight = set()
 
 
 def process_widget_fields(widget_id: str, widget_fields_parameter: dict) -> dict:
-    """Process widget fields (e.g. decode image base64) using conf.json."""
-    params = widget_fields_parameter.copy()
-    conf_path = os.path.join(os.getcwd(), "apps", widget_id, "conf.json")
-    with open(conf_path, "r") as f:
-        conf = json.load(f)
-        for field in conf["fields"]:
-            if field["type"] == "image" and params.get(field["id"]) is not None:
-                file = params[field["id"]]["image"]
-                if len(file) > 500:
-                    file_data = base64.b64decode(file)
+    """Normalize inline image payloads without requiring per-widget config."""
+
+    def normalize(value):
+        if isinstance(value, dict):
+            result = {}
+            for key, child in value.items():
+                if key == "image" and isinstance(child, str) and len(child) > 500:
+                    try:
+                        file_data = base64.b64decode(child, validate=True)
+                    except Exception as exc:
+                        raise ValueError(f"invalid inline image for widget {widget_id}") from exc
                     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                         tmp_file.write(file_data)
-                        params[field["id"]]["image"] = tmp_file.name
-    return params
+                        result[key] = tmp_file.name
+                else:
+                    result[key] = normalize(child)
+            return result
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    return normalize(copy.deepcopy(widget_fields_parameter or {}))
 
 
 def _widget_metadata_from_download_info(widget_id: str, data: dict) -> dict:
@@ -149,10 +157,10 @@ def _download_app_once(widget_id: str, url: str, md5: str, download_info: dict |
             install_app_tarball(download_path, str(widget_id))
         except Exception:
             return False
-        if not ensure_app_venv_after_extract(download_path, url=url, app_id=str(widget_id)):
-            _log.warning("download_app: venv setup failed for url=%s", url)
         if isinstance(download_info, dict):
             write_app_metadata(widget_id, _widget_metadata_from_download_info(widget_id, download_info))
+        if not ensure_app_venv_after_extract(download_path, url=url, app_id=str(widget_id)):
+            _log.warning("download_app: venv setup failed for url=%s", url)
         return True
     except Exception as e:
         _log.error("Error downloading app: %s", e)
@@ -337,6 +345,9 @@ def restart_widget_process(
     widget_path = os.path.join(os.getcwd(), "apps", widget_id)
     if not os.path.isdir(widget_path):
         _request_missing_widget_download(widget_id)
+        return
+    if read_app_metadata(widget_id).get("type") != "widget":
+        _log.error("widget: refusing launch %s: missing or invalid widget sidecar", widget_id)
         return
     # Don't block the main thread waiting for venv setup (can take 30-50s).
     # If venv isn't ready, skip launch; the background download completion
@@ -577,6 +588,12 @@ def start_page_process(page: dict) -> dict:
                     "loading": False,
                     "has_small_widget": None,
                 }
+            )
+            continue
+        if read_app_metadata(widget["id"]).get("type") != "widget":
+            _log.error("widget: refusing launch %s: missing or invalid widget sidecar", widget["id"])
+            widgets.append(
+                {"process": None, "shm": None, "widget": widget, "loading": False, "has_small_widget": None}
             )
             continue
         # Don't block the main thread waiting for venv setup (can take 30-50s).

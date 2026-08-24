@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import widget_lifecycle as wl
+from core.app_metadata import write_app_metadata
 
 
 class _Shm:
@@ -55,6 +56,7 @@ def test_start_page_process_marks_spawned_widget_loading_until_first_frame(
 ):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "apps" / "digitalclock").mkdir(parents=True)
+    write_app_metadata("digitalclock", {"id": "digitalclock", "type": "widget"})
     created = {}
 
     def _shared_memory(name, create=False, size=None):
@@ -125,6 +127,7 @@ def test_restart_widget_process_requests_download_if_widget_dir_missing(monkeypa
 def test_restart_widget_process_starts_fresh_loading_cycle(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "apps" / "digitalclock").mkdir(parents=True)
+    write_app_metadata("digitalclock", {"id": "digitalclock", "type": "widget"})
     created = {}
 
     def _shared_memory(name, create=False, size=None):

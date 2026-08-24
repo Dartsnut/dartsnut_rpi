@@ -6,6 +6,14 @@ import tarfile
 import pytest
 
 import core.app_env as app_env
+from core.app_metadata import write_app_metadata
+
+
+def _write_backend_metadata(app_id, app_type, version="1.0.0"):
+    write_app_metadata(
+        app_id,
+        {"id": app_id, "type": app_type, "version": version},
+    )
 
 
 def test_read_app_type(monkeypatch, tmp_path):
@@ -16,7 +24,19 @@ def test_read_app_type(monkeypatch, tmp_path):
         json.dumps({"id": "mygame", "type": "game", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("mygame", "game")
     assert app_env.read_app_type("mygame") == "game"
+
+
+def test_read_app_type_ignores_conf_without_backend_sidecar(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "legacy"
+    app_dir.mkdir(parents=True)
+    (app_dir / "conf.json").write_text(
+        json.dumps({"id": "legacy", "type": "game", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    assert app_env.read_app_type("legacy") is None
 
 
 def test_materialize_game_pyproject_and_stamp(monkeypatch, tmp_path):
@@ -28,6 +48,7 @@ def test_materialize_game_pyproject_and_stamp(monkeypatch, tmp_path):
         json.dumps({"id": "chess", "type": "game", "version": "2.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("chess", "game", "2.0.0")
 
     sync_calls = []
 
@@ -48,6 +69,7 @@ def test_materialize_game_pyproject_and_stamp(monkeypatch, tmp_path):
         json.dumps({"id": "chess", "type": "game", "version": "3.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("chess", "game", "3.0.0")
     assert app_env.app_venv_ready("chess") is False
 
 
@@ -69,6 +91,7 @@ def test_materialize_refreshes_managed_pyproject_when_template_changes(monkeypat
         json.dumps({"id": "clock", "type": "widget", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("clock", "widget")
     (app_dir / "pyproject.toml").write_text(
         "# Dartsnut managed default app dependencies.\n"
         'dependencies = ["old==1.0.0"]\n',
@@ -100,6 +123,7 @@ def test_ensure_app_venv_uv_failure(monkeypatch, tmp_path):
         json.dumps({"id": "broken", "type": "widget", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("broken", "widget")
 
     def _fail_sync(_app_id):
         raise subprocess.CalledProcessError(1, "uv", stderr="boom")
@@ -117,6 +141,7 @@ def test_ensure_app_venv_removes_partial_venv_before_sync(monkeypatch, tmp_path)
         json.dumps({"id": "factory_tool", "type": "widget", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("factory_tool", "widget")
     (app_dir / "pyproject.toml").write_text(
         '[project]\nname = "factory-tool"\nversion = "1.0.0"\n',
         encoding="utf-8",
@@ -147,6 +172,7 @@ def test_uv_sync_retries_then_gives_up(monkeypatch, tmp_path):
         json.dumps({"id": "broken", "type": "widget", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("broken", "widget")
 
     import core.retry as retry
 
@@ -171,6 +197,7 @@ def test_uv_sync_retries_then_succeeds(monkeypatch, tmp_path):
         json.dumps({"id": "flaky", "type": "widget", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("flaky", "widget")
 
     import core.retry as retry
 
@@ -200,6 +227,7 @@ def test_uv_sync_cleans_root_cache_for_app_venvs(monkeypatch, tmp_path):
         json.dumps({"id": "cache_busted", "type": "game", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("cache_busted", "game")
 
     commands = []
 
@@ -252,6 +280,7 @@ def test_uv_sync_requests_forcefsck_when_cache_clean_finds_fs_corruption(
         json.dumps({"id": "cache_fsck", "type": "game", "version": "1.0.0"}),
         encoding="utf-8",
     )
+    _write_backend_metadata("cache_fsck", "game")
 
     commands = []
     repair_markers = []
@@ -419,6 +448,7 @@ def test_install_app_tarball_preserves_embedded_managed_pyproject(monkeypatch, t
     app_env.install_app_tarball(str(tar_path), "mathdarts")
 
     app_dir = tmp_path / "apps" / "mathdarts"
+    _write_backend_metadata("mathdarts", "game", "0.2.0")
 
     def _fake_sync(_app_id):
         venv = app_dir / ".venv" / "bin"

@@ -53,21 +53,12 @@ Each game must live under:
 Minimum required files:
 
 - `apps/<game_id>/main.py`
-- `apps/<game_id>/conf.json`
+- `apps/<game_id>/.dartsnut_backend.json`
 
-Example `conf.json`:
+Example backend sidecar:
 
 ```json
-{
-  "id": "mygame",
-  "type": "game",
-  "name": "My Game",
-  "version": "1.0.0",
-  "description": "My sideloaded game",
-  "size": [128, 160],
-  "fields": [],
-  "preview": []
-}
+{"id": "mygame", "type": "game", "name": "My Game", "version": "1.0.0"}
 ```
 
 ## 4) Sideload files into `apps/`
@@ -93,8 +84,8 @@ On the machine:
 ```bash
 cd /home/rpi/dartsnut_rpi
 test -f apps/mygame/main.py && echo "main.py OK"
-test -f apps/mygame/conf.json && echo "conf.json OK"
-python -m json.tool apps/mygame/conf.json >/dev/null && echo "conf.json valid JSON"
+test -f apps/mygame/.dartsnut_backend.json && echo "backend sidecar OK"
+python -m json.tool apps/mygame/.dartsnut_backend.json >/dev/null && echo "sidecar valid JSON"
 ```
 
 The runtime creates a dedicated virtualenv at `apps/<game_id>/.venv` automatically on first download or launch. Apps without their own `pyproject.toml` receive default game dependencies from the firmware templates.
@@ -226,4 +217,3 @@ You should see entries similar to:
 3. **No useful logs**
   - ensure game prints/logs to stdout/stderr
   - use `journalctl -u dartsnut_python.service -f` while launching
-

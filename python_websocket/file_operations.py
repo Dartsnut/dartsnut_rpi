@@ -480,10 +480,9 @@ def download_app(url, md5, game_id=None):
         if os.path.isfile(download_path):
             os.remove(download_path)
 
+        write_app_metadata(str(game_id), metadata)
         if not ensure_app_venv(str(game_id)):
             _log.warning("download_app: venv setup failed for game_id=%s", game_id)
-
-        write_app_metadata(str(game_id), metadata)
 
         return {"action": "download_app", "game_id": game_id, "url": url, "message": "Success"}
     except Exception as e:
@@ -618,6 +617,7 @@ def _download_game_worker(game_id):
                 if download_path and os.path.isfile(download_path):
                     os.remove(download_path)
 
+            write_app_metadata(game_id, metadata)
             if not ensure_app_venv(game_id):
                 _set_download_progress(
                     game_id,
@@ -626,7 +626,6 @@ def _download_game_worker(game_id):
                 )
                 return
 
-            write_app_metadata(game_id, metadata)
             version = metadata.get("version")
             _set_download_progress(
                 game_id, progress=100, status="completed", error=None, version=version
@@ -763,6 +762,7 @@ def _download_game_worker_with_url(game_id, url, md5):
             if download_path and os.path.isfile(download_path):
                 os.remove(download_path)
 
+        write_app_metadata(game_id, metadata)
         if not ensure_app_venv(game_id):
             _set_download_progress(
                 game_id,
@@ -771,7 +771,6 @@ def _download_game_worker_with_url(game_id, url, md5):
             )
             return
 
-        write_app_metadata(game_id, metadata)
         version = metadata.get("version")
         _set_download_progress(
             game_id, progress=100, status="completed", error=None, version=version
@@ -898,27 +897,34 @@ def get_app_list():
 
         app_list = []
         for name in os.listdir(apps_dir):
-            if os.path.isdir(os.path.join(apps_dir, name)):
-                conf_path = os.path.join(apps_dir, name, "conf.json")
-                if os.path.isfile(conf_path):
-                    with open(conf_path, "r") as conf_file:
-                        try:
-                            conf = json.load(conf_file)
-                            # Sanitize preview field so that list_apps never exposes preview data.
-                            # Ensure preview exists and is always an empty list while leaving
-                            # all other configuration fields untouched.
-                            if isinstance(conf, dict):
-                                conf["preview"] = []
-                            app_list.append(
-                                {
-                                    "name": name,
-                                    "conf": b64encode(
-                                        json.dumps(conf).encode("utf-8")
-                                    ).decode("utf-8"),
-                                }
-                            )
-                        except Exception:
-                            pass
+            app_path = os.path.join(apps_dir, name)
+            if not os.path.isdir(app_path) or name.startswith("."):
+                continue
+            if not os.path.isfile(os.path.join(app_path, "main.py")):
+                continue
+            try:
+                metadata = read_app_metadata(name)
+                app_type = str(metadata.get("type") or "").strip()
+                app_id = str(metadata.get("id") or "").strip()
+                if app_type not in ("game", "widget") or not app_id:
+                    continue
+                manifest = {
+                    "id": app_id,
+                    "type": app_type,
+                    "name": str(metadata.get("name") or app_id),
+                    "version": str(metadata.get("version") or ""),
+                    "preview": [],
+                }
+                app_list.append(
+                    {
+                        "name": name,
+                        "conf": b64encode(
+                            json.dumps(manifest).encode("utf-8")
+                        ).decode("utf-8"),
+                    }
+                )
+            except Exception:
+                _log.debug("list_apps: skipping invalid app %s", name, exc_info=True)
         return {"action": "list_apps", "apps": app_list}
     except PermissionError:
         return handle_exception("list_apps", PermissionError(), "Failed to list apps")

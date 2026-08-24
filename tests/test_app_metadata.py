@@ -2,9 +2,11 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.app_metadata import read_app_metadata, write_app_metadata
+from core.app_metadata import read_app_metadata, validate_app_metadata, write_app_metadata
 
 
 def test_write_and_read_app_metadata_round_trip(tmp_path, monkeypatch):
@@ -80,3 +82,24 @@ def test_write_app_metadata_does_not_preserve_unknown_fields(tmp_path, monkeypat
         "download_md5",
         "updated_at",
     }
+
+
+def test_read_app_metadata_rejects_missing_or_unknown_type(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "apps" / "broken"
+    app_dir.mkdir(parents=True)
+
+    for payload in (
+        {"id": "broken", "version": "1.0.0"},
+        {"id": "broken", "type": "service", "version": "1.0.0"},
+    ):
+        (app_dir / ".dartsnut_backend.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        assert read_app_metadata("broken") == {}
+
+
+def test_validate_app_metadata_requires_backend_identity(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError):
+        validate_app_metadata("chess", {"type": "game", "version": "1.0.0"})

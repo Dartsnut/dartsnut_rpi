@@ -279,7 +279,7 @@ def local_game_version_matches(gameid: str, remote_version: str) -> bool:
     return compare_game_versions(local, expected) >= 0
 
 
-def _download_game_file(url: str, md5: str, game_id: str) -> bool:
+def _download_game_file(url: str, md5: str, game_id: str, metadata: dict | None = None) -> bool:
     """
     Download and extract game .tar.gz file; verify MD5.
     Returns True on success, False on failure.
@@ -361,6 +361,8 @@ def _download_game_file(url: str, md5: str, game_id: str) -> bool:
             _log.warning("game: error cleaning macOS metadata for game_id=%s: %s", game_id, e)
 
         # Set up venv
+        if isinstance(metadata, dict):
+            write_app_metadata(game_id, metadata)
         if not ensure_app_venv(game_id):
             _log.error("game: venv setup failed game_id=%s", game_id)
             return False
@@ -429,14 +431,13 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                 m = data.get("game_download_md5")
                 if u and m:
                     success = retry_with_backoff(
-                        lambda: _download_game_file(u, m, gameid),
+                        lambda: _download_game_file(u, m, gameid, metadata),
                         succeeded=bool,
                         label=f"download-game {gameid}",
                     )
                     if not success:
                         _log.error("game: download failed after retries game_id=%s", gameid)
                         return False
-                    write_app_metadata(gameid, metadata)
                 else:
                     _log.error("game: missing download URL or MD5 game_id=%s", gameid)
                     return False
@@ -539,6 +540,10 @@ def start_game_process(gameid: str) -> dict:
         ensure_game_downloaded(gameid)
     if not os.path.isdir(game_path):
         return None
+    metadata = read_app_metadata(gameid)
+    if metadata.get("type") != "game":
+        _log.error("Refusing to start %s: missing or invalid game sidecar", gameid)
+        return None
     if not ensure_app_venv(gameid):
         _log.error("Failed to set up virtualenv for game %s", gameid)
         return None
@@ -611,33 +616,28 @@ def term_game_process(g: dict) -> None:
 
 
 def load_game_list() -> list:
-    """Load game list from apps directory with preview images decoded."""
+    """Load sidecar-declared games from apps directory with previews decoded."""
     game_list = []
     apps_dir = os.path.join(os.getcwd(), "apps")
     for name in os.listdir(apps_dir):
         path = os.path.join(apps_dir, name)
         if not os.path.isdir(path):
             continue
-        conf_path = os.path.join(path, "conf.json")
-        if not os.path.isfile(conf_path):
+        if not os.path.isfile(os.path.join(path, "main.py")):
             continue
         try:
-            with open(conf_path, "r") as f:
-                conf = json.load(f)
-            if conf.get("type") != "game":
-                continue
             metadata = read_app_metadata(name)
-            backend_id = str(metadata.get("id") or name).strip()
-            if not metadata.get("id"):
-                _log.debug(
-                    "[Preview] Game '%s' has no backend metadata id; using folder name %s",
-                    conf.get("name", name),
-                    backend_id,
-                )
-            conf["id"] = backend_id or name
-            conf["version"] = str(metadata.get("version") or "")
-            if metadata.get("name"):
-                conf["name"] = metadata["name"]
+            if metadata.get("type") != "game":
+                continue
+            backend_id = str(metadata.get("id") or "").strip()
+            if not backend_id:
+                continue
+            conf = {
+                "id": backend_id,
+                "type": "game",
+                "name": str(metadata.get("name") or backend_id),
+                "version": str(metadata.get("version") or ""),
+            }
             # Default status for on-device list; more specific statuses (e.g. playing,
             # downloading) can be layered on top where appropriate.
             conf.setdefault("status", "ready")
@@ -652,15 +652,15 @@ def load_game_list() -> list:
                     if _preview_cache.is_cache_expired(backend_id):
                         _validation_worker.submit(backend_id, priority=VALIDATE_EXPIRED, callback=_on_preview_updated)
                 else:
-                    preview = generate_placeholder_preview(conf.get("name", name), "Loading Preview")
+                    preview = generate_placeholder_preview(conf["name"], "Loading Preview")
                     _validation_worker.submit(backend_id, priority=FETCH_MISSING, callback=_on_preview_updated)
             else:
-                preview = generate_placeholder_preview(conf.get("name", name), "Preview unavailable")
+                preview = generate_placeholder_preview(conf["name"], "Preview unavailable")
 
             conf["preview"] = preview
             game_list.append(conf)
         except Exception as e:
-            _log.warning("Error loading game config for %s: %s", name, e)
+            _log.warning("Error loading game metadata for %s: %s", name, e)
     with _game_list_cache_lock:
         _game_list_cache.clear()
         _game_list_cache.extend(game_list)
@@ -679,15 +679,13 @@ def local_game_index() -> dict[str, str]:
         path = os.path.join(apps_dir, name)
         if not os.path.isdir(path):
             continue
-        conf_path = os.path.join(path, "conf.json")
-        if not os.path.isfile(conf_path):
+        if not os.path.isfile(os.path.join(path, "main.py")):
             continue
         try:
-            with open(conf_path, "r", encoding="utf-8") as f:
-                conf = json.load(f)
-            if conf.get("type") != "game":
+            metadata = read_app_metadata(name)
+            if metadata.get("type") != "game":
                 continue
-            game_id = str(read_app_metadata(name).get("id") or "").strip()
+            game_id = str(metadata.get("id") or "").strip()
             if game_id:
                 games[game_id] = os.path.abspath(path)
         except Exception as e:
