@@ -82,6 +82,8 @@ class AppContext:
         self.term_widget_processes: Optional[Callable[[Any], None]] = None
         self.reset_device: Optional[Callable[[], None]] = None
         self.set_game_status: Optional[Callable[[str, str], None]] = None
+        # Local emulator session. Display loop consults this before production UI.
+        self.sideload_manager: Any = None
 
     def transition_to(self, new_state: "BaseState") -> None:
         """Switch to a new state."""

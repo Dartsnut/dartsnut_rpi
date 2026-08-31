@@ -78,6 +78,7 @@ from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
+from runtime.sideload_session import SideloadSessionManager
 from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.brightness import (
     clamp_brightness_level,
@@ -374,6 +375,7 @@ def set_time_zone(time_zone):
         if current_tz == tz:
             return None
         subprocess.run(["sudo", "timedatectl", "set-timezone", tz], check=True)
+        time.tzset()
     except subprocess.CalledProcessError as e:
         _log.error("Failed to set time zone: %s", e)
     return None
@@ -851,6 +853,26 @@ def trigger_dim_check():
 
 
 device_info = get_device_info() or {}
+
+
+def _suspend_production_for_sideload() -> None:
+    term_widget_processes(ctx.pages)
+    if ctx.game is not None:
+        term_game_process(ctx.game)
+        ctx.game = None
+
+
+def _restore_production_after_sideload() -> None:
+    # Main loop performs restore on its own thread from unchanged apps/conf.json.
+    ctx.reload_conf = True
+
+
+_sideload_manager = SideloadSessionManager(
+    suspend_production=_suspend_production_for_sideload,
+    restore_production=_restore_production_after_sideload,
+)
+ctx.sideload_manager = _sideload_manager
+
 start_background_subsystems(
     dartsnut=display,
     device_info=device_info,
@@ -875,6 +897,7 @@ start_background_subsystems(
     remote_config_runtime=_remote_config_runtime,
     websocket_service_registry=_websocket_service_registry,
     set_startup_volume=_set_volume_local_only,
+    sideload_manager=_sideload_manager,
 )
 
 ctx.reload_conf = False

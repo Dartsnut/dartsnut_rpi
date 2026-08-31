@@ -6,6 +6,7 @@ import shutil
 import hashlib
 import requests
 import threading
+import uuid
 from python_websocket.error_handler import (
     ErrorCode,
     handle_exception,
@@ -16,7 +17,7 @@ from python_websocket.error_handler import (
 
 from machine_state_service import get_machine_state_service
 from core.app_env import ensure_app_venv, install_app_tarball
-from core.app_metadata import read_app_metadata, write_app_metadata
+from core.app_metadata import read_app_metadata, resolve_app_metadata, write_app_metadata
 from runtime.api_token_store import build_api_headers
 
 _log = logging.getLogger(__name__)
@@ -131,6 +132,71 @@ def _is_download_cancel_requested(game_id):
     return game_id in _DOWNLOAD_CANCEL_REQUESTED
 
 
+def _default_widget_position(size) -> list[int] | None:
+    try:
+        key = (int(size[0]), int(size[1]))
+    except (IndexError, TypeError, ValueError):
+        return None
+    return {
+        (128, 128): [0, 0, 127, 127],
+        (64, 32): [0, 128, 63, 159],
+        (128, 64): [0, 0, 127, 63],
+    }.get(key)
+
+
+def _maybe_add_sideloaded_widget_page(app_id: str) -> None:
+    """Add newly uploaded widget to a default page based on conf.json size."""
+    app_path = _apps_path(app_id)
+    if not os.path.isdir(app_path) or not os.path.isfile(os.path.join(app_path, "main.py")):
+        return
+    metadata = resolve_app_metadata(app_id)
+    if metadata.get("type") != "widget":
+        return
+    conf_path = os.path.join(app_path, "conf.json")
+    try:
+        with open(conf_path, encoding="utf-8") as f:
+            conf = json.load(f)
+        size = conf.get("size")
+        if not isinstance(size, list) or len(size) != 2:
+            return
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return
+
+    position = _default_widget_position(size)
+    if position is None:
+        _log.warning("sideload widget %s has unsupported size=%s", app_id, size)
+        return
+
+    service = get_machine_state_service()
+    if service is None:
+        return
+    try:
+        root_conf_path = _apps_path("conf.json")
+        with open(root_conf_path, encoding="utf-8") as f:
+            root_conf = json.load(f)
+        pages = root_conf.get("pages") if isinstance(root_conf, dict) else None
+        if not isinstance(pages, list):
+            pages = []
+        for page in pages:
+            for widget in page.get("widgets", []) if isinstance(page, dict) else []:
+                if isinstance(widget, dict) and widget.get("id") == app_id:
+                    return
+        pages.append(
+            {
+                "uuid": str(uuid.uuid4()),
+                "title": str(conf.get("name") or metadata.get("name") or app_id),
+                "duration": "60",
+                "combination": "0",
+                "enabled": True,
+                "widgets": [{"id": app_id, "position": position, "fields": {}}],
+            }
+        )
+        service.set_pages(pages)
+        _log.info("sideload widget %s added at default position=%s", app_id, position)
+    except Exception as exc:
+        _log.warning("sideload widget %s page setup failed: %s", app_id, exc)
+
+
 def _mark_download_canceled(game_id):
     _set_download_progress(game_id, status="canceled", error=None)
     _DOWNLOAD_CANCEL_REQUESTED.discard(game_id)
@@ -206,6 +272,10 @@ def receive_file(websocket, data):
         # Save the file locally
         with open(full_save_path, "wb") as file:
             file.write(file_data)
+
+        parts = file_name.replace("\\", "/").split("/")
+        if len(parts) >= 2 and parts[0] not in ("", ".", ".."):
+            _maybe_add_sideloaded_widget_page(parts[0])
 
         # If we just wrote the root apps/conf.json, let MachineStateService own pages
         # and ensure timestamp + remote sync happen through the service.
@@ -480,10 +550,9 @@ def download_app(url, md5, game_id=None):
         if os.path.isfile(download_path):
             os.remove(download_path)
 
+        write_app_metadata(str(game_id), metadata)
         if not ensure_app_venv(str(game_id)):
             _log.warning("download_app: venv setup failed for game_id=%s", game_id)
-
-        write_app_metadata(str(game_id), metadata)
 
         return {"action": "download_app", "game_id": game_id, "url": url, "message": "Success"}
     except Exception as e:
@@ -618,6 +687,7 @@ def _download_game_worker(game_id):
                 if download_path and os.path.isfile(download_path):
                     os.remove(download_path)
 
+            write_app_metadata(game_id, metadata)
             if not ensure_app_venv(game_id):
                 _set_download_progress(
                     game_id,
@@ -626,7 +696,6 @@ def _download_game_worker(game_id):
                 )
                 return
 
-            write_app_metadata(game_id, metadata)
             version = metadata.get("version")
             _set_download_progress(
                 game_id, progress=100, status="completed", error=None, version=version
@@ -763,6 +832,7 @@ def _download_game_worker_with_url(game_id, url, md5):
             if download_path and os.path.isfile(download_path):
                 os.remove(download_path)
 
+        write_app_metadata(game_id, metadata)
         if not ensure_app_venv(game_id):
             _set_download_progress(
                 game_id,
@@ -771,7 +841,6 @@ def _download_game_worker_with_url(game_id, url, md5):
             )
             return
 
-        write_app_metadata(game_id, metadata)
         version = metadata.get("version")
         _set_download_progress(
             game_id, progress=100, status="completed", error=None, version=version
@@ -898,27 +967,34 @@ def get_app_list():
 
         app_list = []
         for name in os.listdir(apps_dir):
-            if os.path.isdir(os.path.join(apps_dir, name)):
-                conf_path = os.path.join(apps_dir, name, "conf.json")
-                if os.path.isfile(conf_path):
-                    with open(conf_path, "r") as conf_file:
-                        try:
-                            conf = json.load(conf_file)
-                            # Sanitize preview field so that list_apps never exposes preview data.
-                            # Ensure preview exists and is always an empty list while leaving
-                            # all other configuration fields untouched.
-                            if isinstance(conf, dict):
-                                conf["preview"] = []
-                            app_list.append(
-                                {
-                                    "name": name,
-                                    "conf": b64encode(
-                                        json.dumps(conf).encode("utf-8")
-                                    ).decode("utf-8"),
-                                }
-                            )
-                        except Exception:
-                            pass
+            app_path = os.path.join(apps_dir, name)
+            if not os.path.isdir(app_path) or name.startswith("."):
+                continue
+            if not os.path.isfile(os.path.join(app_path, "main.py")):
+                continue
+            try:
+                metadata = resolve_app_metadata(name)
+                app_type = str(metadata.get("type") or "").strip()
+                app_id = str(metadata.get("id") or "").strip()
+                if app_type not in ("game", "widget") or not app_id:
+                    continue
+                manifest = {
+                    "id": app_id,
+                    "type": app_type,
+                    "name": str(metadata.get("name") or app_id),
+                    "version": str(metadata.get("version") or ""),
+                    "preview": [],
+                }
+                app_list.append(
+                    {
+                        "name": name,
+                        "conf": b64encode(
+                            json.dumps(manifest).encode("utf-8")
+                        ).decode("utf-8"),
+                    }
+                )
+            except Exception:
+                _log.debug("list_apps: skipping invalid app %s", name, exc_info=True)
         return {"action": "list_apps", "apps": app_list}
     except PermissionError:
         return handle_exception("list_apps", PermissionError(), "Failed to list apps")

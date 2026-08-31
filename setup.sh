@@ -7,11 +7,22 @@ SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
 INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 REPAIR_DEVICE_JSON_SCRIPT="${REPO_DIR}/scripts/repair_device_json.sh"
 KERNEL_ROLLBACK_SCRIPT="${REPO_DIR}/scripts/rollback_rpi_kernel_6_12.sh"
+DARTSNUT_TMPFILES_SRC="${SERVICES_DIR}/dartsnut.conf"
+DARTSNUT_TMPFILES_DST="/etc/tmpfiles.d/dartsnut.conf"
 
 # shellcheck source=scripts/uv_env.sh
 source "${UV_ENV_SCRIPT}"
 
 SYSTEMD_UNITS_UPDATED=0
+
+install_shared_runtime_tmpfiles() {
+    if [ ! -f "${DARTSNUT_TMPFILES_SRC}" ]; then
+        echo "Error: tmpfiles definition missing at ${DARTSNUT_TMPFILES_SRC}." >&2
+        return 1
+    fi
+    sudo install -m 0644 "${DARTSNUT_TMPFILES_SRC}" "${DARTSNUT_TMPFILES_DST}"
+    sudo systemd-tmpfiles --create "${DARTSNUT_TMPFILES_DST}"
+}
 
 install_or_update_service_unit() {
     local unit_name="$1"
@@ -157,6 +168,7 @@ if [ ! -d "${SERVICES_DIR}" ]; then
 fi
 
 install_boot_assets_if_present
+install_shared_runtime_tmpfiles || exit $?
 
 install_or_update_service_unit "dartsnut_matrix.service"
 install_or_update_service_unit "dartsnut_python.service"

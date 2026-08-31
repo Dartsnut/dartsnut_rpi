@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import shutil
@@ -14,6 +13,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 from core.helpers import app_dir, uv_bin
+from core.app_metadata import resolve_app_metadata
 from core.retry import retry_with_backoff, FAST_BACKOFF_SECONDS
 from update_repair import mark_update_repair_pending, request_forcefsck
 
@@ -26,33 +26,21 @@ TARBALL_PYPROJECT_MARKER = ".dartsnut_tarball_pyproject"
 
 
 def read_app_type(app_id: str) -> str | None:
-    """Return conf.json 'type' for app_id, or None if unreadable."""
-    conf_path = os.path.join(app_dir(app_id), "conf.json")
-    if not os.path.isfile(conf_path):
-        return None
-    try:
-        with open(conf_path, encoding="utf-8") as f:
-            data = json.load(f)
-        app_type = data.get("type")
-        return str(app_type) if app_type else None
-    except (OSError, json.JSONDecodeError) as e:
-        _log.warning("Failed to read conf.json for %s: %s", app_id, e)
-        return None
+    """Return canonical sidecar type for app_id, or None when unavailable."""
+    metadata = resolve_app_metadata(app_id)
+    app_type = metadata.get("type")
+    return app_type if app_type in ("game", "widget") else None
 
 
-def _read_conf_version(app_id: str) -> str:
-    conf_path = os.path.join(app_dir(app_id), "conf.json")
-    try:
-        with open(conf_path, encoding="utf-8") as f:
-            data = json.load(f)
-        return str(data.get("version") or "")
-    except (OSError, json.JSONDecodeError):
-        return ""
+def _read_backend_version(app_id: str) -> str:
+    """Return sidecar version; empty string when sidecar is invalid/missing."""
+    return str(resolve_app_metadata(app_id).get("version") or "")
 
 
 def _template_path(app_type: str) -> Path:
-    kind = app_type if app_type in ("game", "widget") else "widget"
-    path = DEFAULTS_DIR / f"{kind}_pyproject.toml"
+    if app_type not in ("game", "widget"):
+        raise ValueError(f"Invalid app type: {app_type!r}")
+    path = DEFAULTS_DIR / f"{app_type}_pyproject.toml"
     if not path.is_file():
         raise FileNotFoundError(f"Missing default template: {path}")
     return path
@@ -80,9 +68,12 @@ def _stamp_payload(app_id: str) -> str:
     if os.path.isfile(pyproject):
         with open(pyproject, encoding="utf-8") as f:
             content = f.read()
-    template = _template_path(read_app_type(app_id) or "widget")
+    app_type = read_app_type(app_id)
+    if app_type is None:
+        raise ValueError(f"Missing or invalid backend metadata for {app_id!r}")
+    template = _template_path(app_type)
     template_fp = template.read_text(encoding="utf-8")
-    version = _read_conf_version(app_id)
+    version = _read_backend_version(app_id)
     return f"{content}\n---\n{template_fp}\n---\n{version}"
 
 
@@ -100,7 +91,7 @@ def app_venv_ready(app_id: str) -> bool:
         with open(stamp_path, encoding="utf-8") as f:
             stored = f.read().strip()
         return stored == _compute_stamp(app_id)
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -220,7 +211,10 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
     if not force and app_venv_ready(app_id):
         return True
 
-    app_type = read_app_type(app_id) or "widget"
+    app_type = read_app_type(app_id)
+    if app_type is None:
+        _log.warning("ensure_app_venv: missing or invalid backend metadata for %s", app_id)
+        return False
     started = time.monotonic()
     try:
         _materialize_pyproject(app_id, app_type)
@@ -245,6 +239,37 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
         return False
     except Exception as e:
         _log.error("ensure_app_venv: failed app_id=%s: %s", app_id, e)
+        return False
+
+
+def ensure_sideload_app_venv(app_path: str, app_type: str) -> bool:
+    """Prepare a local sideload app without requiring backend metadata."""
+    if not app_path or app_type not in ("game", "widget"):
+        return False
+    main_py = os.path.join(app_path, "main.py")
+    if not os.path.isfile(main_py):
+        return False
+    python_path = os.path.join(app_path, ".venv", "bin", "python")
+    started = time.monotonic()
+    try:
+        pyproject = os.path.join(app_path, "pyproject.toml")
+        if not os.path.isfile(pyproject):
+            shutil.copy2(_template_path(app_type), pyproject)
+        venv_path = os.path.join(app_path, ".venv")
+        if os.path.exists(venv_path) and not os.path.isfile(python_path):
+            shutil.rmtree(venv_path)
+        _run_uv_sync_command(app_path)
+        ready = os.path.isfile(python_path)
+        if ready:
+            _log.info(
+                "ensure_sideload_app_venv: ready app=%s type=%s elapsed=%.1fs",
+                os.path.basename(app_path),
+                app_type,
+                time.monotonic() - started,
+            )
+        return ready
+    except Exception as exc:
+        _log.error("ensure_sideload_app_venv: failed app=%s: %s", app_path, exc)
         return False
 
 

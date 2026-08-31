@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable
 from runtime.websocket_action_handlers_controls import try_handle_control_actions
 from runtime.websocket_action_handlers_file_json import try_handle_file_json_actions
 from runtime.websocket_action_handlers_ops import try_handle_ops_actions
+from runtime.websocket_action_handlers_sideload import try_handle_sideload_actions
 from runtime.websocket_ports import WebsocketEndpointConfig, WebsocketServiceRegistry
 
 SendResponse = Callable[[Any, dict], Awaitable[None]]
@@ -20,6 +21,14 @@ async def handle_action_message(
 ) -> None:
     action = message.get("action")
     req_id = message.get("req_id")
+    if await try_handle_sideload_actions(
+        action=action,
+        req_id=req_id,
+        message=message,
+        endpoint_config=endpoint_config,
+        send_response=send_response,
+    ):
+        return
     if await try_handle_file_json_actions(
         action=action,
         req_id=req_id,

@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
 from domain.game_remote_sync import handle_incoming_game_status
+from core.app_metadata import resolve_app_metadata
 from runtime.brightness import normalize_inbound_brightness
 
 _log = logging.getLogger(__name__)
@@ -525,6 +526,7 @@ class RemoteDeviceConfigApplier:
                         e,
                     )
                 rt.remote_downloading_game_ids.discard(gid)
+                deps.app_ctx.reload_game_menu = True
 
             def on_failure(gid: str, error: str) -> None:
                 _log.warning(
@@ -595,6 +597,14 @@ class RemoteDeviceConfigApplier:
         from game_lifecycle import download_game_async
 
         rt = self._runtime
+
+        def game_installed(game_id: str) -> bool:
+            app_path = os.path.join(os.getcwd(), "apps", game_id)
+            if not os.path.isfile(os.path.join(app_path, "main.py")):
+                return False
+            metadata = resolve_app_metadata(game_id)
+            return metadata.get("type") == "game" and bool(str(metadata.get("id") or "").strip())
+
         if rt.startup_missing_ready_games_recovery_done:
             has_missing_ready_game = False
             for g in games_cfg:
@@ -604,7 +614,7 @@ class RemoteDeviceConfigApplier:
                 status = str(g.get("status") or "").strip().lower()
                 if not game_id or status != "ready":
                     continue
-                if not os.path.isdir(os.path.join(os.getcwd(), "apps", game_id)):
+                if not game_installed(game_id):
                     has_missing_ready_game = True
                     break
             if not has_missing_ready_game:
@@ -620,7 +630,7 @@ class RemoteDeviceConfigApplier:
             expected_version = str(g.get("version") or "").strip()
             if not game_id or status != "ready":
                 continue
-            if os.path.isdir(os.path.join(os.getcwd(), "apps", game_id)):
+            if game_installed(game_id):
                 _log.info(
                     "remote config: startup recovery skip game_id=%s reason=already_present local_version=%s",
                     game_id,
@@ -647,6 +657,7 @@ class RemoteDeviceConfigApplier:
                     )
                     self._publish_startup_recovery_game_status(game_id, gver, "ready")
                     rt.remote_downloading_game_ids.discard(game_id)
+                    self._deps.app_ctx.reload_game_menu = True
 
                 def on_failure(game_id: str, error: str) -> None:
                     _log.warning(

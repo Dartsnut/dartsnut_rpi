@@ -5,6 +5,7 @@ import subprocess
 from typing import Any
 
 from update_repair import clear_update_repair_pending, mark_update_repair_pending
+from upgrade_state import set_upgrade_in_progress
 
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
@@ -107,6 +108,7 @@ def check_firmware_update() -> dict[str, Any]:
 def perform_firmware_update() -> dict[str, Any]:
     old_commit = _run_git(["rev-parse", "HEAD"]).stdout.strip()
     try:
+        set_upgrade_in_progress(True)
         _run_git(["reset", "--hard"])
         _run_git(["fetch", "origin"])
         branch = _current_branch()
@@ -116,6 +118,7 @@ def perform_firmware_update() -> dict[str, Any]:
     except Exception as exc:
         mark_update_repair_pending()
         try:
+            set_upgrade_in_progress(True)
             _run_git(["reset", "--hard", old_commit])
             subprocess.run(["sudo", "./update.sh"], cwd=REPO_DIR, check=True)
             clear_update_repair_pending()
@@ -124,6 +127,8 @@ def perform_firmware_update() -> dict[str, Any]:
                 f"Update failed and rollback failed: {rollback_exc}"
             ) from exc
         raise RuntimeError("Update failed; rolled back to previous version") from exc
+    finally:
+        set_upgrade_in_progress(False)
 
     try:
         with open("/tmp/firmware_updated.flag", "w", encoding="utf-8") as file:

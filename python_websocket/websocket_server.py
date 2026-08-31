@@ -113,6 +113,7 @@ def start_websocket_server(
     trigger_dim_check=None,
     service_registry: WebsocketServiceRegistry | None = None,
     endpoint_config: WebsocketEndpointConfig | None = None,
+    sideload_manager=None,
 ):
     global _service_registry, _endpoint_config
     _service_registry = service_registry or build_default_websocket_registry()
@@ -125,6 +126,7 @@ def start_websocket_server(
         start_game_process=start_game_process,
         set_volume=set_volume,
         trigger_dim_check=trigger_dim_check,
+        sideload_manager=sideload_manager,
     )
     uvicorn.run(
         app,

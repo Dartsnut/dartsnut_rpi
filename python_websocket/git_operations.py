@@ -13,6 +13,7 @@ from update_sources import (
     prepare_git_source,
     prepare_update_sources,
 )
+from upgrade_state import set_upgrade_in_progress
 
 # Repo root = parent of python_websocket/ so git matches this install, not a hardcoded path.
 GIT_REPO_CWD = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -24,6 +25,7 @@ def _run_update_script(*, defer_terminal_actions=False, uv_default_index=None):
     uv_default_index = uv_default_index or DIRECT_PYPI_INDEX
     cmd = ["sudo", "env", f"UV_DEFAULT_INDEX={uv_default_index}"]
     if defer_terminal_actions:
+        cmd.append("DARTSNUT_UPGRADE_STATE_MANAGED=1")
         cmd.append("DARTSNUT_UPDATE_DEFER_TERMINAL_ACTIONS=1")
     cmd.append("./update.sh")
     return subprocess.run(cmd, cwd=GIT_REPO_CWD, check=True)
@@ -272,11 +274,16 @@ def check_update():
 
 
 def perform_update(before_terminal_action=None):
-    old_commit = None
-    uv_default_index = DIRECT_PYPI_INDEX
     defer_terminal_actions = before_terminal_action is not None
     before_terminal = _call_once(before_terminal_action)
 
+    return _perform_update_locked(before_terminal_action, defer_terminal_actions, before_terminal)
+
+
+def _perform_update_locked(before_terminal_action, defer_terminal_actions, before_terminal):
+    old_commit = None
+    uv_default_index = DIRECT_PYPI_INDEX
+    upgrade_started = False
     try:
         # Save current commit hash
         result = subprocess.run(
@@ -287,6 +294,8 @@ def perform_update(before_terminal_action=None):
             text=True,
         )
         old_commit = result.stdout.strip()
+        upgrade_started = True
+        set_upgrade_in_progress(True)
 
         subprocess.run(
             ["git", "reset", "--hard"], cwd=GIT_REPO_CWD, check=True
@@ -305,6 +314,8 @@ def perform_update(before_terminal_action=None):
             text=True,
         )
         if old_commit == remote_result.stdout.strip():
+            set_upgrade_in_progress(False)
+            upgrade_started = False
             return {
                 "action": "perform_update",
                 "message": "Already up to date",
@@ -323,7 +334,13 @@ def perform_update(before_terminal_action=None):
             uv_default_index=uv_default_index,
         )
         if defer_terminal_actions:
-            _run_terminal_update_actions(before_terminal)
+            def clear_upgrade_before_terminal():
+                nonlocal upgrade_started
+                set_upgrade_in_progress(False)
+                upgrade_started = False
+                before_terminal()
+
+            _run_terminal_update_actions(clear_upgrade_before_terminal)
 
         # Create flag file to indicate successful update
         flag_path = "/tmp/firmware_updated.flag"
@@ -335,6 +352,8 @@ def perform_update(before_terminal_action=None):
         return {"action": "perform_update", "message": "Update successful"}
     except subprocess.CalledProcessError as e:
         mark_update_repair_pending()
+        set_upgrade_in_progress(True)
+        upgrade_started = True
         # Rollback to old commit
         try:
             subprocess.run(
@@ -351,6 +370,8 @@ def perform_update(before_terminal_action=None):
                 uv_default_index=uv_default_index,
             )
             clear_update_repair_pending()
+            set_upgrade_in_progress(False)
+            upgrade_started = False
             before_terminal()
             return create_error_response(
                 "perform_update",
@@ -358,6 +379,8 @@ def perform_update(before_terminal_action=None):
                 "Unable to update the system. The system has been restored to the previous version",
             )
         except subprocess.CalledProcessError as rollback_error:
+            set_upgrade_in_progress(False)
+            upgrade_started = False
             before_terminal()
             return create_error_response(
                 "perform_update",
@@ -366,3 +389,6 @@ def perform_update(before_terminal_action=None):
             )
     except Exception as e:
         return handle_exception("perform_update", e, "Update failed")
+    finally:
+        if upgrade_started:
+            set_upgrade_in_progress(False)

@@ -7,11 +7,65 @@ SYSTEM_PACKAGES_FILE="${REPO_DIR}/system-packages.txt"
 INSTALL_PACKAGES_SCRIPT="${REPO_DIR}/scripts/install_system_packages.sh"
 REPAIR_DEVICE_JSON_SCRIPT="${REPO_DIR}/scripts/repair_device_json.sh"
 KERNEL_ROLLBACK_SCRIPT="${REPO_DIR}/scripts/rollback_rpi_kernel_6_12.sh"
+DARTSNUT_TMPFILES_SRC="${SERVICES_DIR}/dartsnut.conf"
+DARTSNUT_TMPFILES_DST="/etc/tmpfiles.d/dartsnut.conf"
+UPGRADE_STATE_PATH="/run/dartsnut/upgrade_in_progress"
+UPGRADE_STATE_MANAGED="${DARTSNUT_UPGRADE_STATE_MANAGED:-0}"
+
+set_upgrade_in_progress() {
+    local value="$1"
+    local state_dir
+    local temporary_path
+    state_dir="$(dirname "${UPGRADE_STATE_PATH}")"
+    temporary_path="${state_dir}/.upgrade_in_progress.$$"
+    sudo mkdir -p "${state_dir}" || return 1
+    printf '%s\n' "${value}" | sudo tee "${temporary_path}" >/dev/null || return 1
+    sudo mv -f "${temporary_path}" "${UPGRADE_STATE_PATH}" || return 1
+}
+
+clear_upgrade_in_progress() {
+    local state_dir
+    state_dir="$(dirname "${UPGRADE_STATE_PATH}")"
+    if set_upgrade_in_progress 0; then
+        return 0
+    fi
+    echo "Unable to write inactive firmware upgrade state; removing stale flag" >&2
+    sudo rm -f "${state_dir}/.upgrade_in_progress.$$" "${UPGRADE_STATE_PATH}"
+}
+
+finish_upgrade_state() {
+    local status=$?
+    trap - EXIT
+    if ! clear_upgrade_in_progress; then
+        echo "Unable to clear firmware upgrade state" >&2
+        if [ "${status}" -eq 0 ]; then
+            status=1
+        fi
+    fi
+    exit "${status}"
+}
+
+if [ "${UPGRADE_STATE_MANAGED}" != "1" ]; then
+    if ! set_upgrade_in_progress 1; then
+        echo "Unable to publish firmware upgrade state" >&2
+        exit 1
+    fi
+    trap finish_upgrade_state EXIT
+fi
 
 # shellcheck source=scripts/uv_env.sh
 source "${UV_ENV_SCRIPT}"
 
 SYSTEMD_UNITS_UPDATED=0
+
+install_shared_runtime_tmpfiles() {
+    if [ ! -f "${DARTSNUT_TMPFILES_SRC}" ]; then
+        echo "Error: tmpfiles definition missing at ${DARTSNUT_TMPFILES_SRC}." >&2
+        return 1
+    fi
+    sudo install -m 0644 "${DARTSNUT_TMPFILES_SRC}" "${DARTSNUT_TMPFILES_DST}"
+    sudo systemd-tmpfiles --create "${DARTSNUT_TMPFILES_DST}"
+}
 
 install_or_update_service_unit() {
     local unit_name="$1"
@@ -94,6 +148,7 @@ fi
 echo "== Services and boot assets =="
 
 if [ -d "${SERVICES_DIR}" ]; then
+    install_shared_runtime_tmpfiles || exit $?
     install_or_update_service_unit "dartsnut_matrix.service"
     install_or_update_service_unit "dartsnut_python.service"
     install_or_update_service_unit "dartsnut_mcp.service"
@@ -198,10 +253,28 @@ fi
 
 echo "== Final kernel compatibility check =="
 
+KERNEL_REBOOT_REQUIRED=0
 if [ -x "${KERNEL_ROLLBACK_SCRIPT}" ]; then
-    "${KERNEL_ROLLBACK_SCRIPT}" || exit $?
+    env DARTSNUT_KERNEL_ROLLBACK_DEFER_REBOOT=1 "${KERNEL_ROLLBACK_SCRIPT}"
+    kernel_rollback_status=$?
+    if [ "${kernel_rollback_status}" -eq 77 ]; then
+        KERNEL_REBOOT_REQUIRED=1
+    elif [ "${kernel_rollback_status}" -ne 0 ]; then
+        exit "${kernel_rollback_status}"
+    fi
 else
     echo "Warning: ${KERNEL_ROLLBACK_SCRIPT} not found or not executable; skipping kernel compatibility check."
+fi
+
+if ! clear_upgrade_in_progress; then
+    echo "Unable to clear firmware upgrade state; refusing terminal restart" >&2
+    exit 1
+fi
+trap - EXIT
+
+if [ "${KERNEL_REBOOT_REQUIRED}" -eq 1 ]; then
+    sudo reboot
+    exit $?
 fi
 
 echo "== Restart =="

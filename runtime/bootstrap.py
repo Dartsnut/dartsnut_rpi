@@ -129,6 +129,7 @@ def start_background_subsystems(
     remote_config_runtime: Any,
     websocket_service_registry: Any = None,
     set_startup_volume: Optional[Callable[[int], None]] = None,
+    sideload_manager: Any = None,
 ) -> None:
     # Keep UDP discovery broadcasts disabled in this branch.
     # IP/SSID reads still come from machine_api -> udp_broadcast helpers.
@@ -172,6 +173,8 @@ def start_background_subsystems(
             set_volume,
             trigger_dim_check,
             websocket_service_registry,
+            None,
+            sideload_manager,
         ),
         daemon=True,
     ).start()

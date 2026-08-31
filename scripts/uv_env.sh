@@ -212,6 +212,24 @@ _run_uv_with_root_cache_repair() {
     return "${status}"
 }
 
+_venv_has_system_site_packages() {
+    local config_path="${REPO_DIR}/.venv/pyvenv.cfg"
+    [ -f "${config_path}" ] || return 1
+    grep -Eiq '^[[:space:]]*include-system-site-packages[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${config_path}"
+}
+
+ensure_uv_venv() {
+    if [ -d "${REPO_DIR}/.venv" ] && _venv_has_system_site_packages; then
+        return 0
+    fi
+
+    if [ -d "${REPO_DIR}/.venv" ]; then
+        echo "Existing uv environment lacks system-site-package access; recreating .venv..."
+        rm -rf "${REPO_DIR}/.venv"
+    fi
+    "${UV_BIN}" venv --system-site-packages
+}
+
 sync_uv_project() {
     resolve_uv_bin
     cd "${REPO_DIR}"
@@ -224,9 +242,7 @@ sync_uv_project() {
     local uv_output
     uv_output="$(mktemp)"
 
-    if [ ! -d "${REPO_DIR}/.venv" ]; then
-        "${UV_BIN}" venv --system-site-packages || return $?
-    fi
+    ensure_uv_venv || return $?
 
     max_attempts="${UV_SYNC_MAX_ATTEMPTS:-3}"
     if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then

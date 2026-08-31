@@ -103,6 +103,29 @@ def update_widget_page_framebuffer(page: dict, assets: Any) -> None:
     if current_loading_frame.mode != "RGB":
         current_loading_frame = current_loading_frame.convert("RGB")
 
+    # Removed widgets no longer enter the render loop, so remember their old
+    # bounds and invalidate those pixels in the page-level framebuffer cache.
+    current_regions = set()
+    for widget in widgets:
+        if not isinstance(widget, dict):
+            continue
+        widget_data = widget.get("widget") or widget
+        if not isinstance(widget_data, dict):
+            continue
+        position = widget_data.get("position")
+        if isinstance(position, (list, tuple)) and len(position) == 4:
+            current_regions.add(tuple(position))
+
+    previous_regions = page.get("_widget_regions")
+    if isinstance(previous_regions, (list, set, tuple)):
+        for region in previous_regions:
+            if not isinstance(region, (list, tuple)) or len(region) != 4:
+                continue
+            if tuple(region) not in current_regions:
+                x0, y0, x1, y1 = region
+                page_img.paste((0, 0, 0), (x0, y0, x1 + 1, y1 + 1))
+    page["_widget_regions"] = list(current_regions)
+
     for widget in widgets:
         if not isinstance(widget, dict):
             continue
@@ -163,6 +186,10 @@ def update_widget_page_framebuffer(page: dict, assets: Any) -> None:
         if is_loading is None:
             is_loading = True
         if process_unavailable or is_loading:
+            # The page framebuffer caches the last widget frame. Clear this
+            # widget's bounds before drawing its loader so unavailable widgets
+            # cannot leave stale pixels behind.
+            page_img.paste((0, 0, 0), (x0, y0, x1 + 1, y1 + 1))
             if widget_height == 160:
                 page_img.paste(current_loading_frame_big, (x0, y0 + 32))
                 if widget.get("has_small_widget") is not False:
@@ -287,6 +314,11 @@ def run_main_loop(
                 write_ui_state_snapshot(ctx)
             except Exception as e:
                 _log.debug("Error writing UI state snapshot: %s", e)
+
+            sideload_manager = getattr(ctx, "sideload_manager", None)
+            if sideload_manager is not None and sideload_manager.is_active():
+                sideload_manager.render(ctx.display)
+                continue
 
             if ctx.locate_device_intv:
                 ctx.display.update_frame_buffer(assets.identify_image)

@@ -93,3 +93,4 @@ class WebsocketEndpointConfig:
     start_game_process: Optional[Callable[[str], bool]] = None
     set_volume: Optional[Callable[[int], None]] = None
     trigger_dim_check: Optional[Callable[[], None]] = None
+    sideload_manager: Any = None
