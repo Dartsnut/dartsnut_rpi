@@ -80,6 +80,11 @@ def is_pixelboard_device() -> bool:
     return not is_pixeldart_device()
 
 
+def resolve_device_model() -> str:
+    """Return the product model derived from live USB hardware detection."""
+    return "PixelDart" if is_pixeldart_device() else "PixelBoard"
+
+
 def clear_device_type_cache() -> None:
     global _PIXELDARTS_DEVICE_CACHE
     _PIXELDARTS_DEVICE_CACHE = None

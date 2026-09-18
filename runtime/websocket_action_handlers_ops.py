@@ -131,14 +131,6 @@ async def _handle_update_user_info(*, req_id, message, registry, endpoint_config
     await _respond(send_response, req_id, result)
 
 
-async def _handle_get_game_playtime(*, req_id, message, registry, endpoint_config, send_response):
-    result = await invoke(
-        "get_game_playtime",
-        registry.user_data_ops.get_game_playtime, message.get("game_id")
-    )
-    await _respond(send_response, req_id, result)
-
-
 OPS_ACTION_HANDLERS: dict[str, ActionHandler] = {
     "bluetooth_scan": _handle_bluetooth_scan,
     "bluetooth_list": _handle_bluetooth_list,
@@ -159,7 +151,6 @@ OPS_ACTION_HANDLERS: dict[str, ActionHandler] = {
     "stop_ssh": _handle_stop_ssh,
     "get_user_data": _handle_get_user_data,
     "update_user_info": _handle_update_user_info,
-    "get_game_playtime": _handle_get_game_playtime,
 }
 
 

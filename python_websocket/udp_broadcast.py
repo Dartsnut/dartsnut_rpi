@@ -6,6 +6,7 @@ import subprocess
 import time
 from typing import Optional
 from network_utils import get_primary_ipv4
+from runtime.pixeldarts_hardware import resolve_device_model
 
 _log = logging.getLogger(__name__)
 
@@ -71,7 +72,9 @@ def get_device_info():
             with open(file_path, 'r') as file:
                 get_device_info._cached_device_info = json.load(file)
             get_device_info._last_mtime = current_mtime
-        return get_device_info._cached_device_info
+        device_info = dict(get_device_info._cached_device_info or {})
+        device_info["model"] = resolve_device_model()
+        return device_info
     except Exception:
         return {}
 

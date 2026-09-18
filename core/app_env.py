@@ -21,8 +21,8 @@ _log = logging.getLogger(__name__)
 
 DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
 STAMP_FILENAME = ".dartsnut_stamp"
-MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
-TARBALL_PYPROJECT_MARKER = ".dartsnut_tarball_pyproject"
+STAMP_VERSION = "v2:"
+FAILED_SETUP_FILENAME = ".dartsnut_venv_failed"
 
 
 def read_app_type(app_id: str) -> str | None:
@@ -62,6 +62,29 @@ def _stamp_path(app_id: str) -> str:
     return os.path.join(app_dir(app_id), ".venv", STAMP_FILENAME)
 
 
+def _failed_setup_path(app_id: str) -> str:
+    return os.path.join(app_dir(app_id), FAILED_SETUP_FILENAME)
+
+
+def app_venv_setup_failed(app_id: str) -> bool:
+    """True when latest download/update could not prepare its virtualenv."""
+    return os.path.isfile(_failed_setup_path(app_id))
+
+
+def _mark_app_venv_setup_failed(app_id: str) -> None:
+    try:
+        Path(_failed_setup_path(app_id)).touch()
+    except OSError:
+        pass
+
+
+def _clear_app_venv_setup_failed(app_id: str) -> None:
+    try:
+        os.remove(_failed_setup_path(app_id))
+    except FileNotFoundError:
+        pass
+
+
 def _stamp_payload(app_id: str) -> str:
     pyproject = _pyproject_path(app_id)
     content = ""
@@ -71,10 +94,8 @@ def _stamp_payload(app_id: str) -> str:
     app_type = read_app_type(app_id)
     if app_type is None:
         raise ValueError(f"Missing or invalid backend metadata for {app_id!r}")
-    template = _template_path(app_type)
-    template_fp = template.read_text(encoding="utf-8")
     version = _read_backend_version(app_id)
-    return f"{content}\n---\n{template_fp}\n---\n{version}"
+    return f"{content}\n---\n{app_type}\n---\n{version}"
 
 
 def _compute_stamp(app_id: str) -> str:
@@ -90,36 +111,26 @@ def app_venv_ready(app_id: str) -> bool:
     try:
         with open(stamp_path, encoding="utf-8") as f:
             stored = f.read().strip()
-        return stored == _compute_stamp(app_id)
+        if stored.startswith(STAMP_VERSION):
+            return stored == f"{STAMP_VERSION}{_compute_stamp(app_id)}"
+        # Pre-v2 stamps included firmware template contents. Their hash cannot
+        # be reproduced after a device upgrade, but the existing venv remains
+        # valid until the next app download/update replaces it with a v2 stamp.
+        return len(stored) == 64 and all(char in "0123456789abcdef" for char in stored)
     except (OSError, ValueError):
-        return False
-
-
-def _is_managed_default_pyproject(path: str) -> bool:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.readline().startswith(MANAGED_PYPROJECT_HEADER)
-    except OSError:
         return False
 
 
 def _materialize_pyproject(app_id: str, app_type: str) -> None:
     dest = _pyproject_path(app_id)
-    template = _template_path(app_type)
-    template_text = template.read_text(encoding="utf-8")
-    if os.path.isfile(dest):
-        marker = os.path.join(app_dir(app_id), TARBALL_PYPROJECT_MARKER)
-        if os.path.isfile(marker):
-            return
-        if not _is_managed_default_pyproject(dest):
-            return
-        with open(dest, encoding="utf-8") as f:
-            if f.read() == template_text:
-                return
-        shutil.copy2(template, dest)
-        _log.info("Refreshed default pyproject.toml for %s (type=%s)", app_id, app_type)
+    if os.path.lexists(dest):
         return
-    shutil.copy2(template, dest)
+    template_content = _template_path(app_type).read_bytes()
+    try:
+        with open(dest, "xb") as f:
+            f.write(template_content)
+    except FileExistsError:
+        return
     _log.info("Materialized default pyproject.toml for %s (type=%s)", app_id, app_type)
 
 
@@ -127,7 +138,7 @@ def _write_stamp(app_id: str) -> None:
     stamp_path = _stamp_path(app_id)
     os.makedirs(os.path.dirname(stamp_path), exist_ok=True)
     with open(stamp_path, "w", encoding="utf-8") as f:
-        f.write(_compute_stamp(app_id))
+        f.write(f"{STAMP_VERSION}{_compute_stamp(app_id)}")
 
 
 def _stderr_has_uv_root_cache_error(stderr: str | None) -> bool:
@@ -206,14 +217,17 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
     main_py = os.path.join(app_dir(app_id), "main.py")
     if not os.path.isfile(main_py):
         _log.warning("ensure_app_venv: missing main.py for %s", app_id)
+        _mark_app_venv_setup_failed(app_id)
         return False
 
     if not force and app_venv_ready(app_id):
+        _clear_app_venv_setup_failed(app_id)
         return True
 
     app_type = read_app_type(app_id)
     if app_type is None:
         _log.warning("ensure_app_venv: missing or invalid backend metadata for %s", app_id)
+        _mark_app_venv_setup_failed(app_id)
         return False
     started = time.monotonic()
     try:
@@ -221,6 +235,7 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
         _remove_invalid_venv(app_id)
         _uv_sync(app_id)
         _write_stamp(app_id)
+        _clear_app_venv_setup_failed(app_id)
         _log.info(
             "ensure_app_venv: ready app_id=%s type=%s elapsed=%.1fs",
             app_id,
@@ -229,6 +244,7 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
         )
         return True
     except subprocess.CalledProcessError as e:
+        _mark_app_venv_setup_failed(app_id)
         stderr = (e.stderr or "").strip()
         _log.error(
             "ensure_app_venv: uv sync failed app_id=%s: %s%s",
@@ -238,6 +254,7 @@ def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
         )
         return False
     except Exception as e:
+        _mark_app_venv_setup_failed(app_id)
         _log.error("ensure_app_venv: failed app_id=%s: %s", app_id, e)
         return False
 
@@ -343,18 +360,11 @@ def install_app_tarball(tar_path: str, app_id: str) -> str:
                 tar.extractall(extract_dir, members=members)
 
         source_dir = _payload_source_dir(extract_dir)
-        tarball_has_pyproject = os.path.isfile(
-            os.path.join(source_dir, "pyproject.toml")
-        )
         shutil.copytree(
             source_dir,
             prepared_dir,
-            ignore=shutil.ignore_patterns(
-                "._*", "__MACOSX", TARBALL_PYPROJECT_MARKER
-            ),
+            ignore=shutil.ignore_patterns("._*", "__MACOSX"),
         )
-        if tarball_has_pyproject:
-            Path(prepared_dir, TARBALL_PYPROJECT_MARKER).touch()
 
         backup_dir = None
         if os.path.exists(target_dir):

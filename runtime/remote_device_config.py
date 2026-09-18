@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from domain.app_context import AppContext
 from domain.game_remote_sync import handle_incoming_game_status
+from core.app_env import app_venv_setup_failed
 from core.app_metadata import resolve_app_metadata
 from runtime.brightness import normalize_inbound_brightness
 
@@ -601,6 +602,8 @@ class RemoteDeviceConfigApplier:
         def game_installed(game_id: str) -> bool:
             app_path = os.path.join(os.getcwd(), "apps", game_id)
             if not os.path.isfile(os.path.join(app_path, "main.py")):
+                return False
+            if app_venv_setup_failed(game_id):
                 return False
             metadata = resolve_app_metadata(game_id)
             return metadata.get("type") == "game" and bool(str(metadata.get("id") or "").strip())

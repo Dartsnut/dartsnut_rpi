@@ -18,17 +18,17 @@ from core.helpers import (
     subprocess_launch_kwargs,
     terminate_process_group,
 )
-from core.app_env import ensure_app_venv, install_app_tarball
+from core.app_env import (
+    app_venv_ready,
+    app_venv_setup_failed,
+    ensure_app_venv,
+    install_app_tarball,
+)
 from core.app_metadata import read_app_metadata, resolve_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
 from runtime.api_token_store import build_api_headers
 from runtime.game_secret_store import get_pico8_key
 from pico8_sync import sync_pico8_favourites
-from python_websocket.user_data_operations import (
-    start_game_tracking,
-    stop_game_tracking,
-    _load_user_data,
-)
 import assets
 from PIL import Image
 
@@ -273,6 +273,8 @@ def local_game_version_matches(gameid: str, remote_version: str) -> bool:
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     if not os.path.isdir(game_path):
         return False
+    if app_venv_setup_failed(gameid):
+        return False
     local = get_local_game_version(gameid)
     if not local:
         return False
@@ -383,11 +385,15 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     local_version = ""
     if os.path.isdir(game_path):
         if not expected_version:
-            if normalized_gameid == "pico8":
-                _sync_pico8_favourites_if_configured()
-            return True
+            if not app_venv_setup_failed(gameid):
+                if normalized_gameid == "pico8":
+                    _sync_pico8_favourites_if_configured()
+                return True
         local_version = get_local_game_version(gameid)
-        if compare_game_versions(local_version, expected_version) >= 0:
+        if (
+            not app_venv_setup_failed(gameid)
+            and compare_game_versions(local_version, expected_version) >= 0
+        ):
             if local_version != expected_version:
                 _log.info(
                     "Game %s local version %s >= target %s; treating as up to date",
@@ -544,8 +550,8 @@ def start_game_process(gameid: str) -> dict:
     if metadata.get("type") != "game":
         _log.error("Refusing to start %s: missing or invalid game sidecar", gameid)
         return None
-    if not ensure_app_venv(gameid):
-        _log.error("Failed to set up virtualenv for game %s", gameid)
+    if not app_venv_ready(gameid):
+        _log.error("Refusing to start game %s: virtualenv is not ready", gameid)
         return None
     if str(gameid or "").strip() == "pico8":
         _sync_pico8_favourites_if_configured()
@@ -574,10 +580,6 @@ def start_game_process(gameid: str) -> dict:
             cwd=app_dir(gameid),
             **subprocess_launch_kwargs(),
         )
-        try:
-            start_game_tracking(gameid)
-        except Exception as e:
-            _log.warning("Failed to start game tracking: %s", e)
         _log.info(
             "game process started game_id=%s pid=%s",
             gameid,
@@ -600,10 +602,6 @@ def term_game_process(g: dict) -> None:
     if g is None:
         return
     try:
-        try:
-            stop_game_tracking()
-        except Exception as e:
-            _log.warning("Failed to stop game tracking: %s", e)
         if g.get("process") and g["process"].poll() is None:
             terminate_process_group(g["process"].pid)
         if g.get("shm"):
@@ -716,8 +714,7 @@ def remove_local_game_folder(game_id: str) -> bool:
 
 def load_menu_game_list(ctx) -> list:
     """
-    Games for the on-device picker: local entries marked ready, sorted by
-    playtime descending then name.
+    Games for the on-device picker: local entries marked ready, sorted by name.
     """
     all_games = load_game_list()
     filtered = [
@@ -726,17 +723,9 @@ def load_menu_game_list(ctx) -> list:
         if str(c.get("status", "ready")).strip().lower() == "ready"
     ]
 
-    playtimes = _load_user_data().get("game_playtimes", {})
-
     def _sort_key(conf: dict):
-        gid = str(conf.get("id"))
-        pt = playtimes.get(gid, 0)
-        try:
-            pt = int(pt)
-        except (TypeError, ValueError):
-            pt = 0
         name = (conf.get("name") or "").lower()
-        return (-pt, name)
+        return (name, str(conf.get("id") or "").lower())
 
     return sorted(filtered, key=_sort_key)
 

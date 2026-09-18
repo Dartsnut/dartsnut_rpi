@@ -29,6 +29,7 @@ class Pico8Favourite:
     author: str
     ts: str
     catsub: int
+    pid: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,21 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(str(value or "").strip())
     except (TypeError, ValueError):
         return default
+
+
+def _valid_cart_lid(value: Any) -> str:
+    lid = str(value or "").strip()
+    if not lid or lid == "0":
+        return ""
+    return lid
+
+
+def _mid_from_nfo(lid: str, mid: str) -> str:
+    mid = str(mid or "").strip()
+    if mid.isdigit() or not mid:
+        stem = str(lid or "").rsplit("-", 1)[0].strip()
+        return stem or mid
+    return mid
 
 
 def _pdat_array_text(html: str) -> str:
@@ -142,6 +158,7 @@ def parse_favourites_from_html(html: str) -> list[Pico8Favourite]:
                 author=author,
                 ts=ts,
                 catsub=catsub,
+                pid=str(row[0] or "").strip(),
             )
         )
     return favourites
@@ -155,10 +172,10 @@ def _fetch_nfo(session: requests.Session, lid: str) -> Pico8Favourite | None:
     )
     resp.raise_for_status()
     data = _parse_nfo(resp.text)
-    nfo_lid = data.get("lid") or lid
-    mid = data.get("mid") or nfo_lid.rsplit("-", 1)[0]
+    nfo_lid = _valid_cart_lid(data.get("lid"))
     if not nfo_lid:
         return None
+    mid = _mid_from_nfo(nfo_lid, data.get("mid") or "")
     return Pico8Favourite(
         lid=nfo_lid,
         mid=mid,
@@ -172,11 +189,12 @@ def _fetch_nfo(session: requests.Session, lid: str) -> Pico8Favourite | None:
 def _merge_page_and_nfo(page: Pico8Favourite, nfo: Pico8Favourite) -> Pico8Favourite:
     return Pico8Favourite(
         lid=nfo.lid,
-        mid=nfo.mid,
+        mid=_mid_from_nfo(nfo.lid, nfo.mid) or page.mid,
         title=page.title or nfo.title,
         author=nfo.author or page.author,
         ts=nfo.ts or page.ts,
         catsub=nfo.catsub or page.catsub,
+        pid=page.pid or nfo.pid,
     )
 
 
@@ -241,7 +259,7 @@ def sync_pico8_favourites(
         favourites: list[Pico8Favourite] = []
         for parsed_fav in parsed:
             try:
-                nfo = _fetch_nfo(session, parsed_fav.lid)
+                nfo = _fetch_nfo(session, parsed_fav.pid or parsed_fav.lid)
                 if nfo is None:
                     _log.warning("pico8 sync: missing nfo for lid=%s", parsed_fav.lid)
                     continue

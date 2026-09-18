@@ -10,7 +10,10 @@ from python_websocket.error_handler import (
     handle_file_not_found,
 )
 from machine_state_service import get_machine_state_service
-from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.pixeldarts_hardware import (
+    resolve_device_model,
+    resolve_pixeldarts_hardware_version,
+)
 from runtime.remote_sync_port import get_remote_sync
 
 APPS_DIR = "apps"  # Update this to your desired save directory
@@ -156,6 +159,7 @@ def get_device_info():
         hardware_version = resolve_pixeldarts_hardware_version()
         if hardware_version:
             device_info["hardware_version"] = hardware_version
+        device_info["model"] = resolve_device_model()
 
         return {"action": "get_device_info", "device_info": device_info}
     except FileNotFoundError as e:

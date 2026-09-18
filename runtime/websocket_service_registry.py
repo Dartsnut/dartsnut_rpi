@@ -126,9 +126,6 @@ def build_default_websocket_registry(
             update_user_info=_adapt(
                 "update_user_info", udops.update_user_info, "Failed to update user info"
             ),
-            get_game_playtime=_adapt(
-                "get_game_playtime", udops.get_game_playtime, "Failed to get game playtime"
-            ),
         ),
     )
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
+from runtime.pixeldarts_hardware import resolve_device_model
+
 
 def bluetooth_mac_suffix(adapter_address: str) -> str:
     """Return the last two MAC octets as four lowercase hex characters."""
@@ -19,10 +21,9 @@ def build_bluetooth_local_name(
     device_info: Mapping[str, Any] | None,
     adapter_address: str,
 ) -> str:
-    """Build the local name used by the BLE peripheral."""
-    model = str((device_info or {}).get("model") or "Dartsnut").strip()
-    if not model:
-        model = "Dartsnut"
+    """Build the local name used by the BLE peripheral from live hardware."""
+    _ = device_info
+    model = resolve_device_model()
     return f"{model}-{bluetooth_mac_suffix(adapter_address)}"
 
 
@@ -68,7 +69,7 @@ def resolve_bluetooth_device_id(
 def resolve_bluetooth_local_name(
     device_info: Mapping[str, Any] | None,
 ) -> Optional[str]:
-    """Resolve the machine's Bluetooth local name from device data and adapter."""
+    """Resolve the machine's hardware-derived Bluetooth name and adapter suffix."""
     address = resolve_bluetooth_device_id(device_info)
     if not address:
         return None

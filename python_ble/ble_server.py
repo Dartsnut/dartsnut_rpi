@@ -20,6 +20,7 @@ from runtime.bluetooth_identity import (
     build_bluetooth_local_name,
     get_bluetooth_adapter_address,
 )
+from runtime.pixeldarts_hardware import resolve_device_model
 
 _log = logging.getLogger(__name__)
 
@@ -287,10 +288,16 @@ class UARTDevice:
             cls.send_data(error_response)
 
 
+def _load_device_info():
+    with open("device.json", 'r') as file:
+        device_info = json.load(file)
+    device_info["model"] = resolve_device_model()
+    return device_info
+
+
 def start_ble_server(locate_device=None):
     UARTDevice.locate_device = locate_device if locate_device else None
-    with open("device.json", 'r') as file:
-        UARTDevice.device_info = json.load(file)
+    UARTDevice.device_info = _load_device_info()
 
     # Use the shared identity helper so the UI QR and BLE advertisement match.
     adapter_address = get_bluetooth_adapter_address()

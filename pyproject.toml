@@ -1,6 +1,6 @@
 [project]
 name = "dartsnut-rpi"
-version = "2.0.29"
+version = "2.0.30"
 requires-python = ">=3.11"
 dependencies = [
     "bluezero==0.9.1",
@@ -8,7 +8,7 @@ dependencies = [
     "numpy==2.4.2",
     "pillow==12.1.1",
     "pybluez-dartsnut==0.30",
-    "pydartsnut==1.2.1",
+    "pydartsnut==1.4.0",
     "pygame-ce==2.5.7",
     "qrcode==8.2",
     "requests==2.32.5",

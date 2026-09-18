@@ -552,7 +552,13 @@ def download_app(url, md5, game_id=None):
 
         write_app_metadata(str(game_id), metadata)
         if not ensure_app_venv(str(game_id)):
-            _log.warning("download_app: venv setup failed for game_id=%s", game_id)
+            return create_error_response(
+                "download_app",
+                ErrorCode.COMMAND_FAILED,
+                "Virtualenv setup failed",
+                game_id=game_id,
+                url=url,
+            )
 
         return {"action": "download_app", "game_id": game_id, "url": url, "message": "Success"}
     except Exception as e:

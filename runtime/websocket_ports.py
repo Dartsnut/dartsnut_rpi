@@ -60,7 +60,8 @@ class DeviceOpsPort:
 class UserDataOpsPort:
     get_user_data: Callable[..., dict]
     update_user_info: Callable[..., dict]
-    get_game_playtime: Callable[..., dict]
+    # Deprecated compatibility slot; local playtime endpoint is no longer registered.
+    get_game_playtime: Callable[..., dict] | None = None
 
 
 @dataclass(frozen=True)

@@ -150,7 +150,7 @@ wheels = [
 
 [[package]]
 name = "dartsnut-rpi"
-version = "2.0.29"
+version = "2.0.30"
 source = { virtual = "." }
 dependencies = [
     { name = "bluezero" },
@@ -173,7 +173,7 @@ requires-dist = [
     { name = "numpy", specifier = "==2.4.2" },
     { name = "pillow", specifier = "==12.1.1" },
     { name = "pybluez-dartsnut", specifier = "==0.30" },
-    { name = "pydartsnut", specifier = "==1.2.1" },
+    { name = "pydartsnut", specifier = "==1.4.0" },
     { name = "pygame-ce", specifier = "==2.5.7" },
     { name = "qrcode", specifier = "==8.2" },
     { name = "requests", specifier = "==2.32.5" },
@@ -526,11 +526,11 @@ wheels = [
 
 [[package]]
 name = "pydartsnut"
-version = "1.2.1"
+version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dd/b4/962f51c7f82bd7effdb4ac42fe4bf86c2e5e65d26ba3aa0202177542ce3c/pydartsnut-1.2.1.tar.gz", hash = "sha256:f3618dc311e77773f6e655b11cb448e94940c59af32ad060e77a9ed616583d8e", size = 14374, upload-time = "2026-04-27T02:57:49.901Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a8/8e/f120688a17945a81d25eada1f07ddf827f477bdf712e14a130a1e827412f/pydartsnut-1.4.0.tar.gz", hash = "sha256:185e33731d0c2e9662fbac73616545b5aa01e71be196b1770a1b9c47b631b0b3", size = 24237, upload-time = "2026-09-09T07:39:03.867Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/a7/eac35aa8206231b65bf02513a3293713d5305ce9d6494d4eb9ea790e9183/pydartsnut-1.2.1-py3-none-any.whl", hash = "sha256:a207168cf36ba04352d3710933e159a1311948363be18c4bbd81ce4ae5916f4f", size = 12897, upload-time = "2026-04-27T02:57:48.471Z" },
+    { url = "https://files.pythonhosted.org/packages/64/9f/0ef8aa9472ec10bda990e7addbcf798fc05ca51a299b2bbae0bb566ea61e/pydartsnut-1.4.0-py3-none-any.whl", hash = "sha256:9afcb94de95fdbf517316f19ec16e7f440f102000c38c7d0fbdb9c4b68fa8e49", size = 21246, upload-time = "2026-09-09T07:39:02.024Z" },
 ]
 
 [[package]]

@@ -25,7 +25,12 @@ from core.helpers import (
     signal_process_group,
     terminate_process_group,
 )
-from core.app_env import ensure_app_venv, ensure_app_venv_after_extract, install_app_tarball
+from core.app_env import (
+    app_venv_setup_failed,
+    ensure_app_venv,
+    ensure_app_venv_after_extract,
+    install_app_tarball,
+)
 from core.app_metadata import read_app_metadata, resolve_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
 from domain.app_context import AppContext
@@ -87,7 +92,11 @@ def _widget_metadata_from_download_info(widget_id: str, data: dict) -> dict:
 def check_and_update_widget_version(widget_id: str):
     """Return (needs_update: bool, download_info: dict or None)."""
     try:
-        local_version = str(read_app_metadata(widget_id).get("version") or "") or None
+        local_version = (
+            str(read_app_metadata(widget_id).get("version") or "") or None
+            if not app_venv_setup_failed(widget_id)
+            else None
+        )
         try:
             response = requests.get(
                 "https://api.dartsnut.com/v1/mobile/widget/get-download-info",
@@ -161,6 +170,7 @@ def _download_app_once(widget_id: str, url: str, md5: str, download_info: dict |
             write_app_metadata(widget_id, _widget_metadata_from_download_info(widget_id, download_info))
         if not ensure_app_venv_after_extract(download_path, url=url, app_id=str(widget_id)):
             _log.warning("download_app: venv setup failed for url=%s", url)
+            return False
         return True
     except Exception as e:
         _log.error("Error downloading app: %s", e)
@@ -358,9 +368,6 @@ def restart_widget_process(
             "widget: skipping launch widget_id=%s reason=venv_not_ready",
             widget_id,
         )
-        return
-    if not ensure_app_venv(widget_id):
-        _log.error("Failed to set up virtualenv for widget %s", widget_id)
         return
     try:
         page_uuid = page["uuid"]
@@ -605,18 +612,6 @@ def start_page_process(page: dict) -> dict:
                 "widget: skipping launch widget_id=%s reason=venv_not_ready",
                 widget["id"],
             )
-            widgets.append(
-                {
-                    "process": None,
-                    "shm": None,
-                    "widget": widget,
-                    "loading": False,
-                    "has_small_widget": None,
-                }
-            )
-            continue
-        if not ensure_app_venv(widget["id"]):
-            _log.error("Failed to set up virtualenv for widget %s", widget["id"])
             widgets.append(
                 {
                     "process": None,

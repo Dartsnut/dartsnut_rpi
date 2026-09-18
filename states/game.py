@@ -10,7 +10,6 @@ from runtime.bluetooth_qr import create_bluetooth_qr_for_device
 from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
 import assets
-import runtime.machine_api as machine_api
 
 _log = logging.getLogger(__name__)
 
@@ -112,10 +111,6 @@ class InGameState(BaseState):
             return
         if game["process"].poll() is not None:
             game_id = game.get("game_id")
-            try:
-                machine_api.stop_game_tracking()
-            except Exception as e:
-                _log.warning("Failed to stop game tracking: %s", e)
             try:
                 if game_id and ctx.set_game_status:
                     ctx.set_game_status(str(game_id), "ready")

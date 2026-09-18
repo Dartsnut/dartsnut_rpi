@@ -11,12 +11,6 @@ from __future__ import annotations
 import importlib
 
 
-def stop_game_tracking() -> None:
-    udo = importlib.import_module("python_websocket.user_data_operations")
-
-    udo.stop_game_tracking()
-
-
 def reset_user_data_file() -> None:
     udo = importlib.import_module("python_websocket.user_data_operations")
 

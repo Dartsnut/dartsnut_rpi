@@ -40,7 +40,11 @@ from python_websocket.file_operations import cancel_game_download
 
 import assets
 from domain.app_context import AppContext
-from runtime.pixeldarts_hardware import is_pixelboard_device
+from runtime.pixeldarts_hardware import (
+    is_pixelboard_device,
+    resolve_device_model,
+    resolve_pixeldarts_hardware_version,
+)
 from states import MenuState, WidgetState, GameSelectState, InGameState, SettingsState
 from widget_lifecycle import (
     init_pages,
@@ -79,7 +83,6 @@ from runtime.bootstrap import start_background_subsystems
 from runtime.logging_config import configure_logging
 from runtime.websocket_service_registry import build_default_websocket_registry
 from runtime.sideload_session import SideloadSessionManager
-from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
 from runtime.brightness import (
     clamp_brightness_level,
     migrate_brightness_file,
@@ -94,6 +97,14 @@ from runtime.snackbar_display import (
     SnackbarDisplay,
     wrap_firmware_update_with_snackbar,
 )
+
+# Firmware is the sole physical controller reader in production.  Publish the
+# normalized per-controller snapshot through the broker so pydartsnut clients
+# (and other readers) can consume it without opening evdev/joystick nodes.
+try:
+    from pydartsnut._controller_broker import ControllerBrokerPublisher
+except Exception:  # pragma: no cover - older/development installs
+    ControllerBrokerPublisher = None
 
 _effective_log_level = configure_logging()
 _log = logging.getLogger(__name__)
@@ -131,7 +142,16 @@ _settings_sync_debouncer = SettingsSyncDebouncer(
     publish=lambda patch: get_remote_sync().publish_partial_state(patch),
     debounce_seconds=SETTING_SYNC_DEBOUNCE_SECONDS,
 )
-_controller_input_manager = ControllerInputManager()
+_controller_broker_publisher = None
+if ControllerBrokerPublisher is not None:
+    try:
+        _controller_broker_publisher = ControllerBrokerPublisher()
+        _log.info("Controller broker publisher initialized")
+    except Exception as exc:  # pragma: no cover - unavailable shm/runtime
+        _log.warning("Controller broker unavailable; continuing without broker: %s", exc)
+_controller_input_manager = ControllerInputManager(
+    controller_state_publisher=_controller_broker_publisher,
+)
 
 _remote_bluetooth_scan_controller = RemoteBluetoothScanController(
     scan_builder=machine_api.build_remote_bluetooth_list,
@@ -243,11 +263,11 @@ def get_device_info():
                 base = json.load(file)
             get_device_info._cached_device_info = base
             get_device_info._last_mtime = os.path.getmtime(file_path)
+        merged = dict(base)
         if hardware_version:
-            merged = dict(base)
             merged["hardware_version"] = hardware_version
-            return merged
-        return base
+        merged["model"] = resolve_device_model()
+        return merged
     except Exception:
         return {}
 
@@ -691,11 +711,25 @@ def get_buttons_pressed(context: AppContext):
             context.current_state.name() != "in_game"
             or context.current_state.is_showing_exit_game_overlay(context)
         )
+    # Pico-8 is a native SDL2 client and must remain the sole consumer of
+    # physical controller events.  Do not poll/drain firmware joystick or
+    # evdev descriptors while its game is active; this also keeps HOME and all
+    # pad events available to SDL without synthetic translation.
+    pico8_active = False
+    if context is not None:
+        game = getattr(context, "game", None)
+        pico8_active = (
+            isinstance(game, dict)
+            and str(game.get("game_id") or "").strip().lower() == "pico8"
+            and getattr(context.current_state, "name", lambda: "")() == "in_game"
+            and not context.current_state.is_showing_exit_game_overlay(context)
+        )
     result = _controller_input_manager.poll(
         dartsnut,
         consume_app_controls=consume_app_controls,
         should_consume_button=lambda button: consume_app_controls
         or _should_consume_controller_button(context, button),
+        read_external_inputs=not pico8_active,
     )
     get_buttons_pressed.old_buttons = result.current
     return result.pressed
@@ -944,3 +978,13 @@ try:
     )
 finally:
     shutdown_preview_worker()
+    if _controller_broker_publisher is not None:
+        try:
+            _controller_broker_publisher.close()
+        finally:
+            # The publisher owns this segment.  Remove it on a clean firmware
+            # shutdown so stale snapshots are not consumed by later processes.
+            try:
+                _controller_broker_publisher.unlink()
+            except Exception:
+                pass

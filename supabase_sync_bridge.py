@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -12,7 +13,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
-from runtime.pixeldarts_hardware import resolve_pixeldarts_hardware_version
+from runtime.pixeldarts_hardware import (
+    resolve_device_model,
+    resolve_pixeldarts_hardware_version,
+)
 from runtime.brightness import normalize_inbound_brightness
 from runtime.sync.engine import SyncEngine
 from runtime.sync.outbox import SyncOutbox
@@ -73,6 +77,55 @@ _FIRMWARE_WRITABLE_DEVICE_INFO = frozenset(
     {"id", "sn", "model", "hardware_version"}
 )
 _FIRMWARE_WRITABLE_FIRMWARE = frozenset({"version", "update"})
+
+
+def _current_presence_user_id() -> Optional[str]:
+    """Return current user identity for presence attribution, when available.
+
+    Newer clients sync the signed API token as ``state.user.token``.  The sync
+    engine persists that token in the local API-token store, while the legacy
+    websocket user-data file may contain a legacy ``user_id``; ignore it and
+    derive identity only from the token's non-secret JWT claims. Invalid or
+    opaque tokens remain anonymous.
+    """
+    token = ""
+    try:
+        from python_websocket.user_data_operations import _load_user_data
+        data = _load_user_data()
+        token = str(data.get("jwt_token") or "").strip()
+    except Exception:
+        pass
+
+    # The normal Supabase sync path persists the remote user's signed API token
+    # separately. Prefer this canonical token over any stale legacy JWT field.
+    try:
+        from runtime.api_token_store import get_api_token
+
+        token = get_api_token() or token
+    except Exception:
+        pass
+    if not token:
+        return None
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
+        )
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in ("id", "sub", "user_id"):
+        claim = payload.get(key)
+        if claim is None or isinstance(claim, bool):
+            continue
+        value = str(claim).strip()
+        if value:
+            return value
+    return None
 
 
 def invalidate_published_game_status(game_id: str) -> None:
@@ -239,6 +292,8 @@ def _sanitize_device_info_patch(value: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
     out = {k: value[k] for k in _FIRMWARE_WRITABLE_DEVICE_INFO if k in value}
+    if "model" in out:
+        out["model"] = resolve_device_model()
     return out or None
 
 
@@ -606,7 +661,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     device_meta = {
         "id": resolved_device_id,
         "sn": device_info.get("serial", ""),
-        "model": device_info.get("model", ""),
+        "model": resolve_device_model(),
         "name": device_info.get("name", ""),
     }
     if hardware_version:
@@ -751,11 +806,12 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     merged_info = merged.get("device_info")
     if not isinstance(merged_info, dict):
         merged_info = {}
-    if local_info_id and not str(merged_info.get("id", "") or "").strip():
+    else:
         merged_info = dict(merged_info)
+    merged_info["model"] = resolve_device_model()
+    if local_info_id and not str(merged_info.get("id", "") or "").strip():
         merged_info["id"] = local_info_id
-    if merged_info:
-        merged["device_info"] = merged_info
+    merged["device_info"] = merged_info
     return merged
 
 
@@ -927,6 +983,7 @@ class _SyncClient:
             "ref": ref,
             "payload": payload,
             "full": full,
+            "user_id": _current_presence_user_id(),
         }
         source_value = str(source or "").strip()
         if source_value:
