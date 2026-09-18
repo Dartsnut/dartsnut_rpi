@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 from multiprocessing import shared_memory
 import subprocess
 import requests
@@ -86,14 +87,31 @@ _game_download_lock = threading.Lock()
 def _sync_pico8_favourites_if_configured() -> None:
     key = get_pico8_key()
     if not key:
+        _log.info("game: pico8 favourite sync skipped (no key)")
         return
+    started = time.monotonic()
+    _log.info("game: pico8 favourite consolidation starting")
     try:
         result = sync_pico8_favourites(key)
     except Exception as e:
-        _log.warning("game: pico8 favourites sync failed: %s", e)
+        _log.warning(
+            "game: pico8 favourites sync failed after %.2fs: %s",
+            time.monotonic() - started,
+            e,
+        )
         return
     if result is not None and not result.ok:
-        _log.warning("game: pico8 favourites sync failed: %s", result.message or "unknown error")
+        _log.warning(
+            "game: pico8 favourites sync failed after %.2fs: %s",
+            time.monotonic() - started,
+            result.message or "unknown error",
+        )
+        return
+    _log.info(
+        "game: pico8 favourite consolidation finished carts=%s elapsed=%.2fs",
+        getattr(result, "cart_count", None),
+        time.monotonic() - started,
+    )
 
 
 def _decode_game_preview_frames(preview_raw, game_label: str) -> list:
@@ -381,13 +399,10 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
     """Ensure local game exists and is at least remote_version when provided."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     expected_version = str(remote_version or "").strip()
-    normalized_gameid = str(gameid or "").strip()
     local_version = ""
     if os.path.isdir(game_path):
         if not expected_version:
             if not app_venv_setup_failed(gameid):
-                if normalized_gameid == "pico8":
-                    _sync_pico8_favourites_if_configured()
                 return True
         local_version = get_local_game_version(gameid)
         if (
@@ -401,8 +416,6 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                     local_version or "(empty)",
                     expected_version,
                 )
-            if normalized_gameid == "pico8":
-                _sync_pico8_favourites_if_configured()
             return True
         _log.info(
             "Game %s local version %s < target %s; downloading update",
@@ -463,8 +476,6 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
         ok = compare_game_versions(local, expected_version) >= 0
     else:
         ok = os.path.isdir(game_path)
-    if ok and normalized_gameid == "pico8":
-        _sync_pico8_favourites_if_configured()
     return ok
 
 
@@ -539,6 +550,45 @@ def download_game_async(
     return True
 
 
+
+def _popen_game(command: list[str], cwd: str, gameid: str):
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        **subprocess_launch_kwargs(),
+    )
+    _log.info(
+        "game process started game_id=%s pid=%s",
+        gameid,
+        getattr(process, "pid", None),
+    )
+    return process
+
+
+def launch_pending_pico8_process(game: dict | None) -> None:
+    """Start Pico-8 on the UI thread after favourite consolidation finishes."""
+    if not isinstance(game, dict):
+        return
+    if game.get("process") is not None or game.get("start_error"):
+        return
+    if not game.get("pico8_sync_done"):
+        return
+    if "shm" not in game:
+        _log.info("game: pico8 launch skipped; session already ended")
+        return
+    command = game.get("pico8_command")
+    cwd = game.get("pico8_cwd")
+    gameid = str(game.get("game_id") or "pico8")
+    if not command or not cwd:
+        game["start_error"] = "missing pico8 launch command"
+        return
+    try:
+        game["process"] = _popen_game(command, cwd, gameid)
+    except Exception as e:
+        _log.error("Error starting game %s: %s", gameid, e)
+        game["start_error"] = str(e)
+
+
 def start_game_process(gameid: str) -> dict:
     """Start game process and return its process/shared-memory runtime state."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
@@ -553,8 +603,6 @@ def start_game_process(gameid: str) -> dict:
     if not app_venv_ready(gameid):
         _log.error("Refusing to start game %s: virtualenv is not ready", gameid)
         return None
-    if str(gameid or "").strip() == "pico8":
-        _sync_pico8_favourites_if_configured()
     shm_name = "game_shm"
     shm_size = 128 * 160 * 3 + 1
     try:
@@ -568,30 +616,49 @@ def start_game_process(gameid: str) -> dict:
         loading_image = assets.create_loading_image()
         img_bytes = loading_image.tobytes()
         shm.buf[1 : 1 + len(img_bytes)] = img_bytes
-        # The first byte is the producer/consumer frame handshake. Standard
-        # games start with no subprocess frame available; Pico-8 retains its
-        # legacy startup sequence and consumes the preloaded loading frame.
-        shm.buf[0] = 0 if gameid == "pico8" else 1
+        # Handshake starts with no producer frame. Firmware shows its own
+        # loading image until the subprocess writes the first frame.
+        shm.buf[0] = 1
         command = app_python_command(gameid, "main.py")
         command.extend(["--shm", shm_name])
         command.extend(["--data-store", get_user_data_store_path(gameid)])
-        process = subprocess.Popen(
-            command,
-            cwd=app_dir(gameid),
-            **subprocess_launch_kwargs(),
-        )
-        _log.info(
-            "game process started game_id=%s pid=%s",
-            gameid,
-            getattr(process, "pid", None),
-        )
-        return {
-            "process": process,
+        cwd = app_dir(gameid)
+
+        game = {
+            "process": None,
             "shm": shm,
             "game_id": gameid,
             "loading": True,
             "pico8_first_frame_seen": False,
+            "pico8_command": command,
+            "pico8_cwd": cwd,
+            "pico8_sync_done": False,
         }
+        if str(gameid or "").strip() == "pico8":
+            def _sync_pico8() -> None:
+                try:
+                    _sync_pico8_favourites_if_configured()
+                    if "shm" not in game:
+                        _log.info("game: pico8 start aborted after favourite sync")
+                        return
+                    game["pico8_sync_done"] = True
+                    _log.info("game: pico8 favourite list ready; waiting for UI thread to launch")
+                except Exception as e:
+                    _log.error("Error consolidating pico8 favourites: %s", e)
+                    game["start_error"] = str(e)
+
+            starter = threading.Thread(
+                target=_sync_pico8,
+                daemon=True,
+                name="pico8-fav-sync",
+            )
+            game["pico8_start_thread"] = starter
+            _log.info("game: pico8 loading while favourite list consolidates")
+            starter.start()
+            return game
+
+        game["process"] = _popen_game(command, cwd, gameid)
+        return game
     except Exception as e:
         _log.error("Error starting game %s: %s", gameid, e)
         return None

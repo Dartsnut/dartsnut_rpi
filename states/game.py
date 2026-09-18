@@ -10,6 +10,7 @@ from runtime.bluetooth_qr import create_bluetooth_qr_for_device
 from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
 import assets
+from game_lifecycle import launch_pending_pico8_process
 
 _log = logging.getLogger(__name__)
 
@@ -57,14 +58,19 @@ class GameSelectState(BaseState):
             if ctx.term_game_process and ctx.game is not None:
                 ctx.term_game_process(ctx.game)
             if ctx.start_game_process and ctx.game_list:
-                game = ctx.start_game_process(
-                    ctx.game_list[ctx.game_index]["id"]
-                )
+                gid = str(ctx.game_list[ctx.game_index]["id"])
+                display = getattr(ctx, "display", None)
+                if gid == "pico8" and display is not None:
+                    _log.info("game select: showing loading before pico8 favourite sync")
+                    display.update_frame_buffer(assets.create_loading_image())
+                    present = getattr(display, "present", None)
+                    if callable(present):
+                        present()
+                game = ctx.start_game_process(gid)
                 if game is not None:
                     if ctx.term_widget_processes and ctx.pages is not None:
                         ctx.term_widget_processes(ctx.pages)
                     ctx.game = game
-                    gid = str(ctx.game_list[ctx.game_index]["id"])
                     _log.info("game select: starting local game_id=%s", gid)
                     try:
                         if ctx.set_game_status:
@@ -109,7 +115,22 @@ class InGameState(BaseState):
         if game is None or game == {}:
             ctx.reload_conf = True
             return
-        if game["process"].poll() is not None:
+        process = game.get("process")
+        if process is None:
+            if game.get("start_error"):
+                _log.error(
+                    "in_game: pico8 start failed game_id=%s error=%s",
+                    game.get("game_id"),
+                    game.get("start_error"),
+                )
+                ctx.reload_conf = True
+                return
+            launch_pending_pico8_process(game)
+            process = game.get("process")
+            if process is None:
+                ctx.display.update_frame_buffer(assets.create_loading_image())
+                return
+        if process.poll() is not None:
             game_id = game.get("game_id")
             try:
                 if game_id and ctx.set_game_status:

@@ -1,4 +1,8 @@
-"""Sync Lexaloffle PICO-8 favourites into the local Splore cache."""
+"""Sync Lexaloffle PICO-8 favourites into Splore's favourites.txt.
+
+PICO-8 0.2.7+ downloads any cart that appears in a Splore list, so this
+module only consolidates the list. It does not fetch .p8.png carts.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +21,6 @@ import requests
 _log = logging.getLogger(__name__)
 
 LEXALOFFLE_BASE = "https://www.lexaloffle.com"
-CARTS_BASE = "https://carts.lexaloffle.com"
 PICO8_VERSION = "0.2.7"
 HTTP_TIMEOUT = (5, 15)
 
@@ -92,6 +96,21 @@ def _mid_from_nfo(lid: str, mid: str) -> str:
     return mid
 
 
+def _lid_from_thumb(thumb: str) -> str:
+    name = Path(str(thumb or "").replace("\\", "/")).name
+    stem = name.rsplit(".", 1)[0].strip()
+    if stem.startswith("pico8_"):
+        return _valid_cart_lid(stem[6:])
+    if stem.startswith("pico") and stem[4:].isdigit():
+        return stem[4:]
+    return ""
+
+
+def _is_cart_lid(value: str) -> bool:
+    lid = _valid_cart_lid(value)
+    return bool(lid) and " " not in lid
+
+
 def _pdat_array_text(html: str) -> str:
     marker = "pdat="
     start = html.find(marker)
@@ -141,12 +160,16 @@ def parse_favourites_from_html(html: str) -> list[Pico8Favourite]:
             continue
         if _to_int(row[15]) != 7:
             continue
-        mid = str(row[22] or "").strip()
-        if not mid:
-            continue
+        display_mid = str(row[22] or "").strip()
         version = str(row[17] or "").strip()
-        lid = f"{mid}-{version}" if version else mid
-        title = str(row[2] or mid).strip()
+        thumb_lid = _lid_from_thumb(row[3] if len(row) > 3 else "")
+        lid = thumb_lid or (
+            f"{display_mid}-{version}" if display_mid and version else display_mid
+        )
+        if not lid:
+            continue
+        mid = _mid_from_nfo(lid, "" if thumb_lid else display_mid)
+        title = str(row[2] or display_mid or lid).strip()
         author = str(row[8] or "").strip()
         ts = str(row[6] or row[9] or "").strip()
         catsub = _to_int(row[20])
@@ -198,29 +221,12 @@ def _merge_page_and_nfo(page: Pico8Favourite, nfo: Pico8Favourite) -> Pico8Favou
     )
 
 
-def _download_cart(session: requests.Session, lid: str) -> bytes:
-    urls = [
-        f"{CARTS_BASE}/{lid}.p8.png",
-        f"{LEXALOFFLE_BASE}/bbs/cposts/{lid[:2]}/{lid}.p8.png",
-    ]
-    last_error: Exception | None = None
-    for url in urls:
-        try:
-            resp = session.get(url, timeout=HTTP_TIMEOUT)
-            resp.raise_for_status()
-            if resp.content:
-                return resp.content
-        except Exception as e:
-            last_error = e
-    if last_error is not None:
-        raise last_error
-    raise ValueError("empty cart response")
-
-
 def _favourites_txt(favourites: list[Pico8Favourite]) -> bytes:
+    # Native columns: lid | mid | catsub | author | timestamp | title.
+    # Splore uses the last field as the cart name.
     lines = [
         "|%-20s |%-20s |%-6d |%-16s |%-20s |%s\n"
-        % (fav.lid, fav.mid, fav.catsub, fav.author, fav.title, fav.ts)
+        % (fav.lid, fav.mid, fav.catsub, fav.author, fav.ts, fav.title)
         for fav in favourites
     ]
     return "".join(lines).encode("utf-8")
@@ -236,6 +242,8 @@ def sync_pico8_favourites(
         return Pico8SyncResult(False, message="missing PICO-8 key")
 
     root = Path(appdata_dir) if appdata_dir is not None else _default_appdata_dir()
+    started = time.monotonic()
+    _log.info("pico8 sync: consolidating favourites into %s", root)
     session = requests.Session()
     try:
         login = session.get(
@@ -246,7 +254,13 @@ def sync_pico8_favourites(
         login.raise_for_status()
         uid = str(session.cookies.get("s_uid") or "").strip()
         if not uid:
+            _log.warning("pico8 sync: login missing s_uid after %.2fs", time.monotonic() - started)
             return Pico8SyncResult(False, message="missing s_uid login cookie")
+        _log.info(
+            "pico8 sync: logged in uid=%s elapsed=%.2fs",
+            uid,
+            time.monotonic() - started,
+        )
 
         favs_resp = session.get(
             f"{LEXALOFFLE_BASE}/bbs/",
@@ -255,26 +269,82 @@ def sync_pico8_favourites(
         )
         favs_resp.raise_for_status()
         parsed = parse_favourites_from_html(favs_resp.text)
+        _log.info(
+            "pico8 sync: parsed %d favourites from BBS elapsed=%.2fs",
+            len(parsed),
+            time.monotonic() - started,
+        )
 
         favourites: list[Pico8Favourite] = []
-        for parsed_fav in parsed:
-            try:
-                nfo = _fetch_nfo(session, parsed_fav.pid or parsed_fav.lid)
-                if nfo is None:
-                    _log.warning("pico8 sync: missing nfo for lid=%s", parsed_fav.lid)
-                    continue
-                favourite = _merge_page_and_nfo(parsed_fav, nfo)
-                content = _download_cart(session, nfo.lid)
-                cart_path = root / "bbs" / "carts" / f"{nfo.lid}.p8.png"
-                mirror_path = root / "bbs" / nfo.lid[:2] / f"{nfo.lid}.p8.png"
-                _atomic_write(cart_path, content)
-                _atomic_write(mirror_path, content)
+        total = len(parsed)
+        nfo_needed = 0
+        for index, parsed_fav in enumerate(parsed, start=1):
+            if _is_cart_lid(parsed_fav.lid):
+                favourite = parsed_fav
+                if not favourite.mid:
+                    favourite = Pico8Favourite(
+                        lid=parsed_fav.lid,
+                        mid=_mid_from_nfo(parsed_fav.lid, parsed_fav.mid),
+                        title=parsed_fav.title,
+                        author=parsed_fav.author,
+                        ts=parsed_fav.ts,
+                        catsub=parsed_fav.catsub,
+                        pid=parsed_fav.pid,
+                    )
                 favourites.append(favourite)
+                continue
+            nfo_needed += 1
+            lookup = parsed_fav.pid or parsed_fav.lid
+            nfo_started = time.monotonic()
+            _log.info(
+                "pico8 sync: metadata lookup %d/%d pid=%s title=%s",
+                index,
+                total,
+                lookup,
+                parsed_fav.title,
+            )
+            try:
+                nfo = _fetch_nfo(session, lookup)
+                if nfo is None:
+                    _log.warning(
+                        "pico8 sync: missing metadata %d/%d lookup=%s title=%s elapsed=%.2fs",
+                        index,
+                        total,
+                        lookup,
+                        parsed_fav.title,
+                        time.monotonic() - nfo_started,
+                    )
+                    continue
+                favourites.append(_merge_page_and_nfo(parsed_fav, nfo))
             except Exception as e:
-                _log.warning("pico8 sync: failed to sync favourite lid=%s: %s", parsed_fav.lid, e)
+                _log.warning(
+                    "pico8 sync: failed metadata %d/%d lookup=%s title=%s elapsed=%.2fs: %s",
+                    index,
+                    total,
+                    lookup,
+                    parsed_fav.title,
+                    time.monotonic() - nfo_started,
+                    e,
+                )
+        if nfo_needed:
+            _log.info(
+                "pico8 sync: used BBS thumbs for %d/%d carts; metadata lookups=%d",
+                total - nfo_needed,
+                total,
+                nfo_needed,
+            )
 
         _atomic_write(root / "favourites.txt", _favourites_txt(favourites))
-        return Pico8SyncResult(len(favourites) == len(parsed), cart_count=len(favourites))
+        result = Pico8SyncResult(len(favourites) == len(parsed), cart_count=len(favourites))
+        _log.info(
+            "pico8 sync: wrote %d/%d favourites ok=%s elapsed=%.2fs path=%s",
+            result.cart_count,
+            total,
+            result.ok,
+            time.monotonic() - started,
+            root / "favourites.txt",
+        )
+        return result
     except Exception as e:
-        _log.warning("pico8 sync: failed: %s", e)
+        _log.warning("pico8 sync: failed after %.2fs: %s", time.monotonic() - started, e)
         return Pico8SyncResult(False, message=str(e))
