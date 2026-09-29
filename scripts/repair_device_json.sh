@@ -28,6 +28,18 @@ copy_device_json() {
     local src="$1"
     local dst="$2"
     local label="$3"
+    if python3 - "${dst}" <<'PY'
+import os
+import sys
+
+raise SystemExit(
+    0 if os.path.realpath(sys.argv[1]) == os.path.realpath("/boot/serial.txt") else 1
+)
+PY
+    then
+        echo "Warning: refusing to overwrite /boot/serial.txt"
+        return 1
+    fi
     local parent
     parent="$(dirname "${dst}")"
 
@@ -42,6 +54,25 @@ copy_device_json() {
     "${INSTALL_CMD_PARTS[@]}" -m 0644 "${src}" "${dst}"
 }
 
+reconcile_work_device_identity() {
+    local python_bin="${REPO_DIR}/.venv/bin/python"
+    [ -f "${REPO_DIR}/runtime/device_json_identity.py" ] || return 0
+    [ -f "${WORK_DEVICE_JSON}" ] || return 0
+    [ -x "${python_bin}" ] || python_bin="python3"
+
+    if ! PYTHONPATH="${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}" \
+        "${python_bin}" - "${WORK_DEVICE_JSON}" <<'PY'
+import sys
+
+from runtime.device_json_identity import reconcile_device_json_identity
+
+reconcile_device_json_identity(sys.argv[1])
+PY
+    then
+        echo "Warning: could not reconcile local device identity in ${WORK_DEVICE_JSON}"
+    fi
+}
+
 BOOT_DEVICE_JSON_VALID=0
 WORK_DEVICE_JSON_VALID=0
 device_json_is_valid "${BOOT_DEVICE_JSON}" && BOOT_DEVICE_JSON_VALID=1
@@ -51,10 +82,12 @@ if [ "${BOOT_DEVICE_JSON_VALID}" -eq 1 ] && [ "${WORK_DEVICE_JSON_VALID}" -eq 1 
     echo "device.json present at ${BOOT_DEVICE_JSON} and ${WORK_DEVICE_JSON}"
 elif [ "${WORK_DEVICE_JSON_VALID}" -eq 1 ]; then
     echo "Restoring missing boot device.json from ${WORK_DEVICE_JSON}"
-    copy_device_json "${WORK_DEVICE_JSON}" "${BOOT_DEVICE_JSON}" "boot device.json"
+    copy_device_json "${WORK_DEVICE_JSON}" "${BOOT_DEVICE_JSON}" "boot device.json" || exit $?
 elif [ "${BOOT_DEVICE_JSON_VALID}" -eq 1 ]; then
     echo "Restoring missing runtime device.json from ${BOOT_DEVICE_JSON}"
-    copy_device_json "${BOOT_DEVICE_JSON}" "${WORK_DEVICE_JSON}" "runtime device.json"
+    copy_device_json "${BOOT_DEVICE_JSON}" "${WORK_DEVICE_JSON}" "runtime device.json" || exit $?
 else
     echo "Warning: device.json missing or invalid in both locations: ${BOOT_DEVICE_JSON}, ${WORK_DEVICE_JSON}"
 fi
+
+reconcile_work_device_identity

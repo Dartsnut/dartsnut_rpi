@@ -15,6 +15,7 @@ from runtime.pixeldarts_hardware import (
     resolve_pixeldarts_hardware_version,
 )
 from runtime.remote_sync_port import get_remote_sync
+from runtime import device_json_identity
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 
@@ -71,10 +72,24 @@ def read_json_file(file_path):
         )
 
 
+def _is_identity_authority_path(path):
+    resolved = os.path.realpath(path)
+    return resolved in {
+        os.path.realpath(os.path.join(os.getcwd(), "device.json")),
+        os.path.realpath(device_json_identity.BOOT_SERIAL_FILE),
+    }
+
 def write_json_file(file_path, data):
     try:
         file_path = _normalize_relative_path(file_path)
         full_save_path = _apps_path(file_path)
+        if _is_identity_authority_path(full_save_path):
+            return handle_exception(
+                "write_json",
+                PermissionError(full_save_path),
+                "Refusing to overwrite identity authority",
+                file_path=file_path,
+            )
 
         # Decode the data with base64 before writing
         if isinstance(data, str):

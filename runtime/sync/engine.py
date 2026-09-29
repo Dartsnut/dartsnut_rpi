@@ -6,6 +6,7 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 from domain.app_context import AppContext
+from runtime.remote_device_config import is_valid_games_list
 from runtime.api_token_store import preserve_remote_user_token
 from runtime.sync.event_applier import apply_events
 from runtime.sync.outbox import SyncOutbox
@@ -41,6 +42,10 @@ class SyncEngine:
         is_first_after_connect: bool = False,
     ) -> bool:
         if not isinstance(payload, dict):
+            return False
+
+        if "games" in payload and not is_valid_games_list(payload.get("games")):
+            _log.warning("sync engine: ignoring malformed games payload")
             return False
 
         preserve_remote_user_token(payload.get("user"))

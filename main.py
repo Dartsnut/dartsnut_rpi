@@ -71,6 +71,7 @@ from runtime.remote_device_config import (
     RemoteDeviceConfigApplier,
     RemoteDeviceConfigDependencies,
 )
+from runtime import device_json_identity
 from runtime.remote_sync_port import (
     create_default_remote_sync,
     get_remote_sync,
@@ -811,6 +812,17 @@ def check_connection_loop():
         time.sleep(10)
 
 
+def _reconcile_identity_with_remote(sync) -> None:
+    try:
+        local_info = get_device_info() or {}
+        _local_info, identity_patch = device_json_identity.reconcile_local_identity_patch(
+            local_info
+        )
+        if identity_patch and sync.is_connected():
+            sync.publish_partial_state({"device_info": identity_patch})
+    except Exception as e:
+        _log.warning("identity: periodic reconciliation failed: %s", e)
+
 def network_state_remote_loop():
     """
     Poll current IP/SSID every 30s and only push changed values to remote sync.
@@ -828,7 +840,9 @@ def network_state_remote_loop():
                 last_published_ssid = None
                 _network_state_refresh_event.clear()
 
-            if not _is_reset_in_progress() and get_remote_sync().is_connected():
+            sync = get_remote_sync()
+            _reconcile_identity_with_remote(sync)
+            if not _is_reset_in_progress() and sync.is_connected():
                 updates = {}
 
                 normalized_ip = machine_api.normalize_ip(machine_api.get_ip_address())
@@ -848,7 +862,7 @@ def network_state_remote_loop():
                     updates["ssid"] = payload_ssid
 
                 if updates:
-                    get_remote_sync().publish_partial_state(updates)
+                    sync.publish_partial_state(updates)
                     if "ip_address" in updates:
                         last_published_ip = payload_ip
                     if "ssid" in updates:

@@ -18,9 +18,9 @@ from runtime.pixeldarts_hardware import (
     resolve_pixeldarts_hardware_version,
 )
 from runtime.brightness import normalize_inbound_brightness
+from runtime import device_json_identity
 from runtime.sync.engine import SyncEngine
 from runtime.sync.outbox import SyncOutbox
-from runtime.sync.reducer import ReducedGameReady
 
 SOCKET_PATH = "/tmp/dartsnut-supabase-sync.sock"
 _DEFAULT_BRIDGE_BIN = os.path.join(
@@ -292,6 +292,17 @@ def _sanitize_device_info_patch(value: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
     out = {k: value[k] for k in _FIRMWARE_WRITABLE_DEVICE_INFO if k in value}
+    if "id" in out:
+        ble_mac = device_json_identity.resolve_ble_mac()
+        out["id"] = ble_mac or device_json_identity.normalize_device_id(out["id"])
+        if not out["id"]:
+            out.pop("id", None)
+    if "sn" in out:
+        serial = device_json_identity.load_boot_serial()
+        if serial is None:
+            out.pop("sn", None)
+        else:
+            out["sn"] = serial
     if "model" in out:
         out["model"] = resolve_device_model()
     return out or None
@@ -507,16 +518,6 @@ def _current_remote_games_by_id() -> Optional[Dict[str, Dict[str, Any]]]:
         return {k: dict(v) for k, v in _remote_games_by_id.items()}
 
 
-def _normalize_device_id(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parts = raw.split(":")
-    if len(parts) == 6 and all(
-        len(p) == 2 and all(c in "0123456789abcdefABCDEF" for c in p) for p in parts
-    ):
-        return ":".join(p.upper() for p in parts)
-    return raw
 
 
 _EMBEDDED_IMAGE_INLINE_MAX_LEN = 500
@@ -631,10 +632,11 @@ def _sanitize_apps_conf_pages_for_supabase_sync() -> tuple[list[Any], int]:
 
 def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     _sanitize_apps_conf_pages_for_supabase_sync()
-    brightness_raw = device_info.get("brightness")
-    volume_raw = device_info.get("volume")
+    canonical_info = device_json_identity.canonicalize_identity(device_info)
+    brightness_raw = canonical_info.get("brightness")
+    volume_raw = canonical_info.get("volume")
     try:
-        brightness = normalize_inbound_brightness(brightness_raw, device_info)[0]
+        brightness = normalize_inbound_brightness(brightness_raw, canonical_info)[0]
     except (TypeError, ValueError):
         brightness = 5
     try:
@@ -642,33 +644,33 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         volume = 0
 
-    resolved_device_id = _normalize_device_id(
-        device_info.get("id")
-        or device_info.get("ble_mac")
-        or device_info.get("mac_address")
-    )
+    resolved_device_id = device_json_identity.normalize_device_id(
+        canonical_info.get("id")
+    ) or str(canonical_info.get("id") or "").strip()
     dim_window = {
-        "dim_window_enabled": bool(device_info.get("dim_window_enabled", False)),
-        "dim_window_start": device_info.get("dim_window_start", ""),
-        "dim_window_end": device_info.get("dim_window_end", ""),
-        "dim_level": device_info.get("dim_level", 0),
-        "dim_restore_seconds": device_info.get("dim_restore_seconds", 0),
+        "dim_window_enabled": bool(canonical_info.get("dim_window_enabled", False)),
+        "dim_window_start": canonical_info.get("dim_window_start", ""),
+        "dim_window_end": canonical_info.get("dim_window_end", ""),
+        "dim_level": canonical_info.get("dim_level", 0),
+        "dim_restore_seconds": canonical_info.get("dim_restore_seconds", 0),
     }
     hardware_version = resolve_pixeldarts_hardware_version()
     if not hardware_version:
-        hardware_version = str(device_info.get("hardware_version", "")).strip().lower()
+        hardware_version = str(canonical_info.get("hardware_version", "")).strip().lower()
 
     device_meta = {
         "id": resolved_device_id,
-        "sn": device_info.get("serial", ""),
         "model": resolve_device_model(),
-        "name": device_info.get("name", ""),
+        "name": canonical_info.get("name", ""),
     }
+    serial = device_json_identity.load_boot_serial()
+    if serial is not None:
+        device_meta["sn"] = serial
     if hardware_version:
         device_meta["hardware_version"] = hardware_version
     firmware = {
-        "version": device_info.get("firmware_version", ""),
-        "update": bool(device_info.get("firmware_update", False)),
+        "version": canonical_info.get("firmware_version", ""),
+        "update": bool(canonical_info.get("firmware_update", False)),
     }
 
     pages = []
@@ -691,7 +693,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
 
         games = get_games_summary()
     except Exception:
-        games = device_info.get("games", [])
+        games = canonical_info.get("games", [])
     if games is None or not isinstance(games, list):
         games = []
 
@@ -701,7 +703,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
         "games": games,
         "dim_window": dim_window,
         "pages": pages,
-        "device_updated_at": device_info.get("updated_at", "") or "",
+        "device_updated_at": canonical_info.get("updated_at", "") or "",
         "pages_updated_at": pages_updated_at,
         "device_info": device_meta,
         "firmware": firmware,
@@ -712,7 +714,7 @@ def _build_initial_state(device_info: Dict[str, Any]) -> Dict[str, Any]:
             "last_scan_at": "",
         },
     }
-    raw_ip = str(device_info.get("ip_address", "")).strip()
+    raw_ip = str(canonical_info.get("ip_address", "")).strip()
     if raw_ip and raw_ip != "0.0.0.0":
         state["ip_address"] = raw_ip
     return state
@@ -734,13 +736,7 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     if not str(merged.get("last_update_source", "")).strip():
         merged["last_update_source"] = "supabase_bridge"
 
-    local_device: Dict[str, Any] = {}
-    try:
-        device_path = os.path.join(os.getcwd(), "device.json")
-        with open(device_path, "r", encoding="utf-8") as f:
-            local_device = json.load(f)
-    except Exception:
-        local_device = {}
+    local_device = device_json_identity.reconcile_device_json_identity()
 
     local_pages_conf: Dict[str, Any] = {}
     try:
@@ -777,6 +773,10 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
                 if key == "device_info":
                     local_info = _sanitize_device_info_patch(local_initial.get(key))
                     if local_info:
+                        # Keep remote identity visible so the inbound applier can
+                        # repair both sides instead of hiding a mismatch here.
+                        local_info.pop("id", None)
+                        local_info.pop("sn", None)
                         existing_info = merged.get("device_info")
                         if not isinstance(existing_info, dict):
                             existing_info = {}
@@ -784,7 +784,6 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     merged[key] = local_initial[key]
         merged["device_updated_at"] = local_device.get("updated_at", "") or ""
-
     use_local_pages = False
     if local_pages_ts and remote_pages_ts:
         use_local_pages = local_pages_ts > remote_pages_ts
@@ -798,10 +797,6 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
         if key in merged and (merged[key] is None or not isinstance(merged[key], list)):
             merged[key] = []
 
-    local_info = local_initial.get("device_info") if isinstance(local_initial, dict) else {}
-    local_info_id = ""
-    if isinstance(local_info, dict):
-        local_info_id = str(local_info.get("id", "") or "").strip()
 
     merged_info = merged.get("device_info")
     if not isinstance(merged_info, dict):
@@ -809,8 +804,6 @@ def _merge_remote_and_local(remote: Dict[str, Any]) -> Dict[str, Any]:
     else:
         merged_info = dict(merged_info)
     merged_info["model"] = resolve_device_model()
-    if local_info_id and not str(merged_info.get("id", "") or "").strip():
-        merged_info["id"] = local_info_id
     merged["device_info"] = merged_info
     return merged
 
@@ -1235,6 +1228,16 @@ def ensure_supabase_sync_running(
             return
         socket_path = os.environ.get("DARTSNUT_SUPABASE_SOCKET", SOCKET_PATH)
         initial_state = _build_initial_state(device_info)
+        device_meta = initial_state.get("device_info")
+        local_serial = (
+            str(device_meta.get("sn") or "").strip()
+            if isinstance(device_meta, dict)
+            else ""
+        )
+        if local_serial:
+            launch_env["DARTSNUT_SUPABASE_LOCAL_SERIAL"] = local_serial
+        else:
+            launch_env.pop("DARTSNUT_SUPABASE_LOCAL_SERIAL", None)
         _client = _SyncClient(
             socket_path,
             reload_config,

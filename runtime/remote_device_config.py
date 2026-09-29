@@ -16,8 +16,10 @@ from typing import Any, Callable, Dict, List, Optional
 from domain.app_context import AppContext
 from domain.game_remote_sync import handle_incoming_game_status
 from core.app_env import app_venv_setup_failed
+from game_lifecycle import GameRemovedError
 from core.app_metadata import resolve_app_metadata
 from runtime.brightness import normalize_inbound_brightness
+from runtime import device_json_identity
 
 _log = logging.getLogger(__name__)
 
@@ -93,6 +95,16 @@ def normalize_games_list(config: dict) -> list:
     """Return config games as a list; missing/null/non-list becomes []."""
     games = config.get("games") if isinstance(config, dict) else None
     return games if isinstance(games, list) else []
+
+
+def is_valid_games_list(value: Any) -> bool:
+    """Return True only for an authoritative list of identified games."""
+    if not isinstance(value, list):
+        return False
+    return all(
+        isinstance(game, dict) and bool(str(game.get("id") or "").strip())
+        for game in value
+    )
 
 
 def games_settlement_patch_entries(games_cfg: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -402,6 +414,29 @@ class RemoteDeviceConfigApplier:
     def runtime(self) -> RemoteConfigRuntimeState:
         return self._runtime
 
+    @staticmethod
+    def _is_removed_game_error(error: Any) -> bool:
+        return isinstance(error, GameRemovedError)
+
+    def _remove_backend_missing_game(self, game_id: str) -> bool:
+        gid = str(game_id or "").strip()
+        if not gid:
+            return False
+        try:
+            self._deps.publish_partial_state(
+                {"games": [{"id": gid, "status": "removed"}]}
+            )
+        except Exception as e:
+            _log.error(
+                "remote config: failed to remove backend-missing game_id=%s: %s",
+                gid,
+                e,
+            )
+            return False
+        _log.info("remote config: removed backend-missing game_id=%s", gid)
+        return True
+
+
     def _reconcile_local_game_folders(self, games_cfg: list[dict[str, Any]]) -> None:
         """Make local installed game folders match remote game membership."""
         try:
@@ -529,20 +564,23 @@ class RemoteDeviceConfigApplier:
                 rt.remote_downloading_game_ids.discard(gid)
                 deps.app_ctx.reload_game_menu = True
 
-            def on_failure(gid: str, error: str) -> None:
-                _log.warning(
-                    "remote config: reconcile download failed game_id=%s error=%s",
-                    gid,
-                    error,
-                )
-                try:
-                    deps.request_set_game_status(gid, "error")
-                except Exception as e:
+            def on_failure(gid: str, error: Any) -> None:
+                if self._is_removed_game_error(error):
+                    self._remove_backend_missing_game(gid)
+                else:
                     _log.warning(
-                        "remote config: reconcile error publish failed game_id=%s: %s",
+                        "remote config: reconcile download failed game_id=%s error=%s",
                         gid,
-                        e,
+                        error,
                     )
+                    try:
+                        deps.request_set_game_status(gid, "error")
+                    except Exception as e:
+                        _log.warning(
+                            "remote config: reconcile error publish failed game_id=%s: %s",
+                            gid,
+                            e,
+                        )
                 rt.remote_downloading_game_ids.discard(gid)
 
             started = download_game_async(
@@ -662,12 +700,15 @@ class RemoteDeviceConfigApplier:
                     rt.remote_downloading_game_ids.discard(game_id)
                     self._deps.app_ctx.reload_game_menu = True
 
-                def on_failure(game_id: str, error: str) -> None:
-                    _log.warning(
-                        "remote config: startup recovery failed game_id=%s error=%s (will retry)",
-                        game_id,
-                        error,
-                    )
+                def on_failure(game_id: str, error: Any) -> None:
+                    if self._is_removed_game_error(error):
+                        self._remove_backend_missing_game(game_id)
+                    else:
+                        _log.warning(
+                            "remote config: startup recovery failed game_id=%s error=%s (will retry)",
+                            game_id,
+                            error,
+                        )
                     rt.remote_downloading_game_ids.discard(game_id)
 
                 return on_success, on_failure
@@ -732,6 +773,19 @@ class RemoteDeviceConfigApplier:
         if not isinstance(config, dict):
             return
 
+        try:
+            local_info = device_json_identity.reconcile_device_json_identity()
+            ble_mac = device_json_identity.resolve_ble_mac(local_info)
+            remote_info = config.get("device_info")
+            if not isinstance(remote_info, dict):
+                remote_info = {}
+            identity_patch = device_json_identity.remote_identity_patch(
+                remote_info, ble_mac=ble_mac
+            )
+            if identity_patch:
+                self._deps.publish_partial_state({"device_info": identity_patch})
+        except Exception as e:
+            _log.warning("remote config: identity reconciliation failed: %s", e)
         _log.debug(
             "remote config: apply snapshot source=%s pages=%s games=%s firmware_update=%s",
             str(config.get("last_update_source", "") or "").strip() or "?",
@@ -756,13 +810,17 @@ class RemoteDeviceConfigApplier:
             deps.on_reset_confirmed()
 
         skip_game_commands = False
+        games_payload_valid = "games" not in config or is_valid_games_list(config.get("games"))
+        if not games_payload_valid:
+            _log.warning("remote config: ignoring malformed games payload")
+            skip_game_commands = True
         skip_games_dedupe = should_skip_duplicate_remote_snapshot(rt, config)
         if skip_games_dedupe:
             _log.debug(
                 "remote config: skip duplicate bridge snapshot within %.1fs",
                 _DUPLICATE_SNAPSHOT_WINDOW_SECONDS,
             )
-        if rt.awaiting_games_ready_confirmation:
+        if rt.awaiting_games_ready_confirmation and games_payload_valid:
             games_cfg = normalize_games_list(config)
             self._apply_menu_ready_from_games(ctx, games_cfg)
             self._run_startup_game_settlement(games_cfg, cfg_ts)
@@ -974,6 +1032,8 @@ class RemoteDeviceConfigApplier:
 
             if "games" not in config:
                 games_cfg = []
+            elif not games_payload_valid:
+                games_cfg = []
             else:
                 games_cfg = normalize_games_list(config)
                 self._reconcile_local_game_folders(games_cfg)
@@ -987,12 +1047,13 @@ class RemoteDeviceConfigApplier:
                 for g in games_cfg
                 if isinstance(g, dict) and g.get("id") is not None
             }
-            for removed_game_id in tuple(rt.remote_downloading_game_ids - incoming_ids):
-                try:
-                    deps.cancel_game_download(removed_game_id)
-                except Exception:
-                    pass
-                rt.remote_downloading_game_ids.discard(removed_game_id)
+            if games_payload_valid:
+                for removed_game_id in tuple(rt.remote_downloading_game_ids - incoming_ids):
+                    try:
+                        deps.cancel_game_download(removed_game_id)
+                    except Exception:
+                        pass
+                    rt.remote_downloading_game_ids.discard(removed_game_id)
 
             if skip_game_commands or skip_games_dedupe:
                 pass
@@ -1072,6 +1133,20 @@ class RemoteDeviceConfigApplier:
                                 e,
                             )
 
+                    def _ensure_game_downloaded(gid: str, version: str) -> bool:
+                        try:
+                            return deps.ensure_game_downloaded(gid, version)
+                        except GameRemovedError as e:
+                            _log.warning(
+                                "remote config: synchronous download rejected game_id=%s error=%s",
+                                gid,
+                                e,
+                            )
+                            self._remove_backend_missing_game(gid)
+                            rt.remote_downloading_game_ids.discard(gid)
+                            return False
+
+
                     def _request_launch(gid: str) -> None:
                         if _current_game_id() != gid:
                             record_remote_playing_accepted(rt, gid, cfg_ts)
@@ -1108,13 +1183,16 @@ class RemoteDeviceConfigApplier:
                             _set_status(gid, "ready")
                             rt.remote_downloading_game_ids.discard(gid)
 
-                        def _on_download_fail(gid: str, error: str) -> None:
-                            _log.warning(
-                                "remote config: inbound download failed game_id=%s error=%s",
-                                gid,
-                                error,
-                            )
-                            _set_status(gid, "error")
+                        def _on_download_fail(gid: str, error: Any) -> None:
+                            if self._is_removed_game_error(error):
+                                self._remove_backend_missing_game(gid)
+                            else:
+                                _log.warning(
+                                    "remote config: inbound download failed game_id=%s error=%s",
+                                    gid,
+                                    error,
+                                )
+                                _set_status(gid, "error")
                             rt.remote_downloading_game_ids.discard(gid)
 
                         rt.remote_downloading_game_ids.add(game_id)
@@ -1142,7 +1220,7 @@ class RemoteDeviceConfigApplier:
                         expected_version=expected_version,
                         current_game_id=_current_game_id(),
                         game_exists=_game_exists,
-                        ensure_game_downloaded=deps.ensure_game_downloaded,
+                        ensure_game_downloaded=_ensure_game_downloaded,
                         set_game_status=_set_status,
                         request_launch=_request_launch,
                         terminate_running_game=_terminate_running_game,

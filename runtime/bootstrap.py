@@ -18,89 +18,49 @@ _log = logging.getLogger(__name__)
 _UDP_BROADCAST_THREAD_ENABLED = False
 
 
-def _normalize_device_id(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parts = raw.split(":")
-    if len(parts) == 6 and all(len(p) == 2 and all(c in "0123456789abcdefABCDEF" for c in p) for p in parts):
-        return ":".join(p.upper() for p in parts)
-    return raw
-
-
-def _has_identity_fields(device_info: Dict[str, Any]) -> bool:
-    if not isinstance(device_info, dict):
-        return False
-    serial = str(device_info.get("serial", "")).strip()
-    model = str(device_info.get("model", "")).strip()
-    return bool(serial and model)
-
-
 def _ensure_device_info_id(device_info: Dict[str, Any]) -> Dict[str, Any]:
     info = dict(device_info or {})
-    existing_id = _normalize_device_id(info.get("id"))
-    resolved = existing_id or _normalize_device_id(
-        info.get("ble_mac") or info.get("mac_address")
-    )
-    if not resolved:
-        try:
-            from bluezero import adapter  # type: ignore
-
-            adapters = list(adapter.Adapter.available())
-            if adapters:
-                resolved = _normalize_device_id(adapters[0].address)
-        except Exception:
-            resolved = ""
-    if not resolved:
-        return info
-
-    info["id"] = resolved
-
+    path = os.path.join(os.getcwd(), "device.json")
+    can_persist, _ = device_json_identity._read_local_device_json(path)
     try:
-        path = os.path.join(os.getcwd(), "device.json")
-        persisted: Dict[str, Any] = {}
-        if os.path.isfile(path):
-            with open(path, "r", encoding="utf-8") as f:
-                persisted = json.load(f) or {}
-
-        if not _has_identity_fields(persisted):
-            boot_identity = device_json_identity.load_boot_device_identity()
-            if boot_identity:
-                persisted = dict(persisted)
-                for key in ("serial", "model"):
-                    val = str(boot_identity.get(key, "")).strip()
-                    if val:
-                        persisted[key] = val
-                for key in ("serial", "model"):
-                    if not str(info.get(key, "")).strip() and str(
-                        persisted.get(key, "")
-                    ).strip():
-                        info[key] = persisted[key]
-
-        persisted = dict(persisted or {})
-        info = dict(info)
-        persisted["id"] = resolved
-        for key in ("serial", "model"):
-            if not str(persisted.get(key, "")).strip():
-                incoming = str(info.get(key, "")).strip()
-                if incoming:
-                    persisted[key] = incoming
-
-        persisted = device_json_identity.apply_factory_serial_if_needed(
-            persisted, device_id=resolved
+        persisted = device_json_identity.reconcile_device_json_identity(
+            path, device_info=info
         )
-        info = device_json_identity.apply_factory_serial_if_needed(
-            info, device_id=resolved
-        )
-        for key in ("serial", "model"):
-            if not str(info.get(key, "")).strip() and str(persisted.get(key, "")).strip():
-                info[key] = persisted[key]
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(persisted, f)
+    except Exception as e:
+        _log.warning("Could not reconcile local device identity: %s", e)
+        persisted = {}
+
+    ble_mac = device_json_identity.resolve_ble_mac({**persisted, **info})
+    known_id = ble_mac or device_json_identity.normalize_device_id(info.get("id"))
+    if not known_id:
+        known_id = device_json_identity.normalize_device_id(persisted.get("id"))
+    if known_id:
+        info["id"] = known_id
+        persisted["id"] = known_id
+
+    serial = device_json_identity.load_boot_serial()
+    if serial is not None:
+        info["serial"] = serial
+        persisted["serial"] = serial
+
+    boot_model = str(
+        device_json_identity.load_boot_device_identity().get("model", "")
+    ).strip()
+    if not str(info.get("model", "")).strip():
+        info["model"] = str(persisted.get("model", "") or boot_model).strip()
+    if not str(persisted.get("model", "")).strip() and str(info.get("model", "")).strip():
+        persisted["model"] = info["model"]
+
+    if can_persist and persisted and (known_id or serial is not None or "model" in info):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(persisted, f)
+        except Exception:
+            pass
+    try:
         device_json_identity.verify_and_repair_device_json(path)
-    except Exception:
-        pass
-
+    except Exception as e:
+        _log.warning("Could not verify local device identity: %s", e)
     return info
 
 

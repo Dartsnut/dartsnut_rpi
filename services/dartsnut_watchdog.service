@@ -1,6 +1,7 @@
 [Unit]
 Description=Dartsnut Supabase Watchdog
-After=network.target
+After=bluetooth.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

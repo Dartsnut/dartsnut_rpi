@@ -66,40 +66,47 @@ class MachineStateService:
     @classmethod
     def _write_device_info(cls, device_info: Dict[str, Any]) -> None:
         path = cls._device_json_path()
-        # Preserve immutable identity fields from disk and never introduce them
-        # through generic mutation paths.
         try:
             persisted = cls._read_device_info()
-        except Exception:
-            persisted = {}
-
-        try:
             device_info = dict(device_info or {})
-            boot_identity = device_json_identity.load_boot_device_identity()
-            for key in ("serial", "model"):
-                persisted_value = str((persisted or {}).get(key, "")).strip()
-                if not persisted_value:
-                    persisted_value = str((boot_identity or {}).get(key, "")).strip()
-                if persisted_value:
-                    device_info[key] = persisted_value
+            for key in ("id", "serial", "model"):
+                if key not in device_info and str(persisted.get(key, "")).strip():
+                    device_info[key] = persisted[key]
+
+            ble_mac = device_json_identity.resolve_ble_mac(
+                {**persisted, **device_info}
+            )
+            device_info = device_json_identity.canonicalize_identity(
+                device_info, ble_mac=ble_mac
+            )
+            boot_serial = device_json_identity.load_boot_serial()
+            if boot_serial is None:
+                persisted_serial = str(persisted.get("serial", "")).strip()
+                if persisted_serial:
+                    device_info["serial"] = persisted_serial
                 else:
-                    device_info.pop(key, None)
+                    device_info.pop("serial", None)
+
+            boot_identity = device_json_identity.load_boot_device_identity()
+            persisted_model = str(persisted.get("model", "")).strip()
+            boot_model = str((boot_identity or {}).get("model", "")).strip()
+            if persisted_model:
+                device_info["model"] = persisted_model
+            elif boot_model:
+                device_info["model"] = boot_model
+            else:
+                device_info.pop("model", None)
+
             # Always update the device-level timestamp whenever we persist.
             device_info["updated_at"] = datetime.now(timezone.utc).isoformat()
-        except Exception:
-            # If timestamping fails for any reason, fall back to raw write.
-            pass
+        except Exception as e:
+            _log.error("Error normalizing device identity before write: %s", e)
+            return
+
         try:
             with open(path, "w") as f:
                 json.dump(device_info, f)
-            # Only reconcile identity when disk or boot already defines it; otherwise
-            # incidental brightness/volume writes must not inject serial/model.
-            if any(
-                str((persisted or {}).get(key, "")).strip()
-                or str((boot_identity or {}).get(key, "")).strip()
-                for key in ("serial", "model")
-            ):
-                device_json_identity.verify_and_repair_device_json(path)
+            device_json_identity.verify_and_repair_device_json(path)
         except Exception as e:
             _log.error("Error writing device.json: %s", e)
 

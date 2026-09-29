@@ -33,10 +33,36 @@ from pico8_sync import sync_pico8_favourites
 import assets
 from PIL import Image
 
-_log = logging.getLogger(__name__)
-
 from preview_cache import PreviewCache
 from validation_worker import ValidationWorker, FETCH_MISSING, VALIDATE_EXPIRED
+
+_log = logging.getLogger(__name__)
+
+
+_REMOVED_GAME_RESPONSE_CODE = "1001"
+_GAME_REMOVAL_RESPONSE_REASONS = ("private", "removed")
+
+
+class GameRemovedError(RuntimeError):
+    """The backend no longer has the requested game."""
+
+    def __init__(self, game_id: str, response_code: object = "") -> None:
+        self.game_id = str(game_id)
+        self.response_code = str(response_code or "")
+        suffix = f" code={self.response_code}" if self.response_code else ""
+        super().__init__(f"Backend game removed game_id={self.game_id}{suffix}")
+
+
+def _is_removed_game_response(payload: object) -> bool:
+    """Return True for API payloads that require removing the game."""
+    return (
+        isinstance(payload, dict)
+        and str(payload.get("code") or "") == _REMOVED_GAME_RESPONSE_CODE
+        and payload.get("data") is None
+        and str(payload.get("reason") or "").strip().lower()
+        in _GAME_REMOVAL_RESPONSE_REASONS
+    )
+
 
 _preview_cache: "PreviewCache | None" = None
 _validation_worker: "ValidationWorker | None" = None
@@ -423,19 +449,33 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
             local_version or "(empty)",
             expected_version,
         )
+    api_headers = build_api_headers()
     try:
         response = retry_with_backoff(
             lambda: requests.get(
                 "https://api.dartsnut.com/v1/mobile/game/get-download-info",
                 params={"id": gameid, "version": expected_version},
-                headers=build_api_headers(),
+                headers=api_headers,
                 timeout=(5, 30),
             ),
             succeeded=lambda r: getattr(r, "status_code", None) == 200,
             label=f"get-download-info {gameid}",
         )
+        response_payload = None
+        if response is not None:
+            try:
+                response_payload = response.json()
+            except (AttributeError, TypeError, ValueError):
+                response_payload = None
+        # Without a token the API returns the same empty payload for every ID;
+        # only authenticated empty responses explicitly reasoned as removable
+        # identify a backend-removed game.
+        if api_headers.get("Token") and _is_removed_game_response(response_payload):
+            raise GameRemovedError(gameid, response_payload.get("code"))
         if response is not None and response.status_code == 200:
-            data = response.json().get("data")
+            if not isinstance(response_payload, dict):
+                raise ValueError("Invalid download info response")
+            data = response_payload.get("data")
             if data:
                 metadata = _game_metadata_from_download_info(gameid, data)
                 backend_id = metadata.get("id") or gameid
@@ -467,6 +507,8 @@ def ensure_game_downloaded(gameid: str, remote_version: str = "") -> bool:
                 getattr(response, "status_code", "n/a"),
             )
             return False
+    except GameRemovedError:
+        raise
     except Exception as e:
         _log.error("Error fetching game download info for %s: %s", gameid, e)
         return False
@@ -492,7 +534,7 @@ def download_game_async(
         game_id: Game identifier
         expected_version: Target version to download
         on_success: Callback(game_id) called after successful download
-        on_failure: Callback(game_id, error_msg) called on failure
+        on_failure: Callback(game_id, error) called on failure; backend removal uses GameRemovedError
 
     Returns:
         True if background download was started, False if already in progress
@@ -536,10 +578,19 @@ def download_game_async(
                             e,
                         )
         except Exception as e:
-            _log.error("game: background download error game_id=%s: %s", game_id, e)
+            if isinstance(e, GameRemovedError):
+                _log.warning(
+                    "game: background download rejected game_id=%s error=%s",
+                    game_id,
+                    e,
+                )
+                failure = e
+            else:
+                _log.error("game: background download error game_id=%s: %s", game_id, e)
+                failure = str(e)
             if on_failure is not None:
                 try:
-                    on_failure(game_id, str(e))
+                    on_failure(game_id, failure)
                 except Exception:
                     pass
         finally:
