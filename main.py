@@ -10,7 +10,7 @@ import os
 import subprocess
 import threading
 import time
-import urllib.request
+from network_utils import is_internet_reachable
 
 # Optional legacy startup path: Python can still start matrix service explicitly.
 # Default is disabled so matrix ownership/timing lives in systemd boot sequence.
@@ -751,14 +751,7 @@ def check_connection_loop():
             _app_ctx.wifi_connected = wifi_check.returncode == 0
             if _app_ctx.wifi_connected:
                 # Prefer HTTP over ping: many networks block or rate-limit ICMP
-                try:
-                    urllib.request.urlopen(
-                        "https://api.github.com",
-                        timeout=5,
-                    )
-                    _app_ctx.internet_connected = True
-                except Exception:
-                    _app_ctx.internet_connected = False
+                _app_ctx.internet_connected = is_internet_reachable()
             else:
                 _app_ctx.internet_connected = False
 
@@ -823,14 +816,31 @@ def _reconcile_identity_with_remote(sync) -> None:
     except Exception as e:
         _log.warning("identity: periodic reconciliation failed: %s", e)
 
+
+RSSI_DEADBAND_DBM = 5
+
+
+def _rssi_change_exceeds_deadband(rssi, last_published_rssi) -> bool:
+    """Publish RSSI on first sight and whenever it moves by the deadband."""
+    if rssi is None:
+        return False
+    if last_published_rssi is None:
+        return True
+    return abs(rssi - last_published_rssi) >= RSSI_DEADBAND_DBM
+
+
 def network_state_remote_loop():
     """
-    Poll current IP/SSID every 30s and only push changed values to remote sync.
+    Poll current IP/SSID/RSSI every 30s and only push changed values to remote sync.
     Cache tracks successfully-published values so we resend after bridge restarts.
+    RSSI is a noisy dBm reading, so it publishes only once it moves by
+    RSSI_DEADBAND_DBM; the bridge's own 60s idle heartbeat already sets the
+    floor on writes to this row.
     """
     poll_interval_seconds = 30
     last_published_ip = None
     last_published_ssid = None
+    last_published_rssi = None
 
     while True:
         try:
@@ -838,6 +848,7 @@ def network_state_remote_loop():
                 # Force next publish after startup/reconnect, even if values are unchanged.
                 last_published_ip = None
                 last_published_ssid = None
+                last_published_rssi = None
                 _network_state_refresh_event.clear()
 
             sync = get_remote_sync()
@@ -861,12 +872,18 @@ def network_state_remote_loop():
                 if payload_ssid != last_published_ssid:
                     updates["ssid"] = payload_ssid
 
+                payload_rssi = machine_api.get_wifi_rssi_cached()
+                if _rssi_change_exceeds_deadband(payload_rssi, last_published_rssi):
+                    updates["rssi"] = str(payload_rssi)
+
                 if updates:
                     sync.publish_partial_state(updates)
                     if "ip_address" in updates:
                         last_published_ip = payload_ip
                     if "ssid" in updates:
                         last_published_ssid = payload_ssid
+                    if "rssi" in updates:
+                        last_published_rssi = payload_rssi
         except Exception as e:
             _log.warning("Error in network sync poller: %s", e)
 

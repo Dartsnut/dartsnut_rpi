@@ -61,6 +61,7 @@ _published_game_status_lock = threading.Lock()
 _FIRMWARE_WRITABLE_TOP_LEVEL = frozenset(
     {
         "ssid",
+        "rssi",
         "ip_address",
         "device_updated_at",
         "pages",
@@ -1205,19 +1206,22 @@ def ensure_supabase_sync_running(
 ) -> None:
     global _client, _bridge_proc, _remote_game_ids, _sync_engine, _on_game_ready
     _on_game_ready = on_game_ready
-    _sync_engine = SyncEngine(
-        on_apply_config=on_config_updated,
-        merge_on_first_connect=_merge_remote_and_local,
-        normalize_config=_normalize_config_payload,
-        remember_remote_game_ids=_remember_remote_game_ids,
-    )
     with _bridge_lock:
+        if _bridge_proc is not None and _bridge_proc.poll() is None:
+            # A live bridge is already wired to the engine that owns its outbox
+            # (_SyncClient builds the outbox and attaches it there). Replacing
+            # _sync_engine here would leave the global pointing at an engine with
+            # no outbox, whose publish_partial() drops every patch silently.
+            return
+        _sync_engine = SyncEngine(
+            on_apply_config=on_config_updated,
+            merge_on_first_connect=_merge_remote_and_local,
+            normalize_config=_normalize_config_payload,
+            remember_remote_game_ids=_remember_remote_game_ids,
+        )
         with _remote_game_ids_lock:
             global _remote_games_by_id
             _remote_game_ids = None
-            _remote_games_by_id = None
-        if _bridge_proc is not None and _bridge_proc.poll() is None:
-            return
         launch_env = os.environ.copy()
         launch_env.update(_load_supabase_env_overrides())
         executable_path = os.environ.get("DARTSNUT_SUPABASE_BRIDGE", _DEFAULT_BRIDGE_BIN)

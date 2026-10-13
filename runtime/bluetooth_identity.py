@@ -28,14 +28,22 @@ def build_bluetooth_local_name(
 
 
 def get_bluetooth_adapter_address() -> Optional[str]:
-    """Return the first Bluezero adapter address, or None when unavailable."""
-    try:
-        from bluezero import adapter  # type: ignore
+    """Return the first BlueZ adapter address, or None when unavailable.
 
-        adapters = list(adapter.Adapter.available())
-        if adapters:
-            address = str(adapters[0].address).strip()
-            return address or None
+    Reads BlueZ ObjectManager state directly. Constructing
+    ``bluezero.adapter.Adapter`` (including via ``Adapter.available()``)
+    registers three D-Bus signal receivers per instance that are never
+    removed, so per-call construction leaks receivers and makes every
+    later ObjectManager/Properties signal progressively slower to dispatch.
+    """
+    try:
+        from bluezero import constants, dbus_tools  # type: ignore
+
+        for obj in dbus_tools.get_managed_objects().values():
+            props = obj.get(constants.ADAPTER_INTERFACE)
+            if props:
+                address = str(props.get("Address", "")).strip()
+                return address or None
     except Exception:
         pass
     return None

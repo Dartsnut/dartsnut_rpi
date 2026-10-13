@@ -47,6 +47,12 @@ def connect_saved_wifi(profile: str):
     return wifi.connect_saved_wifi(profile)
 
 
+def get_wifi_rssi_cached():
+    wifi = importlib.import_module("python_websocket.wifi_operations")
+
+    return wifi.get_wifi_rssi_cached()
+
+
 def forget_saved_wifi(profile: str):
     wifi = importlib.import_module("python_websocket.wifi_operations")
 

@@ -13,7 +13,7 @@ _log = logging.getLogger(__name__)
 
 _DEFAULT_BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 _SCALAR_COALESCE_KEYS = frozenset(
-    {"volume", "brightness", "ssid", "ip_address", "device_updated_at"}
+    {"volume", "brightness", "ssid", "ip_address", "rssi", "device_updated_at"}
 )
 
 

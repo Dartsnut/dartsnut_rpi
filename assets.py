@@ -116,7 +116,6 @@ widget_icon = Image.open(_img("widget_icon.png"))
 lock_widget_icon = Image.open(_img("lock_widget_icon.png"))
 wifi_disconnect_icon = Image.open(_img("wifi_disconnect_icon.png"))
 wifi_icon = Image.open(_img("wifi.png"))
-internet_disconnect_icon = Image.open(_img("internet_disconnect_icon.png"))
 game_select_image = Image.open(_img("game_sel.png"))
 
 # Fonts

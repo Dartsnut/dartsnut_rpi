@@ -3,6 +3,41 @@ from __future__ import annotations
 
 import subprocess
 from typing import Any
+import re
+import time
+
+RSSI_MIN_INTERVAL = 5
+_IWCONFIG_SIGNAL_RE = re.compile(r"Signal level=(-\d+)")
+_last_rssi = None
+_last_rssi_time = 0.0
+
+
+def read_wifi_rssi() -> int | None:
+    """Read the associated Wi-Fi RSSI in dBm, or ``None`` when unavailable."""
+    try:
+        result = subprocess.run(
+            ["iwconfig", "wlan0"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = _IWCONFIG_SIGNAL_RE.search(result.stdout or "")
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def get_wifi_rssi_cached() -> int | None:
+    """Return current RSSI (dBm) or ``None`` if not connected. Rate-limited."""
+    global _last_rssi, _last_rssi_time
+    now = time.time()
+    if now - _last_rssi_time < RSSI_MIN_INTERVAL:
+        return _last_rssi
+    _last_rssi = read_wifi_rssi()
+    _last_rssi_time = now
+    return _last_rssi
 
 
 def _split_nmcli_terse_line(line: str) -> list[str]:

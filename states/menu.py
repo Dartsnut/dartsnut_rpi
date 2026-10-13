@@ -6,7 +6,6 @@ from PIL import Image, ImageDraw
 from domain.app_context import AppContext
 from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
-from states.settings import should_show_bridge_disconnect_icon
 
 
 def _check_firmware_updated_flag() -> bool:
@@ -88,13 +87,6 @@ class MenuState(BaseState):
                     assets.wifi_disconnect_icon,
                     (117, 0),
                     assets.wifi_disconnect_icon.convert("RGBA"),
-                )
-        elif should_show_bridge_disconnect_icon(ctx):
-            if (time.time() % 2) < 1:
-                menu_image.paste(
-                    assets.internet_disconnect_icon,
-                    (117, 0),
-                    assets.internet_disconnect_icon.convert("RGBA"),
                 )
         ctx.display.update_frame_buffer(menu_image)
 

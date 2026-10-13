@@ -9,7 +9,6 @@ from core.helpers import signal_process_group
 from domain.app_context import AppContext
 from runtime.pixeldarts_hardware import is_pixelboard_device
 from states.base import BaseState
-from states.settings import should_show_bridge_disconnect_icon
 from widget_lifecycle import (
     check_page_widget_updates,
     flush_deferred_widget_processes_on_leave_widget_mode,
@@ -162,13 +161,6 @@ class WidgetState(BaseState):
                     assets.wifi_disconnect_icon,
                     (117, 0),
                     assets.wifi_disconnect_icon.convert("RGBA"),
-                )
-        elif should_show_bridge_disconnect_icon(ctx):
-            if (time.time() % 2) < 1:
-                widget_img.paste(
-                    assets.internet_disconnect_icon,
-                    (117, 0),
-                    assets.internet_disconnect_icon.convert("RGBA"),
                 )
         ctx.display.update_frame_buffer(widget_img)
 

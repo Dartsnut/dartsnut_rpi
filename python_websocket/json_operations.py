@@ -16,6 +16,7 @@ from runtime.pixeldarts_hardware import (
 )
 from runtime.remote_sync_port import get_remote_sync
 from runtime import device_json_identity
+from runtime.bluetooth_identity import get_bluetooth_adapter_address
 
 APPS_DIR = "apps"  # Update this to your desired save directory
 
@@ -135,17 +136,11 @@ def get_device_info():
         with open(os.path.join(os.getcwd(), "device.json"), "r") as file:
             device_info = json.load(file)
 
-        # Get the BLE MAC address of the device using the same adapter-based
-        # approach as python_ble (no sysfs fallback, to keep behavior consistent).
-        try:
-            from bluezero import adapter  # type: ignore
-
-            adapters = list(adapter.Adapter.available())
-            if adapters:
-                ble_mac = adapters[0].address
-                device_info["mac_address"] = ble_mac
-        except Exception:
-            pass
+        # Same adapter lookup the BLE server uses, so the reported MAC matches
+        # the advertised identity.
+        ble_mac = get_bluetooth_adapter_address()
+        if ble_mac:
+            device_info["mac_address"] = ble_mac
 
         # Get the wifi ssid of the current connection
         ssid = ""

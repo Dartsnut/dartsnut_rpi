@@ -1,7 +1,6 @@
 """Settings state: device info, controls, Bluetooth QR, and reset."""
 import json
 import os
-import re
 import subprocess
 import time
 from PIL import Image, ImageDraw
@@ -15,6 +14,7 @@ from runtime.bluetooth_identity import (
 from runtime.bluetooth_qr import (
     create_connection_qr_surface as _create_connection_qr_surface,
 )
+import runtime.machine_api as machine_api
 from runtime.remote_sync_port import get_remote_sync
 from states.base import BaseState
 from runtime.brightness import (
@@ -36,35 +36,7 @@ except ImportError:
     def get_supabase_rest_probe_ok():
         return False
 
-# Rate limit WiFi RSSI: refresh every ~5 seconds
-RSSI_MIN_INTERVAL = 5
 SUPABASE_LATENCY_WARN_MS = 600
-_last_rssi = None
-_last_rssi_time = 0.0
-
-
-def _get_wifi_rssi_cached():
-    """Return current WiFi RSSI (int dBm) or None if not connected. Rate-limited to 2/min."""
-    global _last_rssi, _last_rssi_time
-    now = time.time()
-    if now - _last_rssi_time < RSSI_MIN_INTERVAL:
-        return _last_rssi
-    try:
-        result = subprocess.run(
-            ["iwconfig", "wlan0"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        match = re.search(r"Signal level=(-\d+)", result.stdout)
-        if match:
-            _last_rssi = int(match.group(1))
-        else:
-            _last_rssi = None
-    except Exception:
-        _last_rssi = None
-    _last_rssi_time = now
-    return _last_rssi
 
 
 def _rssi_to_color(rssi):
@@ -106,16 +78,8 @@ def _bridge_active_wifi_icon_color(ctx):
 def _settings_wifi_icon_color(ctx):
     if get_remote_sync().is_bridge_active():
         return _bridge_active_wifi_icon_color(ctx)
-    return _rssi_to_color(_get_wifi_rssi_cached())
+    return _rssi_to_color(machine_api.get_wifi_rssi_cached())
 
-
-def should_show_bridge_disconnect_icon(ctx) -> bool:
-    """True when Supabase bridge is on and cloud health matches settings red WiFi."""
-    if not get_remote_sync().is_bridge_active():
-        return False
-    if not ctx.wifi_connected:
-        return False
-    return _bridge_active_wifi_icon_color(ctx) == (255, 0, 0)
 
 
 def _tint_icon_rgba(icon_rgba, color):

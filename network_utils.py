@@ -1,4 +1,16 @@
 import subprocess
+import urllib.request
+
+
+INTERNET_REACHABILITY_URL = "https://www.gstatic.com/generate_204"
+
+
+def is_internet_reachable(timeout: float = 5.0) -> bool:
+    try:
+        with urllib.request.urlopen(INTERNET_REACHABILITY_URL, timeout=timeout):
+            return True
+    except Exception:
+        return False
 
 
 def get_primary_ipv4(interface: str = "wlan0", fallback: str = "0.0.0.0") -> str:
