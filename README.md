@@ -13,7 +13,8 @@ the [Dartsnut docs](https://dartsnut.github.io/docs/).
 - `main.py` is the device entry point. It starts the display loop, local input
   handling, Bluetooth/BLE services, WebSocket control, and remote sync plumbing.
 - `runtime/` contains bootstrapping, hardware adapters, display-loop support,
-  WebSocket action routing, reset flows, and remote device configuration sync.
+  WebSocket action routing, the remote device reset request, and remote device
+  configuration sync.
 - `states/` contains the on-device UI states for menus, settings, widgets, and
   games.
 - `domain/` and `core/` contain shared runtime models, helpers, retry utilities,

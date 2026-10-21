@@ -62,12 +62,6 @@ class FirmwareUpdateRequested:
     firmware: Dict[str, Any]
 
 
-@dataclass(frozen=True)
-class ResetConfirmed:
-    meta: SyncEventMeta
-    config: Dict[str, Any]
-
-
 SyncEvent = (
     FullSnapshot
     | PagesChanged
@@ -76,7 +70,6 @@ SyncEvent = (
     | BluetoothChanged
     | DeviceSettingsChanged
     | FirmwareUpdateRequested
-    | ResetConfirmed
 )
 
 

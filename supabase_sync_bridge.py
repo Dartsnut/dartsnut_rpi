@@ -834,7 +834,10 @@ class _SyncClient:
         ) -> bool:
             return self.send_rpc_patch(ref, patch, full=full, source=source)
 
-        outbox = SyncOutbox(_outbox_send)
+        def _outbox_send_reset(ref: str) -> bool:
+            return self.send_reset(ref)
+
+        outbox = SyncOutbox(_outbox_send, reset_send_fn=_outbox_send_reset)
         outbox.start()
         sync_engine.attach_outbox(outbox)
         self._outbox = outbox
@@ -982,6 +985,32 @@ class _SyncClient:
         source_value = str(source or "").strip()
         if source_value:
             message["source"] = source_value
+        line = (json.dumps(message) + "\n").encode("utf-8")
+        with self._conn_lock:
+            conn = self._conn
+        if conn is None:
+            return False
+        try:
+            conn.sendall(line)
+            return True
+        except Exception:
+            return False
+
+    def send_reset(self, ref: str) -> bool:
+        """Write a reset frame to the bridge.
+
+        A separate method rather than another `legacy_kind`: the bridge derives
+        the device id from its own configuration, so this frame carries no
+        payload at all and never passes through the patch path or its field
+        sanitizer.
+        """
+        message: Dict[str, Any] = {
+            "kind": "reset_device",
+            "ref": ref,
+            "payload": {},
+            "full": False,
+            "user_id": _current_presence_user_id(),
+        }
         line = (json.dumps(message) + "\n").encode("utf-8")
         with self._conn_lock:
             conn = self._conn
@@ -1167,35 +1196,32 @@ def request_set_all_games_ready() -> None:
         pass
 
 
-def request_device_reset_state() -> None:
-    timestamp = datetime.now(timezone.utc).isoformat()
-    local_info: Dict[str, Any] = {}
-    try:
-        local_info = _build_initial_state(_load_device_json()).get("device_info", {})
-    except Exception:
-        local_info = {}
+def request_device_reset() -> str:
+    """Ask the bridge to reset this device; returns the outbox ref.
 
-    publish_device_state_update(
-        {
-            "ip_address": "",
-            "ssid": "",
-            "pages": [],
-            "games": [],
-            "brightness": 9,
-            "volume": 100,
-            "dim_window": {
-                "dim_window_enabled": False,
-                "dim_window_start": "22:00",
-                "dim_window_end": "8:00",
-                "dim_level": 10,
-                "dim_restore_seconds": 5,
-            },
-            "device_info": local_info,
-            "device_updated_at": timestamp,
-            "pages_updated_at": timestamp,
-        },
-        source="supabase_bridge_init",
-    )
+    The reset is a command, not a state patch: the bridge calls
+    `reset_remote_device` with the device id it already knows, so nothing in this
+    call can carry a caller-supplied game list, a source tag, or a full-state
+    flag. Returns "" when there is no engine/outbox to queue the call on — the
+    caller observes the outcome through the returned ref.
+    """
+    engine = _sync_engine
+    if engine is None:
+        return ""
+    return engine.publish_reset()
+
+
+def reset_ref_status(ref: str) -> Optional[str]:
+    """Transport outcome of a ref handed back by `request_device_reset`.
+
+    OUTCOME_PENDING until the bridge reports a result, then OUTCOME_ACKED or
+    OUTCOME_ERROR; None when there is no engine to ask or the ref is unknown to
+    it. Non-blocking: the caller polls this rather than waiting on a thread.
+    """
+    engine = _sync_engine
+    if engine is None:
+        return None
+    return engine.ref_status(ref)
 
 
 def ensure_supabase_sync_running(

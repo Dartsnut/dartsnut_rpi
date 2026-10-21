@@ -9,7 +9,7 @@ from domain.app_context import AppContext
 from runtime.remote_device_config import is_valid_games_list
 from runtime.api_token_store import preserve_remote_user_token
 from runtime.sync.event_applier import apply_events
-from runtime.sync.outbox import SyncOutbox
+from runtime.sync.outbox import KIND_PATCH, KIND_RESET, SyncOutbox
 from runtime.sync.reducer import ReducedGameReady, SyncReducer
 from runtime.sync.tokenizer import tokenize_snapshot
 
@@ -80,26 +80,55 @@ class SyncEngine:
         patch: Dict[str, Any],
         *,
         source: Optional[str] = None,
-    ) -> bool:
+    ) -> str:
+        """Queue a partial state patch; returns its outbox ref.
+
+        The ref is "" when the patch was dropped (no outbox attached, empty
+        patch) or absorbed into an earlier pending entry by scalar coalescing, so
+        it is falsy exactly where the old boolean return was False or where there
+        is no distinct write left to observe.
+        """
         if not isinstance(patch, dict) or not patch:
-            return False
+            return ""
         if self.outbox is not None:
-            self.outbox.enqueue(patch, source=source)
-            return True
-        return False
+            return self.outbox.enqueue(patch, source=source, kind=KIND_PATCH)
+        return ""
 
     def publish_full(
         self,
         patch: Dict[str, Any],
         *,
         source: Optional[str] = None,
-    ) -> bool:
+    ) -> str:
+        """Queue a full-state patch; returns its outbox ref ("" when dropped)."""
         if not isinstance(patch, dict) or not patch:
-            return False
+            return ""
         if self.outbox is not None:
-            self.outbox.enqueue(patch, full=True, source=source)
-            return True
-        return False
+            return self.outbox.enqueue(patch, full=True, source=source, kind=KIND_PATCH)
+        return ""
+
+    def publish_reset(self) -> str:
+        """Queue a device reset; returns its outbox ref ("" when dropped).
+
+        A reset is not a state patch: the bridge derives everything it sends (the
+        device id) from its own configuration, so no caller-supplied payload
+        reaches the wire and the firmware field sanitizer never sees this call.
+        """
+        if self.outbox is None:
+            return ""
+        return self.outbox.enqueue({}, source=None, kind=KIND_RESET)
+
+    def ref_status(self, ref: str) -> Optional[str]:
+        """Transport outcome of a queued ref, or None when nothing can answer.
+
+        OUTCOME_PENDING until the transport reports anything, then OUTCOME_ACKED
+        or OUTCOME_ERROR. "" and a ref this engine never queued both read as
+        None: there is no outbox attached, or no such write, so no caller can
+        watch it.
+        """
+        if self.outbox is None:
+            return None
+        return self.outbox.ref_status(ref)
 
     def _dispatch(
         self,

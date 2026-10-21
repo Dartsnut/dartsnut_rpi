@@ -11,7 +11,7 @@ device UI. A future optional implementation can mirror publishes over WebSocket 
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
 
 try:
     import supabase_sync_bridge as _ssb
@@ -22,6 +22,7 @@ except ImportError:
     _SUPABASE_AVAILABLE = False
 
 
+@runtime_checkable
 class RemoteSyncPort(Protocol):
     """Outbound device state + inbound config registration for remote sync."""
 
@@ -31,7 +32,9 @@ class RemoteSyncPort(Protocol):
 
     def request_set_all_games_ready(self) -> None: ...
 
-    def request_device_reset_state(self) -> None: ...
+    def request_device_reset(self) -> str: ...
+
+    def ref_status(self, ref: str) -> Optional[str]: ...
 
     def is_connected(self) -> bool: ...
 
@@ -72,7 +75,13 @@ class NoOpRemoteSync:
     def request_set_all_games_ready(self) -> None:
         return None
 
-    def request_device_reset_state(self) -> None:
+    def request_device_reset(self) -> str:
+        # No transport, so no ref to observe: an empty ref is the no-op's
+        # equivalent of "nothing was queued".
+        return ""
+
+    def ref_status(self, ref: str) -> Optional[str]:
+        # Nothing was ever queued here, so nothing can have an outcome.
         return None
 
     def is_connected(self) -> bool:
@@ -120,8 +129,11 @@ class SupabaseRemoteSync:
     def request_set_all_games_ready(self) -> None:
         _ssb.request_set_all_games_ready()
 
-    def request_device_reset_state(self) -> None:
-        _ssb.request_device_reset_state()
+    def request_device_reset(self) -> str:
+        return _ssb.request_device_reset()
+
+    def ref_status(self, ref: str) -> Optional[str]:
+        return _ssb.reset_ref_status(ref)
 
     def is_connected(self) -> bool:
         return _ssb.is_supabase_connected()

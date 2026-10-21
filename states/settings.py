@@ -1,5 +1,6 @@
 """Settings state: device info, controls, Bluetooth QR, and reset."""
 import json
+import logging
 import os
 import subprocess
 import time
@@ -16,6 +17,7 @@ from runtime.bluetooth_qr import (
 )
 import runtime.machine_api as machine_api
 from runtime.remote_sync_port import get_remote_sync
+from runtime.sync.outcomes import OUTCOME_ACKED, OUTCOME_ERROR
 from states.base import BaseState
 from runtime.brightness import (
     clamp_brightness_level,
@@ -35,6 +37,8 @@ except ImportError:
 
     def get_supabase_rest_probe_ok():
         return False
+
+_log = logging.getLogger(__name__)
 
 SUPABASE_LATENCY_WARN_MS = 600
 
@@ -134,30 +138,43 @@ SETTINGS_ITEMS = [
     {"name": "Name", "type": "info"},
     {"name": "IP", "type": "info"},
     {"name": "Version", "type": "info"},
-    {"name": "Volumn", "type": "value"},
-    {"name": "Display", "type": "action"},
-    {"name": "Connectivity", "type": "action"},
-    {"name": "Reset device", "type": "action"},
-]
-
-DISPLAY_ITEMS = [
+    {"name": "Volume", "type": "value"},
     {"name": "Brightness", "type": "value"},
-    {"name": "Calibration", "type": "action"},
+    {"name": "Connection", "type": "action"},
+    {"name": "System", "type": "action"},
 ]
 
-CONNECTIVITY_ITEMS = [
-    {"name": "Connect to App", "type": "action"},
+CONNECTIONS_ITEMS = [
+    {"name": "App Connection", "type": "action"},
     {"name": "Controllers", "type": "action"},
     {"name": "WiFi", "type": "action"},
 ]
 
-SETTINGS_LIST_MAX_HEIGHT = 128
-SETTINGS_NUM_ROWS = 7
-SETTINGS_ITEM_HEIGHT = SETTINGS_LIST_MAX_HEIGHT // SETTINGS_NUM_ROWS
-SETTINGS_FIRST_SELECTABLE_INDEX = 3
-SETTINGS_DISPLAY_INDEX = 4
-SETTINGS_CONNECTIVITY_INDEX = 5
-SETTINGS_RESET_DEVICE_INDEX = 6
+MAINTENANCE_ITEMS = [
+    {"name": "Calibration", "type": "action"},
+    {"name": "Reset device", "type": "action"},
+]
+
+SETTINGS_ITEM_HEIGHT = 18
+SETTINGS_INFO_TTL_SECONDS = 2.0
+SETTINGS_NAME_INDEX = 0
+SETTINGS_IP_INDEX = 1
+SETTINGS_VERSION_INDEX = 2
+SETTINGS_VOLUME_INDEX = 3
+SETTINGS_BRIGHTNESS_INDEX = 4
+SETTINGS_CONNECTIONS_INDEX = 5
+SETTINGS_MAINTENANCE_INDEX = 6
+SETTINGS_INFO_INDEXES = frozenset(
+    (SETTINGS_NAME_INDEX, SETTINGS_IP_INDEX, SETTINGS_VERSION_INDEX)
+)
+# The info rows are read-only, so selection starts at Volume.
+SETTINGS_FIRST_SELECTABLE_INDEX = SETTINGS_VOLUME_INDEX
+SETTINGS_LAST_SELECTABLE_INDEX = len(SETTINGS_ITEMS) - 1
+SETTINGS_MAINTENANCE_CALIBRATION_INDEX = 0
+SETTINGS_MAINTENANCE_RESET_INDEX = 1
+CONNECTIONS_APP_INDEX = 0
+CONNECTIONS_CONTROLLERS_INDEX = 1
+CONNECTIONS_WIFI_INDEX = 2
 CONTROLLER_VISIBLE_ROWS = 7
 WIFI_VISIBLE_ROWS = 7
 WIFI_PASSWORD_LENGTH = 63
@@ -184,11 +201,11 @@ WIFI_SIGNAL_COLORS = {
 }
 
 _PAGE_SETTINGS = "settings"
-_PAGE_DISPLAY = "display"
-_PAGE_CONNECTIVITY = "connectivity"
+_PAGE_CONNECTIONS = "connections"
 _PAGE_CONTROLLERS = "controllers"
 _PAGE_WIFI = "wifi"
 _PAGE_WIFI_PASSWORD = "wifi_password"
+_PAGE_MAINTENANCE = "maintenance"
 _OVERLAY_BLUETOOTH_QR = "bluetooth_qr"
 _OVERLAY_RESET_CONFIRM = "reset_confirm"
 _OVERLAY_WIFI_FORGET_CONFIRM = "wifi_forget_confirm"
@@ -204,6 +221,19 @@ def _draw_settings_label(draw, x, y, label, fill, font):
             current_x += 4
         draw.text((current_x, y), word, fill=fill, font=font)
         current_x += len(word) * 6
+
+
+
+def _truncate_to_width(draw, text, font, max_width):
+    """Trim `text` with a trailing ellipsis until it fits `max_width` pixels."""
+    if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+        return text
+    trimmed = text
+    while trimmed and draw.textbbox((0, 0), trimmed + "...", font=font)[2] > max_width:
+        trimmed = trimmed[:-1]
+    # Nothing fits once even the ellipsis is too wide; draw nothing rather
+    # than overflow the row with an 18px "...".
+    return trimmed + "..." if trimmed else ""
 
 
 def _controller_name(name):
@@ -233,15 +263,57 @@ def _controller_marquee_label(name, elapsed, max_chars=18):
     return (cycle * repeats)[offset : offset + max_chars]
 
 
+def _read_release_version():
+    """Release tag on the 'release' branch, otherwise a placeholder version."""
+    try:
+        branch = (
+            subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            .stdout.strip()
+        )
+        if branch == "release":
+            return (
+                subprocess.run(
+                    ["git", "describe", "--tags", "--abbrev=0"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                .stdout.strip()
+            )
+    except Exception:
+        pass
+    return "v100.0.0"
+
+
+def _read_device_name():
+    """Read device.json['name'] fresh; a remote rename can change it at any time."""
+    try:
+        device_path = os.path.join(os.getcwd(), "device.json")
+        with open(device_path, "r", encoding="utf-8") as f:
+            device_data = json.load(f)
+        return device_data.get("name", "-") or "-"
+    except Exception:
+        return "-"
+
+
+
 class SettingsState(BaseState):
-    """Three-level settings menu with connectivity and controller management."""
+    """Settings root list with nested connections and maintenance pages."""
 
     def __init__(self):
         self._page_mode = _PAGE_SETTINGS
         self._overlay_mode = None
         self._bluetooth_qr_surface = None
         self._bluetooth_qr_key = None
-        self._connectivity_select_index = 0
+        self._info_values_cache = None
+        self._info_values_read_at = 0.0
+        self._maintenance_selected_index = 0
+        self._connections_select_index = 0
         self._controller_selected_key = "scan"
         self._controller_selected_index = 0
         self._controller_scroll_key = None
@@ -257,9 +329,27 @@ class SettingsState(BaseState):
         self._wifi_cursor_index = 0
         self._wifi_character_repeat_direction = 0
         self._wifi_character_repeat_next_at = None
-        self._display_selected_index = 0
         self._calibration = None
         self._calibration_notice = ""
+        self._reset_request_ref = None
+        self._reset_request_failed = False
+
+    def settings_info_values(self):
+        """Return (name, ip, version), re-read at most once per TTL.
+
+        Each read forks `ip` and up to two `git` processes, and the display loop
+        renders at 30 FPS, so caching keeps scrolling from spawning a process per
+        frame. The TTL is short enough that a remote rename still appears while
+        this page is open.
+        """
+        now = time.monotonic()
+        cached, read_at = self._info_values_cache, self._info_values_read_at
+        if cached is not None and now - read_at < SETTINGS_INFO_TTL_SECONDS:
+            return cached
+        values = (_read_device_name(), get_primary_ipv4(), _read_release_version())
+        self._info_values_cache = values
+        self._info_values_read_at = now
+        return values
 
     def name(self) -> str:
         return "settings"
@@ -267,31 +357,36 @@ class SettingsState(BaseState):
     def consumes_btn_b_for_overlay(self, ctx: AppContext) -> bool:
         return self._overlay_mode is not None
 
-    def update(self, ctx: AppContext) -> None:
-        if self._page_mode == _PAGE_DISPLAY:
-            settings_image = self._render_display(ctx)
-        elif self._page_mode == _PAGE_CONNECTIVITY:
-            settings_image = self._render_connectivity(ctx)
-        elif self._page_mode == _PAGE_CONTROLLERS:
-            settings_image = self._render_controllers(ctx)
-        elif self._page_mode == _PAGE_WIFI:
+    def _render_current_page(self, ctx: AppContext):
+        if self._page_mode == _PAGE_CONNECTIONS:
+            return self._render_connections(ctx)
+        if self._page_mode == _PAGE_CONTROLLERS:
+            return self._render_controllers(ctx)
+        if self._page_mode == _PAGE_WIFI:
             self._consume_wifi_connection_result(ctx)
             self._consume_wifi_forget_result(ctx)
-            settings_image = self._render_wifi(ctx)
-        elif self._page_mode == _PAGE_WIFI_PASSWORD:
+            return self._render_wifi(ctx)
+        if self._page_mode == _PAGE_WIFI_PASSWORD:
             self._consume_wifi_connection_result(ctx)
             if self._page_mode == _PAGE_WIFI:
-                settings_image = self._render_wifi(ctx)
-            else:
-                settings_image = self._render_wifi_password(ctx)
-        else:
-            settings_image = self._render_settings(ctx)
+                return self._render_wifi(ctx)
+            return self._render_wifi_password(ctx)
+        if self._page_mode == _PAGE_MAINTENANCE:
+            return self._render_maintenance(ctx)
+        return self._render_settings(ctx)
+
+    def update(self, ctx: AppContext) -> None:
+        settings_image = self._render_current_page(ctx)
 
         if self._overlay_mode == _OVERLAY_BLUETOOTH_QR:
             self._refresh_bluetooth_qr(ctx)
             settings_image = self._render_bluetooth_qr_overlay(ctx, settings_image)
         elif self._overlay_mode == _OVERLAY_RESET_CONFIRM:
-            settings_image = self._render_reset_overlay(ctx, settings_image)
+            self._consume_reset_request_result(ctx)
+            if self._overlay_mode == _OVERLAY_RESET_CONFIRM:
+                settings_image = self._render_reset_overlay(ctx, settings_image)
+            else:
+                settings_image = self._render_current_page(ctx)
         elif self._overlay_mode == _OVERLAY_WIFI_FORGET_CONFIRM:
             settings_image = self._render_wifi_forget_overlay(ctx, settings_image)
         elif self._overlay_mode == _OVERLAY_CALIBRATION_WARNING:
@@ -311,136 +406,83 @@ class SettingsState(BaseState):
         except Exception:
             brightness = 5
             volume = 50
-        ip_address = get_primary_ipv4()
-        try:
-            branch = (
-                subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                .stdout.strip()
-            )
-            if branch == "release":
-                version = (
-                    subprocess.run(
-                        ["git", "describe", "--tags", "--abbrev=0"],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    .stdout.strip()
-                )
-            else:
-                version = "v100.0.0"
-        except Exception:
-            version = "v100.0.0"
-        try:
-            device_path = os.path.join(os.getcwd(), "device.json")
-            with open(device_path, "r", encoding="utf-8") as f:
-                device_data = json.load(f)
-            device_name = device_data.get("name", "-") or "-"
-        except Exception:
-            device_name = "-"
-
-        item_height = SETTINGS_ITEM_HEIGHT
-        text_y_offset = (item_height - 8) // 2
         font8 = ctx.assets.font8
-        wifi_icon = ctx.assets.wifi_icon
+        selected_index = self._selected_root_index(ctx)
         for idx, item in enumerate(SETTINGS_ITEMS):
-            y = idx * item_height
-            ty = y + text_y_offset
-            focused = idx == ctx.setting_select_index
-            text_color = (0, 0, 0) if focused else (255, 255, 255)
-            if focused:
-                draw.rectangle(
-                    (0, y, 127, y + item_height - 1), fill=(255, 255, 255)
+            y = idx * SETTINGS_ITEM_HEIGHT
+            if idx in SETTINGS_INFO_INDEXES:
+                # Read-only rows never take the highlight; they show a value.
+                self._draw_settings_value_row(
+                    settings_image, draw, ctx, idx, item, y
                 )
-            label_x = 2
-            if item["name"] == "IP":
-                color = _settings_wifi_icon_color(ctx)
-                icon_rgba = wifi_icon.convert("RGBA")
-                tinted = _tint_icon_rgba(icon_rgba, color)
-                icon_y = y + (item_height - wifi_icon.size[1]) // 2
-                icon_x = 2 + 12 + 2
-                settings_image.paste(
-                    tinted.convert("RGB"), (icon_x, icon_y), tinted.split()[3]
-                )
-            _draw_settings_label(
-                draw, label_x, ty, item["name"], text_color, font8
+                continue
+            self._draw_row(
+                draw,
+                y,
+                item["name"],
+                idx == selected_index,
+                font8,
             )
-            if item["name"] == "Name":
-                font_6x8 = ctx.assets.font_6x8
-                max_width = 100
-                display_name = device_name
-                if draw.textbbox((0, 0), display_name, font=font_6x8)[2] > max_width:
-                    suffix_text = "..."
-                    while (
-                        display_name
-                        and draw.textbbox(
-                            (0, 0), display_name + suffix_text, font=font_6x8
-                        )[2]
-                        > max_width
-                    ):
-                        display_name = display_name[:-1]
-                    if display_name != device_name:
-                        display_name += suffix_text
-                text_width = draw.textbbox((0, 0), display_name, font=font_6x8)[2]
-                draw.text(
-                    (126 - text_width, ty),
-                    display_name,
-                    fill=text_color,
-                    font=font_6x8,
+            if idx == SETTINGS_BRIGHTNESS_INDEX:
+                self._draw_level_boxes(
+                    draw, y, SETTINGS_ITEM_HEIGHT, 10, brightness
                 )
-            elif item["name"] == "Volumn":
+            elif idx == SETTINGS_VOLUME_INDEX:
                 volume_level = _volume_raw_to_level(volume)
-                self._draw_level_boxes(draw, y, item_height, 10, volume_level)
-            elif item["name"] == "IP":
-                text_width = len(ip_address) * 6
-                draw.text(
-                    (126 - text_width, ty),
-                    ip_address,
-                    fill=text_color,
-                    font=font8,
-                )
-            elif item["name"] == "Version":
-                text_width = len(version) * 6
-                draw.text(
-                    (126 - text_width, ty),
-                    version,
-                    fill=text_color,
-                    font=font8,
+                self._draw_level_boxes(
+                    draw, y, SETTINGS_ITEM_HEIGHT, 10, volume_level
                 )
         self._draw_footer(settings_image, draw, ctx, "SETTINGS")
         return settings_image
 
-    def _render_display(self, ctx):
+    def _draw_settings_value_row(self, image, draw, ctx, idx, item, y):
+        """Draw one read-only info row: label on the left, value on the right."""
+        font8 = ctx.assets.font8
+        ty = y + (SETTINGS_ITEM_HEIGHT - 8) // 2
+        device_name, ip_address, version = self.settings_info_values()
+        _draw_settings_label(draw, 2, ty, item["name"], (255, 255, 255), font8)
+
+        if idx == SETTINGS_IP_INDEX:
+            wifi_icon = ctx.assets.wifi_icon
+            color = _settings_wifi_icon_color(ctx)
+            tinted = _tint_icon_rgba(wifi_icon.convert("RGBA"), color)
+            icon_y = y + (SETTINGS_ITEM_HEIGHT - wifi_icon.size[1]) // 2
+            image.paste(
+                tinted.convert("RGB"), (2 + 12 + 2, icon_y), tinted.split()[3]
+            )
+            value, font = ip_address, font8
+        elif idx == SETTINGS_VERSION_INDEX:
+            value, font = version, font8
+        else:
+            font = ctx.assets.font_6x8
+            value = _truncate_to_width(draw, device_name, font, 100)
+
+        text_width = draw.textbbox((0, 0), value, font=font)[2]
+        draw.text(
+            (126 - text_width, ty),
+            value,
+            fill=(255, 255, 255),
+            font=font,
+        )
+
+    def _render_maintenance(self, ctx):
         image = Image.new("RGB", (128, 160), (0, 0, 0))
         draw = ImageDraw.Draw(image)
         font = ctx.assets.font8
         device_info = ctx.get_device_info() or {}
-        level = clamp_brightness_level(device_info.get("brightness", 5))
         status = self._calibration.status if self._calibration is not None else None
         if status is not None and status.state == "running":
             return Image.new("RGB", (128, 160), (255, 255, 255))
-        for idx, item in enumerate(DISPLAY_ITEMS):
+        for idx, item in enumerate(MAINTENANCE_ITEMS):
             y = idx * SETTINGS_ITEM_HEIGHT
-            focused = idx == self._display_selected_index
-            color = (0, 0, 0) if focused else (255, 255, 255)
-            if focused:
-                draw.rectangle((0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1), fill=(255, 255, 255))
-            _draw_settings_label(
+            color = self._draw_row(
                 draw,
-                2,
-                y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+                y,
                 item["name"],
-                color,
+                idx == self._maintenance_selected_index,
                 font,
             )
-            if item["name"] == "Brightness":
-                self._draw_level_boxes(draw, y, SETTINGS_ITEM_HEIGHT, 10, level)
-            elif item["name"] == "Calibration":
+            if item["name"] == "Calibration":
                 calibration = load_calibration_state(device_info)
                 label = "DONE" if calibration else "START"
                 text_width = draw.textbbox((0, 0), label, font=font)[2]
@@ -450,9 +492,12 @@ class SettingsState(BaseState):
                     fill=color,
                     font=font,
                 )
+        # Below two 18px rows of list, above the footer band.
         if self._calibration_notice:
-            draw.text((2, 76), self._calibration_notice[:20], fill=(255, 160, 0), font=font)
-        self._draw_footer(image, draw, ctx, "DISPLAY")
+            self._draw_centered_settings_label(
+                draw, 56, self._calibration_notice[:20], (255, 160, 0), font
+            )
+        self._draw_footer(image, draw, ctx, "SYSTEM")
         return image
 
     def _render_calibration_warning(self, ctx, background):
@@ -464,7 +509,7 @@ class SettingsState(BaseState):
         # Hardware notice: one strong band, then short centered instructions.
         draw.rectangle((0, 0, 127, 18), fill=accent)
         self._draw_centered_settings_label(
-            draw, 5, "DISPLAY CALIBRATION", (0, 0, 0), font
+            draw, 5, "SCREEN CALIBRATION", (0, 0, 0), font
         )
         draw.polygon(((64, 25), (54, 45), (74, 45)), fill=accent)
         draw.rectangle((63, 31, 64, 38), fill=(0, 0, 0))
@@ -482,7 +527,7 @@ class SettingsState(BaseState):
         self._draw_centered_settings_label(
             draw, 120, "A START   B BACK", (180, 180, 180), font
         )
-        self._draw_footer(image, draw, ctx, "DISPLAY")
+        self._draw_footer(image, draw, ctx, "SYSTEM")
         return image
 
     def _render_calibration_success(self, ctx, background):
@@ -493,7 +538,7 @@ class SettingsState(BaseState):
 
         draw.rectangle((0, 0, 127, 18), fill=accent)
         self._draw_centered_settings_label(
-            draw, 5, "DISPLAY CALIBRATION", (0, 0, 0), font
+            draw, 5, "SCREEN CALIBRATION", (0, 0, 0), font
         )
 
         draw.ellipse((50, 25, 78, 53), outline=accent, width=2)
@@ -511,7 +556,7 @@ class SettingsState(BaseState):
         self._draw_centered_settings_label(
             draw, 120, "A MAIN MENU", (180, 180, 180), font
         )
-        self._draw_footer(image, draw, ctx, "DISPLAY")
+        self._draw_footer(image, draw, ctx, "SYSTEM")
         return image
 
     @staticmethod
@@ -546,42 +591,39 @@ class SettingsState(BaseState):
         )
         self._calibration.start(prior_raw)
 
-    def _handle_display_input(self, ctx, buttons):
+    def _handle_maintenance_input(self, ctx, buttons):
         status = self._calibration.status if self._calibration is not None else None
         if status is not None and status.state == "running":
             if buttons.get("btn_b") or buttons.get("btn_home"):
                 self._calibration.cancel()
             return
         if buttons.get("btn_a"):
-            if self._display_selected_index == 1:
+            if self._maintenance_selected_index == SETTINGS_MAINTENANCE_CALIBRATION_INDEX:
                 self._overlay_mode = _OVERLAY_CALIBRATION_WARNING
+            elif self._maintenance_selected_index == SETTINGS_MAINTENANCE_RESET_INDEX:
+                self._close_reset_overlay()
+                self._overlay_mode = _OVERLAY_RESET_CONFIRM
             return
         if buttons.get("btn_up"):
-            self._display_selected_index = max(0, self._display_selected_index - 1)
+            self._maintenance_selected_index = max(
+                0, self._maintenance_selected_index - 1
+            )
         elif buttons.get("btn_down"):
-            self._display_selected_index = min(len(DISPLAY_ITEMS) - 1, self._display_selected_index + 1)
-        elif buttons.get("btn_left") or buttons.get("btn_right"):
-            if self._display_selected_index != 0:
-                return
-            info = ctx.get_device_info() or {}
-            current = clamp_brightness_level(info.get("brightness", 5))
-            delta = -1 if buttons.get("btn_left") else 1
-            setter = getattr(ctx, "set_brightness_level", None)
-            if setter is not None:
-                setter(max(0, min(9, current + delta)))
-            else:
-                ctx.set_brightness(max(0, min(9, current + delta)))
+            self._maintenance_selected_index = min(
+                len(MAINTENANCE_ITEMS) - 1, self._maintenance_selected_index + 1
+            )
 
-    def _render_connectivity(self, ctx):
+
+    def _render_connections(self, ctx):
         image = Image.new("RGB", (128, 160), (0, 0, 0))
         draw = ImageDraw.Draw(image)
         self._draw_simple_rows(
             draw,
-            CONNECTIVITY_ITEMS,
-            self._connectivity_select_index,
+            CONNECTIONS_ITEMS,
+            self._connections_select_index,
             ctx.assets.font8,
         )
-        self._draw_footer(image, draw, ctx, "CONNECTIVITY")
+        self._draw_footer(image, draw, ctx, "CONNECTION")
         return image
 
     def _render_controllers(self, ctx):
@@ -597,12 +639,7 @@ class SettingsState(BaseState):
             actual_index = start + visible_index
             y = visible_index * SETTINGS_ITEM_HEIGHT
             focused = actual_index == selected_index
-            if focused:
-                draw.rectangle(
-                    (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
-                    fill=(255, 255, 255),
-                )
-            text_color = (0, 0, 0) if focused else (255, 255, 255)
+            text_color = self._draw_row_background(draw, y, focused)
             if row["type"] == "scan":
                 label = "SCANNING" if snapshot.get("is_scan") else "SCAN"
                 _draw_settings_label(
@@ -648,12 +685,7 @@ class SettingsState(BaseState):
             actual_index = start + visible_index
             y = visible_index * SETTINGS_ITEM_HEIGHT
             focused = actual_index == selected_index
-            if focused:
-                draw.rectangle(
-                    (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
-                    fill=(255, 255, 255),
-                )
-            color = (0, 0, 0) if focused else (255, 255, 255)
+            color = self._draw_row_background(draw, y, focused)
             if row["type"] in {"current", "remembered"}:
                 dot_color = (0, 255, 0) if row["type"] == "current" else (96, 96, 96)
                 self._draw_status_dot(
@@ -870,22 +902,38 @@ class SettingsState(BaseState):
     @staticmethod
     def _draw_simple_rows(draw, items, selected_index, font):
         for idx, item in enumerate(items):
-            y = idx * SETTINGS_ITEM_HEIGHT
-            focused = idx == selected_index
-            if focused:
-                draw.rectangle(
-                    (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
-                    fill=(255, 255, 255),
-                )
-            color = (0, 0, 0) if focused else (255, 255, 255)
-            _draw_settings_label(
+            SettingsState._draw_row(
                 draw,
-                2,
-                y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+                idx * SETTINGS_ITEM_HEIGHT,
                 item["name"],
-                color,
+                idx == selected_index,
                 font,
             )
+
+    @staticmethod
+    def _draw_row_background(draw, y, focused):
+        """Paint the focus highlight and return the row's text color."""
+        if focused:
+            draw.rectangle(
+                (0, y, 127, y + SETTINGS_ITEM_HEIGHT - 1),
+                fill=(255, 255, 255),
+            )
+            return (0, 0, 0)
+        return (255, 255, 255)
+
+    @staticmethod
+    def _draw_row(draw, y, label, focused, font):
+        color = SettingsState._draw_row_background(draw, y, focused)
+        _draw_settings_label(
+            draw,
+            2,
+            y + (SETTINGS_ITEM_HEIGHT - 8) // 2,
+            label,
+            color,
+            font,
+        )
+        return color
+
 
     @staticmethod
     def _draw_footer(image, draw, ctx, title):
@@ -894,6 +942,7 @@ class SettingsState(BaseState):
             (24, 128),
             ctx.assets.settings_icon.convert("RGBA"),
         )
+        # Footer titles sit on the left 64px panel, in the menu label face.
         width = len(title) * 6
         draw.text(
             (max(0, int((64 - width) / 2)), 152),
@@ -966,29 +1015,69 @@ class SettingsState(BaseState):
             )
         return image
 
-    @staticmethod
-    def _render_reset_overlay(ctx, image):
+    def _reset_request_in_flight(self) -> bool:
+        """True while the remote reset call is queued and unanswered."""
+        return self._reset_request_ref is not None and not self._reset_request_failed
+
+    def _close_reset_overlay(self) -> None:
+        self._overlay_mode = None
+        self._reset_request_ref = None
+        self._reset_request_failed = False
+
+    def _start_remote_reset(self, ctx) -> None:
+        """Issue the remote reset and remember how to watch its outcome.
+
+        An empty ref means the call could not even be queued (no bridge, no
+        engine); with no local fallback left that is a failure like any other,
+        so the overlay stays open rather than closing as if it had worked.
+        """
+        resolver = getattr(ctx, "reset_device", None)
+        ref = ""
+        if resolver is not None:
+            try:
+                ref = str(resolver() or "")
+            except Exception as e:
+                _log.warning("settings: reset request failed: %s", e)
+                ref = ""
+        self._reset_request_ref = ref or None
+        self._reset_request_failed = not ref
+
+    def _consume_reset_request_result(self, ctx) -> None:
+        """Close the overlay once the call is acknowledged; keep it open on failure."""
+        if self._reset_request_ref is None:
+            return
+        reader = getattr(ctx, "reset_ref_status", None)
+        status = None
+        if reader is not None:
+            try:
+                status = reader(self._reset_request_ref)
+            except Exception as e:
+                _log.warning("settings: reset status lookup failed: %s", e)
+                status = None
+        if status == OUTCOME_ACKED:
+            self._close_reset_overlay()
+        elif status == OUTCOME_ERROR:
+            self._reset_request_failed = True
+
+    def _render_reset_overlay(self, ctx, image):
         settings_rgba = image.convert("RGBA")
         overlay = Image.new("RGBA", (128, 160), (0, 0, 0, 180))
         settings_rgba.paste(overlay, (0, 0), overlay)
         draw = ImageDraw.Draw(settings_rgba)
-        line1 = "Reset device?"
-        line2 = "A: Confirm  B: Cancel"
-        bbox1 = draw.textbbox((0, 0), line1, font=ctx.assets.font24)
-        bbox2 = draw.textbbox((0, 0), line2, font=ctx.assets.font_6x8)
-        y1 = 64 - (bbox1[3] - bbox1[1]) - 4
-        draw.text(
-            ((128 - (bbox1[2] - bbox1[0])) / 2, y1),
-            line1,
-            fill="white",
-            font=ctx.assets.font24,
-        )
-        draw.text(
-            ((128 - (bbox2[2] - bbox2[0])) / 2, 76),
-            line2,
-            fill="white",
-            font=ctx.assets.font_6x8,
-        )
+        font = getattr(ctx.assets, "system_font10", ctx.assets.font_6x8)
+        if self._reset_request_failed:
+            self._draw_centered_system_text(draw, "Reset failed", 48, font, (255, 80, 80))
+            self._draw_centered_system_text(
+                draw, "A: Retry  B: Close", 76, font, (180, 180, 180)
+            )
+        elif self._reset_request_in_flight():
+            self._draw_centered_system_text(draw, "Resetting...", 48, font, "white")
+            self._draw_activity_icon(draw, 64, 76)
+        else:
+            self._draw_centered_system_text(draw, "Reset device?", 48, font, "white")
+            self._draw_centered_system_text(
+                draw, "A: Confirm  B: Cancel", 76, font, (180, 180, 180)
+            )
         return settings_rgba.convert("RGB")
 
     def _render_wifi_forget_overlay(self, ctx, image):
@@ -1346,12 +1435,13 @@ class SettingsState(BaseState):
             return
 
         if self._overlay_mode == _OVERLAY_RESET_CONFIRM:
-            if buttons.get("btn_a"):
-                if ctx.reset_device:
-                    ctx.reset_device()
-                self._overlay_mode = None
+            # The overlay is closed by the request's outcome, not by the press:
+            # a failed call leaves it open so the user can retry.
+            if buttons.get("btn_a") and not self._reset_request_in_flight():
+                self._start_remote_reset(ctx)
             elif buttons.get("btn_b") or buttons.get("btn_home"):
-                self._overlay_mode = None
+                if not self._reset_request_in_flight():
+                    self._close_reset_overlay()
             return
 
         if buttons.get("btn_home"):
@@ -1364,21 +1454,21 @@ class SettingsState(BaseState):
             if self._calibration is not None and self._calibration.status.state == "running":
                 self._calibration.cancel()
                 return
-            if self._page_mode == _PAGE_DISPLAY:
+            if self._page_mode == _PAGE_MAINTENANCE:
                 self._page_mode = _PAGE_SETTINGS
-                ctx.setting_select_index = SETTINGS_DISPLAY_INDEX
+                ctx.setting_select_index = SETTINGS_MAINTENANCE_INDEX
             elif self._page_mode == _PAGE_CONTROLLERS:
-                self._page_mode = _PAGE_CONNECTIVITY
-                self._connectivity_select_index = 1
+                self._page_mode = _PAGE_CONNECTIONS
+                self._connections_select_index = CONNECTIONS_CONTROLLERS_INDEX
             elif self._page_mode == _PAGE_WIFI_PASSWORD:
                 self._reset_wifi_character_repeat()
                 self._page_mode = _PAGE_WIFI
             elif self._page_mode == _PAGE_WIFI:
-                self._page_mode = _PAGE_CONNECTIVITY
-                self._connectivity_select_index = 2
-            elif self._page_mode == _PAGE_CONNECTIVITY:
+                self._page_mode = _PAGE_CONNECTIONS
+                self._connections_select_index = CONNECTIONS_WIFI_INDEX
+            elif self._page_mode == _PAGE_CONNECTIONS:
                 self._page_mode = _PAGE_SETTINGS
-                ctx.setting_select_index = SETTINGS_CONNECTIVITY_INDEX
+                ctx.setting_select_index = SETTINGS_CONNECTIONS_INDEX
             else:
                 self._transition_to_main_menu(ctx)
             return
@@ -1389,10 +1479,10 @@ class SettingsState(BaseState):
             self._handle_wifi_input(ctx, buttons)
         elif self._page_mode == _PAGE_WIFI_PASSWORD:
             self._handle_wifi_password_input(ctx, buttons)
-        elif self._page_mode == _PAGE_CONNECTIVITY:
-            self._handle_connectivity_input(ctx, buttons)
-        elif self._page_mode == _PAGE_DISPLAY:
-            self._handle_display_input(ctx, buttons)
+        elif self._page_mode == _PAGE_CONNECTIONS:
+            self._handle_connections_input(ctx, buttons)
+        elif self._page_mode == _PAGE_MAINTENANCE:
+            self._handle_maintenance_input(ctx, buttons)
         else:
             self._handle_settings_input(ctx, buttons)
 
@@ -1402,22 +1492,22 @@ class SettingsState(BaseState):
 
         ctx.transition_to(MenuState())
 
-    def _handle_connectivity_input(self, ctx, buttons):
+    def _handle_connections_input(self, ctx, buttons):
         if buttons.get("btn_a"):
-            if self._connectivity_select_index == 0:
+            if self._connections_select_index == CONNECTIONS_APP_INDEX:
                 self._open_bluetooth_qr(ctx)
-            elif self._connectivity_select_index == 1:
+            elif self._connections_select_index == CONNECTIONS_CONTROLLERS_INDEX:
                 self._enter_controllers(ctx)
             else:
                 self._enter_wifi(ctx)
         elif buttons.get("btn_up"):
-            self._connectivity_select_index = max(
-                0, self._connectivity_select_index - 1
+            self._connections_select_index = max(
+                0, self._connections_select_index - 1
             )
         elif buttons.get("btn_down"):
-            self._connectivity_select_index = min(
-                len(CONNECTIVITY_ITEMS) - 1,
-                self._connectivity_select_index + 1,
+            self._connections_select_index = min(
+                len(CONNECTIONS_ITEMS) - 1,
+                self._connections_select_index + 1,
             )
 
     def _handle_wifi_input(self, ctx, buttons):
@@ -1587,49 +1677,68 @@ class SettingsState(BaseState):
         if started and row["type"] == "result":
             self._controller_selected_key = f"controller:{row['mac']}"
 
+    def _adjust_brightness(self, ctx, delta):
+        info = ctx.get_device_info() or {}
+        current = clamp_brightness_level(info.get("brightness", 5))
+        target = max(0, min(9, current + delta))
+        setter = getattr(ctx, "set_brightness_level", None)
+        if setter is not None:
+            setter(target)
+        else:
+            ctx.set_brightness(target)
+
+    def _adjust_volume(self, ctx, delta):
+        info = ctx.get_device_info() or {}
+        try:
+            raw_volume = int(info.get("volume", 50))
+        except (TypeError, ValueError):
+            raw_volume = 50
+        level = _volume_raw_to_level(raw_volume)
+        target = _clamp(level + delta, 0, len(VOLUME_LEVEL_VALUES) - 1)
+        ctx.set_volume(_volume_level_to_raw(target))
+
+    def _open_settings_row(self, ctx, idx):
+        if idx == SETTINGS_CONNECTIONS_INDEX:
+            self._page_mode = _PAGE_CONNECTIONS
+            self._connections_select_index = CONNECTIONS_APP_INDEX
+        elif idx == SETTINGS_MAINTENANCE_INDEX:
+            self._page_mode = _PAGE_MAINTENANCE
+            self._maintenance_selected_index = 0
+
+    # Root rows whose value is adjustable in place with left/right.
+    _ROOT_ROW_ADJUSTERS = {
+        SETTINGS_BRIGHTNESS_INDEX: _adjust_brightness,
+        SETTINGS_VOLUME_INDEX: _adjust_volume,
+    }
+
+    @staticmethod
+    def _selected_root_index(ctx):
+        """Clamp the shared cursor into the selectable range.
+
+        `AppContext.setting_select_index` defaults to 0, which is the read-only
+        Name row, so anything consuming it has to guard rather than trust it.
+        """
+        return _clamp(
+            ctx.setting_select_index,
+            SETTINGS_FIRST_SELECTABLE_INDEX,
+            SETTINGS_LAST_SELECTABLE_INDEX,
+        )
+
     def _handle_settings_input(self, ctx, buttons):
-        if (
-            buttons.get("btn_a")
-            and ctx.setting_select_index == SETTINGS_CONNECTIVITY_INDEX
-        ):
-            self._page_mode = _PAGE_CONNECTIVITY
-            self._connectivity_select_index = 0
-        elif (
-            buttons.get("btn_a")
-            and ctx.setting_select_index == SETTINGS_DISPLAY_INDEX
-        ):
-            self._page_mode = _PAGE_DISPLAY
-            self._display_selected_index = 0
-        elif (
-            buttons.get("btn_a")
-            and ctx.setting_select_index == SETTINGS_RESET_DEVICE_INDEX
-        ):
-            self._overlay_mode = _OVERLAY_RESET_CONFIRM
-        elif buttons.get("btn_left"):
-            idx = ctx.setting_select_index
-            di = ctx.get_device_info()
-            if idx == 3:
-                raw_volume = int(di.get("volume", "50"))
-                level = _volume_raw_to_level(raw_volume)
-                ctx.set_volume(_volume_level_to_raw(max(0, level - 1)))
-            elif idx == 4:
-                return
-        elif buttons.get("btn_right"):
-            idx = ctx.setting_select_index
-            di = ctx.get_device_info()
-            if idx == 3:
-                raw_volume = int(di.get("volume", "50"))
-                level = _volume_raw_to_level(raw_volume)
-                ctx.set_volume(_volume_level_to_raw(min(len(VOLUME_LEVEL_VALUES) - 1, level + 1)))
-            elif idx == 4:
-                return
+        idx = self._selected_root_index(ctx)
+        if buttons.get("btn_a"):
+            self._open_settings_row(ctx, idx)
+        elif buttons.get("btn_left") or buttons.get("btn_right"):
+            adjuster = self._ROOT_ROW_ADJUSTERS.get(idx)
+            if adjuster is not None:
+                adjuster(self, ctx, 1 if buttons.get("btn_right") else -1)
         elif buttons.get("btn_up"):
             ctx.setting_select_index = max(
                 SETTINGS_FIRST_SELECTABLE_INDEX,
-                ctx.setting_select_index - 1,
+                idx - 1,
             )
         elif buttons.get("btn_down"):
             ctx.setting_select_index = min(
-                SETTINGS_RESET_DEVICE_INDEX,
-                ctx.setting_select_index + 1,
+                SETTINGS_LAST_SELECTABLE_INDEX,
+                idx + 1,
             )

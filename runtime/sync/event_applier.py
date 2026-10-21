@@ -11,7 +11,6 @@ from runtime.sync.events import (
     FullSnapshot,
     GamesSnapshotChanged,
     PagesChanged,
-    ResetConfirmed,
     SyncEvent,
     SyncEventMeta,
 )
@@ -33,7 +32,7 @@ def apply_events(
     apply_config: Callable[[Dict[str, Any]], None],
 ) -> None:
     """Apply accepted semantic events in stable order."""
-    full_events = [e for e in events if isinstance(e, (FullSnapshot, ResetConfirmed))]
+    full_events = [e for e in events if isinstance(e, FullSnapshot)]
     if full_events:
         for event in full_events:
             apply_config(event.config)

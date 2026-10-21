@@ -77,7 +77,6 @@ from runtime.remote_sync_port import (
     get_remote_sync,
     set_remote_sync,
 )
-from runtime.reset_workflow import request_confirm_and_forget_wifi
 from runtime.qr_status import write_qr_status
 from runtime.display_loop import DimWindowRuntime, run_main_loop
 from runtime.bootstrap import start_background_subsystems
@@ -131,10 +130,6 @@ BRIGHTNESS_TRANSITION_DURATION = 1.0
 # Remote config/game startup coordination (see RemoteConfigRuntimeState).
 _remote_config_runtime = RemoteConfigRuntimeState()
 _network_state_refresh_event = threading.Event()
-_reset_in_progress = False
-_reset_lock = threading.Lock()
-_reset_remote_confirm_event = threading.Event()
-_RESET_CONFIRM_TIMEOUT_SECONDS = 10.0
 
 set_remote_sync(create_default_remote_sync())
 write_qr_status(False)
@@ -436,63 +431,28 @@ ctx.set_game_status = _set_game_status_from_local_ui
 _app_ctx = ctx
 
 
-def _is_reset_in_progress() -> bool:
-    with _reset_lock:
-        return _reset_in_progress
+def _start_device_reset() -> str:
+    """Ask the remote side to reset this device; returns the outbox ref.
 
-
-def _set_reset_in_progress(value: bool) -> None:
-    global _reset_in_progress
-    with _reset_lock:
-        _reset_in_progress = bool(value)
-
-
-def _run_device_reset_sequence() -> None:
-    service = get_machine_state_service()
-    if service is None:
-        _log.warning("Reset aborted: MachineStateService is not initialized")
-        return
-    if _is_reset_in_progress():
-        return
-    _log.info("device reset: sequence started")
-    _set_reset_in_progress(True)
-    _network_state_refresh_event.clear()
-    try:
-        request_confirm_and_forget_wifi(
-            request_device_reset_state=get_remote_sync().request_device_reset_state,
-            confirm_event=_reset_remote_confirm_event,
-            confirm_timeout_seconds=_RESET_CONFIRM_TIMEOUT_SECONDS,
-            forget_wifi=machine_api.forget_wifi,
-        )
-        try:
-            term_widget_processes(ctx.pages)
-        except Exception as e:
-            _log.error("Error terminating widget processes during reset: %s", e)
-        try:
-            if ctx.game:
-                term_game_process(ctx.game)
-                ctx.game = None
-        except Exception as e:
-            _log.error("Error terminating game process during reset: %s", e)
-        try:
-            machine_api.reset_user_data_file()
-        except Exception as e:
-            _log.error("Error resetting user data during device reset: %s", e)
-        service.clear_apps_directory_contents()
-        service.reset_device_to_factory_fields()
-    except Exception as e:
-        _log.error("Error during device reset sequence: %s", e)
-    finally:
-        _set_reset_in_progress(False)
-
-
-def _start_device_reset() -> None:
-    if _is_reset_in_progress():
-        return
-    threading.Thread(target=_run_device_reset_sequence, daemon=True).start()
+    The reset is a server-side operation now: this device issues the request
+    and applies the reset row when it arrives through the ordinary remote
+    configuration path. Nothing is wiped locally, so the returned ref - empty
+    when the call could not be queued at all - is the only signal the caller
+    has to report the outcome with.
+    """
+    ref = get_remote_sync().request_device_reset()
+    if ref:
+        _log.info("device reset: requested remotely ref=%s", ref)
+    else:
+        _log.warning("device reset: request could not be queued")
+    return ref
 
 
 ctx.reset_device = _start_device_reset
+ctx.reset_ref_status = get_remote_sync().ref_status
+
+
+
 
 
 _remote_config_applier = RemoteDeviceConfigApplier(
@@ -521,8 +481,6 @@ _remote_config_applier = RemoteDeviceConfigApplier(
         remove_local_game_folder=remove_local_game_folder,
         perform_update=perform_update_with_snackbar,
         get_version=machine_api.get_version,
-        is_reset_in_progress=_is_reset_in_progress,
-        on_reset_confirmed=_reset_remote_confirm_event.set,
         try_soft_apply_remote_supabase_pages=try_soft_apply_remote_supabase_pages,
     ),
     _remote_config_runtime,
@@ -853,7 +811,7 @@ def network_state_remote_loop():
 
             sync = get_remote_sync()
             _reconcile_identity_with_remote(sync)
-            if not _is_reset_in_progress() and sync.is_connected():
+            if sync.is_connected():
                 updates = {}
 
                 normalized_ip = machine_api.normalize_ip(machine_api.get_ip_address())
@@ -909,7 +867,7 @@ def request_network_state_refresh():
 
 def _on_remote_connectivity_changed(connected: bool) -> None:
     write_qr_status(connected)
-    if connected and not _is_reset_in_progress():
+    if connected:
         request_network_state_refresh()
 
 
@@ -968,7 +926,7 @@ start_background_subsystems(
 ctx.reload_conf = False
 ctx.start_game = False
 ctx.menu_select_index = 0
-ctx.setting_select_index = 3
+ctx.setting_select_index = 0
 
 # Initialize machine state service and widgets after context is ready.
 init_machine_state_service(

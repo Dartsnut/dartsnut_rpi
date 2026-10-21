@@ -93,7 +93,7 @@ class MenuState(BaseState):
     def handle_input(self, ctx: AppContext, buttons: dict) -> None:
         from states.widget import WidgetState
         from states.game import GameSelectState
-        from states.settings import SettingsState
+        from states.settings import SETTINGS_FIRST_SELECTABLE_INDEX, SettingsState
 
         if buttons.get("btn_a"):
             if _check_firmware_updated_flag():
@@ -109,6 +109,7 @@ class MenuState(BaseState):
             elif idx == 1:
                 ctx.transition_to(WidgetState())
             elif idx == 2:
+                ctx.setting_select_index = SETTINGS_FIRST_SELECTABLE_INDEX
                 ctx.transition_to(SettingsState())
         elif buttons.get("btn_b"):
             if ctx.game is not None and ctx.term_game_process:

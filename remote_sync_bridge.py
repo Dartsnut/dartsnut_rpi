@@ -29,8 +29,12 @@ def request_set_game_status(game_id, status):
     return _ssb.request_set_game_status(game_id, status)
 
 
-def request_device_reset_state():
-    return _ssb.request_device_reset_state()
+def request_device_reset():
+    return _ssb.request_device_reset()
+
+
+def reset_ref_status(ref):
+    return _ssb.reset_ref_status(ref)
 
 
 def request_set_dim_window(config):

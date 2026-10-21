@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from runtime.remote_device_config import (
-    is_remote_reset_confirmed,
-    is_remote_reset_confirmation_source,
     normalize_games_list,
     resolve_snapshot_updated_at,
 )
@@ -19,7 +17,6 @@ from runtime.sync.events import (
     GameReadySetChanged,
     GamesSnapshotChanged,
     PagesChanged,
-    ResetConfirmed,
     SyncEvent,
     SyncEventMeta,
 )
@@ -84,12 +81,6 @@ def tokenize_snapshot(
                 is_first_after_connect=is_first_after_connect,
             )
         )
-
-    if is_remote_reset_confirmed(cfg) and is_remote_reset_confirmation_source(
-        cfg.get("last_update_source")
-    ):
-        events.append(ResetConfirmed(meta=meta, config=cfg))
-        return events
 
     if "pages" in cfg and isinstance(cfg.get("pages"), list):
         events.append(

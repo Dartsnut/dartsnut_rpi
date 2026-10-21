@@ -66,31 +66,6 @@ def resolve_snapshot_updated_at(config: Any) -> Optional[datetime]:
     return row_at if row_at > device_at else device_at
 
 
-def is_remote_reset_confirmed(config: dict) -> bool:
-    if not isinstance(config, dict):
-        return False
-    if config.get("ip_address") != "":
-        return False
-    if "ssid" in config and config.get("ssid") != "":
-        return False
-    pages = config.get("pages")
-    if pages is not None and (not isinstance(pages, list) or len(pages) != 0):
-        return False
-    games = config.get("games")
-    if games is not None and (not isinstance(games, list) or len(games) != 0):
-        return False
-    dim_window = config.get("dim_window")
-    if not isinstance(dim_window, dict):
-        return False
-    return bool(dim_window.get("dim_window_enabled")) is False
-
-
-def is_remote_reset_confirmation_source(value: Any) -> bool:
-    source = str(value or "").strip().lower()
-    # Accept both while rolling out source-tagged reset confirmations.
-    return source in {"supabase_bridge_init", "supabase_bridge"}
-
-
 def normalize_games_list(config: dict) -> list:
     """Return config games as a list; missing/null/non-list becomes []."""
     games = config.get("games") if isinstance(config, dict) else None
@@ -389,8 +364,6 @@ class RemoteDeviceConfigDependencies:
     local_game_version_matches: Callable[[str, str], bool]
     perform_update: Callable[..., dict]
     get_version: Callable[[], dict]
-    is_reset_in_progress: Callable[[], bool]
-    on_reset_confirmed: Callable[[], None]
     request_config_refresh: Callable[[], None] = lambda: None
     disconnect_and_unpair_device: Callable[[str], dict] = lambda _mac: {}
     remove_local_game_folder: Callable[[str], bool] = lambda _gid: False
@@ -802,13 +775,6 @@ class RemoteDeviceConfigApplier:
         # App writes often bump state.device_updated_at only; row updated_at may lag.
         cfg_ts = resolve_snapshot_updated_at(config)
 
-        if (
-            deps.is_reset_in_progress()
-            and is_remote_reset_confirmed(config)
-            and is_remote_reset_confirmation_source(config.get("last_update_source"))
-        ):
-            deps.on_reset_confirmed()
-
         skip_game_commands = False
         games_payload_valid = "games" not in config or is_valid_games_list(config.get("games"))
         if not games_payload_valid:
@@ -1037,7 +1003,17 @@ class RemoteDeviceConfigApplier:
             else:
                 games_cfg = normalize_games_list(config)
                 self._reconcile_local_game_folders(games_cfg)
-                if games_cfg and (skip_game_commands or skip_games_dedupe):
+                # A reset row lands under the init source with every game marked
+                # "downloading". The command loop below treats bridge-sourced
+                # statuses as the device's own echo and skips them, so without this
+                # nothing would ever fetch those games or settle them to "ready".
+                reset_init_source = (
+                    str(config.get("last_update_source") or "").strip().lower()
+                    == "supabase_bridge_init"
+                )
+                if games_cfg and (
+                    skip_game_commands or skip_games_dedupe or reset_init_source
+                ):
                     self._reconcile_downloading_games(games_cfg)
                 if not skip_game_commands:
                     self._apply_menu_ready_from_games(ctx, games_cfg)

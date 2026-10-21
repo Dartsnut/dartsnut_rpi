@@ -47,7 +47,12 @@ def forget_wifi():
         for line in result.splitlines():
             if "802-11-wireless" in line:
                 name = line.split(":")[0]
-                # Prevent reconnection races while reset flow is running.
+                # Must precede the delete: a profile that is still eligible for
+                # autoconnect lets NetworkManager re-associate with the network
+                # (or tear the profile down itself) between the two calls, which
+                # races the wipe and can leave a live connection behind. Forgetting
+                # the network is the point, so the profile is made ineligible
+                # before it is removed.
                 subprocess.run(
                     ["nmcli", "connection", "modify", name, "connection.autoconnect", "no"],
                     check=False,
