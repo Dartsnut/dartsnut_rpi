@@ -1,6 +1,6 @@
 [project]
 name = "dartsnut-rpi"
-version = "2.2.0"
+version = "2.2.1"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"

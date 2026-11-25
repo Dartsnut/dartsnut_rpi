@@ -12,8 +12,3 @@ xvfb
 libsdl2-dev
 libgpiod-dev
 gpiod
-nodejs
-npm
-# The scratch runtime's gl binding falls back to node-gyp when its arm64
-# prebuild cannot be downloaded. Nothing else here promises a compiler.
-build-essential

@@ -287,6 +287,34 @@ def scaffold_game_payload(directory: str) -> None:
     _log.info("scratch payload: wrote launch scaffolding into %s", directory)
 
 
+def refresh_scaffolding(directory: str) -> bool:
+    """Re-copy the firmware's shim into an already-installed Scratch app.
+
+    The shim is written at install time from a template in the firmware, so a
+    game installed by an older release keeps that older shim forever. That went
+    unnoticed until the shim had to learn a new path (the vendored Node): the
+    game kept exec'ing a bare `node` from PATH and silently ran the apt binary
+    instead. Refreshing at launch keeps one copy of the logic authoritative.
+
+    Returns True when the shim on disk now matches the firmware's.
+    """
+    if not is_scratch_payload(directory):
+        return False
+    shim_src = os.path.join(DEFAULTS_DIR, SHIM_FILENAME)
+    shim_dst = os.path.join(directory, "main.py")
+    try:
+        if os.path.isfile(shim_dst) and os.path.isfile(shim_src):
+            with open(shim_src, "rb") as a, open(shim_dst, "rb") as b:
+                if a.read() == b.read():
+                    return True
+        shutil.copy2(shim_src, shim_dst)
+    except OSError as e:
+        _log.warning("scratch payload: cannot refresh scaffolding in %s: %s", directory, e)
+        return False
+    _log.info("scratch payload: refreshed launch scaffolding in %s", directory)
+    return True
+
+
 def prepare_payload(directory: str) -> str | None:
     """Validate and scaffold a staged payload if it is a Scratch project.
 

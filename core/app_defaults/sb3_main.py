@@ -23,7 +23,18 @@ def _runtime_dir() -> str:
 
 
 def _node_bin() -> str:
-    return os.environ.get("DARTSNUT_NODE_BIN", "node")
+    """Prefer the vendored Node; fall back to PATH for a debug install.
+
+    Must match runtime/scratch_runtime.py: the firmware provisions Node into
+    /var/lib/dartsnut/node, which is deliberately not on PATH, so this shim is
+    the second place that has to know the path.
+    """
+    override = os.environ.get("DARTSNUT_NODE_BIN")
+    if override:
+        return override
+    root = os.environ.get("DARTSNUT_NODE_ROOT", "/var/lib/dartsnut/node")
+    vendored = os.path.join(root, "bin", "node")
+    return vendored if os.path.isfile(vendored) else "node"
 
 
 def main(argv: list[str]) -> int:

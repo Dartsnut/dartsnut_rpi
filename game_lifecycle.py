@@ -29,7 +29,7 @@ from core.app_env import (
 )
 from core.app_metadata import read_app_metadata, resolve_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
-from core.scratch_payload import is_scratch_payload
+from core.scratch_payload import is_scratch_payload, refresh_scaffolding
 from runtime import scratch_runtime
 from runtime.api_token_store import build_api_headers
 from runtime.game_secret_store import get_pico8_key
@@ -761,7 +761,8 @@ def start_game_process(gameid: str, ctx=None) -> dict:
     # not pay it.
     # Short-circuit on the cheap check first: is_installed() hashes every bundled
     # source, and most launches are Python games.
-    if _is_scratch_game(gameid) and not scratch_runtime.is_installed():
+    is_scratch = _is_scratch_game(gameid)
+    if is_scratch and not scratch_runtime.is_installed():
         # A device with no Node at all never resolves on its own, so say so
         # instead of starting an install that cannot succeed.
         if not scratch_runtime.node_abi():
@@ -773,6 +774,11 @@ def start_game_process(gameid: str, ctx=None) -> dict:
         )
         _install_scratch_runtime_for_launch(ctx, gameid)
         return {"game_id": gameid, "runtime_setup_pending": True}
+    if is_scratch:
+        # The shim is written from a firmware template at install time, so a game
+        # installed by an older release carries that older shim. Refresh it here:
+        # a stale one silently launches whatever `node` PATH finds.
+        refresh_scaffolding(app_dir(gameid))
     shm_name = "game_shm"
     shm_size = 128 * 160 * 3 + 1
     try:
