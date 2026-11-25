@@ -21,7 +21,9 @@ from typing import Any, Callable
 from PIL import Image
 
 from core.app_env import ensure_sideload_app_venv
+from core.scratch_payload import ScratchPayloadError, prepare_payload
 from core.helpers import subprocess_launch_kwargs, terminate_process_group
+from runtime import scratch_runtime
 
 _log = logging.getLogger(__name__)
 
@@ -58,6 +60,9 @@ class _Session:
     )
     emit: Callable[[dict[str, Any]], None] | None = None
     closed: bool = False
+    # Set while a replacement start owns this session's staged payload: its
+    # process-exit observer must not delete files the replacement is about to run.
+    keep_payload: bool = False
     reader_threads: list[threading.Thread] = field(default_factory=list)
     params: dict[str, Any] = field(default_factory=dict)
     process_generation: int = 0
@@ -170,6 +175,25 @@ class SideloadSessionManager:
         sid = self._validate_id(session_id, "session_id")
         aid = self._validate_id(app_id, "app_id")
         app_path = self._session_app_path(sid, aid)
+        # A Scratch project is sideloaded as a bare .sb3, so it has no main.py
+        # until the firmware writes one. This has to run before the check below,
+        # or the documented sideload path could never start a Scratch game.
+        try:
+            scratch_project = prepare_payload(app_path)
+        except ScratchPayloadError as e:
+            raise SideloadError(f"invalid Scratch project: {e}") from e
+        # A Scratch payload runs on the shared Node runtime, so the venv check
+        # below says nothing about whether it can start. Without this gate the
+        # sideload path was the one way to launch a Scratch game against a
+        # missing or half-installed runtime, which fails as an unreadable
+        # "Could not locate the bindings file" from deep inside Node.
+        if scratch_project and not scratch_runtime.is_installed():
+            # The caller is a websocket RPC with no display and no relaunch path,
+            # so the session cannot wait for an install: start one and let the
+            # app retry. A device with no Node cannot install at all.
+            if scratch_runtime.node_abi():
+                scratch_runtime.start_install_async()
+            raise SideloadError("the Scratch runtime is not ready; try again shortly")
         main_path = os.path.join(app_path, "main.py")
         if not os.path.isfile(main_path):
             raise SideloadError("sideload app main.py not found")
@@ -180,7 +204,32 @@ class SideloadSessionManager:
         with self._lock:
             previous = self._active
         if previous is not None:
-            self.stop(previous.session_id, reason="replaced")
+            # Mark first: terminating the process wakes _watch_process, which calls
+            # _finish() without keep_payload. That thread must not delete files the
+            # replacement start is about to run, and it can win the race against
+            # the explicit _finish below (which would then return early because the
+            # session is already closed).
+            previous.keep_payload = True
+            exit_code = previous.process.poll()
+            if exit_code is None:
+                terminate_process_group(previous.process.pid)
+                try:
+                    exit_code = previous.process.wait(timeout=2)
+                except Exception:
+                    exit_code = previous.process.poll()
+            # A replacement start reuses this session's staged payload, and a
+            # same-session restart has nothing else to run: keep the files. The
+            # old behaviour deleted them here and then failed the venv check
+            # below with "failed to prepare app environment", so restarting a
+            # session always required a fresh upload.
+            self._finish(previous, reason="replaced", exit_code=exit_code, keep_payload=True)
+            if app_path.startswith(os.path.join(self.apps_dir, ".sideload", sid)):
+                # Re-resolve: the payload must still be there for the start to
+                # mean anything. prepare_payload above already validated this path,
+                # so a missing directory here is a real error rather than a guess.
+                app_path = self._session_app_path(sid, aid)
+                if not os.path.isdir(app_path):
+                    raise SideloadError("sideload app files are missing; upload them again")
 
         app_type = "game" if resolved_size == DISPLAY_SIZE else "widget"
         if not self._ensure_venv(app_path, app_type):
@@ -497,7 +546,16 @@ class SideloadSessionManager:
         if active:
             self._finish(session, reason="process_exited", exit_code=exit_code)
 
-    def _finish(self, session: _Session, *, reason: str, exit_code: Any) -> None:
+    def _finish(self, session: _Session, *, reason: str, exit_code: Any, keep_payload: bool = False) -> None:
+        """Tear a session down. Discards runtime state, not the uploaded program.
+
+        `shm` and the data-store are per-run and are always reclaimed. The staged
+        payload under apps/.sideload/<session_id>/ is the uploaded program itself:
+        a caller that is about to restart the SAME session (a replacement start)
+        passes keep_payload=True, because deleting it turns the start that follows
+        into "failed to prepare app environment". The normal stop still removes it,
+        so a finished session leaves nothing behind.
+        """
         with self._lock:
             if session.closed:
                 return
@@ -513,10 +571,11 @@ class SideloadSessionManager:
         except Exception as exc:
             _log.warning("sideload: shm cleanup failed session=%s: %s", session.session_id, exc)
         shutil.rmtree(session.data_store, ignore_errors=True)
-        shutil.rmtree(
-            os.path.join(self.apps_dir, ".sideload", session.session_id),
-            ignore_errors=True,
-        )
+        if not (keep_payload or session.keep_payload):
+            shutil.rmtree(
+                os.path.join(self.apps_dir, ".sideload", session.session_id),
+                ignore_errors=True,
+            )
         current_thread = threading.current_thread()
         for reader in session.reader_threads:
             if reader is not current_thread:

@@ -95,6 +95,7 @@ from runtime.snackbar_display import (
     CONTROLLER_CONNECTED_MESSAGE,
     CONTROLLER_DISCONNECTED_MESSAGE,
     SnackbarDisplay,
+    register_snackbar_display,
     wrap_firmware_update_with_snackbar,
 )
 
@@ -115,6 +116,7 @@ _log.info("Logging initialized (effective level: %s)", _effective_log_level)
 # -----------------------------------------------------------------------------
 dartsnut = Dartsnut()
 display = SnackbarDisplay(dartsnut, font=assets.font8)
+register_snackbar_display(display)
 
 # Dim window state (shared with set_brightness and display loop)
 dim_rt = DimWindowRuntime()

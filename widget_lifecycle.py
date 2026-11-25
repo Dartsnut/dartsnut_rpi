@@ -26,15 +26,23 @@ from core.helpers import (
     terminate_process_group,
 )
 from core.app_env import (
+    app_venv_ready,
     app_venv_setup_failed,
     ensure_app_venv,
     ensure_app_venv_after_extract,
     install_app_tarball,
+    reset_app_environment_async,
 )
 from core.app_metadata import read_app_metadata, resolve_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
 from domain.app_context import AppContext
 from runtime.api_token_store import build_api_headers
+from runtime.snackbar_display import (
+    FAILED_TO_RESET_ENVIRONMENT_MESSAGE,
+    SETTING_UP_ENVIRONMENT_MESSAGE,
+    dismiss_snackbar,
+    show_snackbar,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -45,6 +53,14 @@ _missing_widget_download_attempts = {}
 # One background download per widget id (missing-app bootstrap + update check can both fire).
 _widget_background_download_inflight = set()
 
+# Environment resets for widgets are throttled: the widget loop retries a
+# process-less widget every frame, so an unthrottled reset would spawn uv sync
+# continuously on a permanently broken app.
+WIDGET_ENVIRONMENT_RESET_INTERVAL_SECONDS = 30.0
+WIDGET_ENVIRONMENT_RESET_MAX_ATTEMPTS = 3
+_widget_environment_reset_last_attempt: dict[str, float] = {}
+_widget_environment_reset_attempts: dict[str, int] = {}
+_widget_environment_reset_reported: set[str] = set()
 
 def process_widget_fields(widget_id: str, widget_fields_parameter: dict) -> dict:
     """Normalize inline image payloads without requiring per-widget config."""
@@ -359,15 +375,11 @@ def restart_widget_process(
     if resolve_app_metadata(widget_id).get("type") != "widget":
         _log.error("widget: refusing launch %s: missing or invalid widget sidecar", widget_id)
         return
-    # Don't block the main thread waiting for venv setup (can take 30-50s).
-    # If venv isn't ready, skip launch; the background download completion
-    # will trigger launch once ready.
-    from core.app_env import app_venv_ready
+    # Reset a stale environment in the background instead of skipping: the next
+    # render pass relaunches once it is ready. Throttled because the widget loop
+    # retries a process-less widget every frame.
     if not app_venv_ready(widget_id):
-        _log.debug(
-            "widget: skipping launch widget_id=%s reason=venv_not_ready",
-            widget_id,
-        )
+        _request_widget_environment_reset(widget_id)
         return
     try:
         page_uuid = page["uuid"]
@@ -538,6 +550,47 @@ def check_page_widget_updates(page: dict, get_context) -> None:
             _log.warning("Error checking widget version for %s: %s", widget_id, e)
 
 
+def _request_widget_environment_reset(widget_id: str) -> bool:
+    """Reset a widget environment at most once per window, capped per boot.
+
+    The widget loop retries a process-less widget every frame, so unthrottled
+    resets would spawn uv sync 30 times a second and hammer the SD card on a
+    permanently broken app.
+    """
+    if not widget_id or widget_id == "0":
+        return False
+    attempts = _widget_environment_reset_attempts.get(widget_id, 0)
+    if attempts >= WIDGET_ENVIRONMENT_RESET_MAX_ATTEMPTS:
+        return False
+    now = time.time()
+    last_attempt = _widget_environment_reset_last_attempt.get(widget_id)
+    if (
+        last_attempt is not None
+        and now - last_attempt < WIDGET_ENVIRONMENT_RESET_INTERVAL_SECONDS
+    ):
+        return False
+    _widget_environment_reset_last_attempt[widget_id] = now
+    _widget_environment_reset_attempts[widget_id] = attempts + 1
+
+    token: list = [None]
+
+    def on_start() -> None:
+        _log.info("widget: resetting environment widget_id=%s", widget_id)
+        token[0] = show_snackbar(SETTING_UP_ENVIRONMENT_MESSAGE, persistent=True)
+
+    def on_done(success: bool) -> None:
+        dismiss_snackbar(token[0])
+        if not success:
+            _log.warning("widget: environment reset failed widget_id=%s", widget_id)
+            # One snackbar per widget per boot keeps a broken app from spamming
+            # the screen on every page visit.
+            if widget_id not in _widget_environment_reset_reported:
+                _widget_environment_reset_reported.add(widget_id)
+                show_snackbar(FAILED_TO_RESET_ENVIRONMENT_MESSAGE, error=True)
+
+    return reset_app_environment_async(widget_id, on_start=on_start, on_done=on_done)
+
+
 def start_page_process(page: dict) -> dict:
     """Start all widget processes for a page; return page dict with widgets and framebuffer or None."""
     widgets = []
@@ -603,15 +656,10 @@ def start_page_process(page: dict) -> dict:
                 {"process": None, "shm": None, "widget": widget, "loading": False, "has_small_widget": None}
             )
             continue
-        # Don't block the main thread waiting for venv setup (can take 30-50s).
-        # If venv isn't ready, skip launch; the background download completion
-        # will trigger launch once ready.
-        from core.app_env import app_venv_ready
+        # Reset a stale environment in the background; the widget relaunches on a
+        # later render pass once it is ready.
         if not app_venv_ready(widget["id"]):
-            _log.debug(
-                "widget: skipping launch widget_id=%s reason=venv_not_ready",
-                widget["id"],
-            )
+            _request_widget_environment_reset(widget["id"])
             widgets.append(
                 {
                     "process": None,

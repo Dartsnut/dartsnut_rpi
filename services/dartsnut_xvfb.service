@@ -1,0 +1,17 @@
+[Unit]
+Description=Dartsnut virtual X display
+# The Scratch runner's WebGL binding resolves through GLX on Linux, so the
+# process tree needs an X display even on a headless panel. This unit provides
+# one screen for the firmware to render into; nothing is ever displayed on
+# screen hardware.
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/Xvfb :99 -screen 0 480x360x24 -nolisten tcp
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

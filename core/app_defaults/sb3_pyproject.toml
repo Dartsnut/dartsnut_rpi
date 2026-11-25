@@ -1,0 +1,15 @@
+# Dartsnut managed default dependencies for a Scratch (sb3) game.
+#
+# A Scratch project's logic runs in the shared Node runtime, not in Python. This
+# virtualenv exists only because the firmware's launch path expects
+# apps/<id>/.venv/bin/python to exist. Deliberately empty: an installed Scratch
+# game cannot pull Python packages, which keeps an uploader-supplied payload
+# from introducing Python code into the device.
+[project]
+name = "dartsnut-sb3-game"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false

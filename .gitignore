@@ -13,6 +13,10 @@ coverage.json
 # Ignore Python local editable package
 *.egg-info/
 
+# Ignore Node dependency trees (the Scratch runtime installs its own)
+node_modules/
+package-lock.json.bak
+
 # Ignore all folders under apps
 apps/
 downloads/

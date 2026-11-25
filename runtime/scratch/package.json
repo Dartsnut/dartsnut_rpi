@@ -1,0 +1,24 @@
+{
+  "name": "dartsnut-scratch-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scratch 3 (sb3) runtime for Dartsnut devices: renders the stage into the panel shm and feeds darts/buttons into the VM.",
+  "type": "commonjs",
+  "main": "sb3_runner.js",
+  "license": "MIT",
+  "dependencies": {
+    "@scratch/scratch-render": "15.3.0",
+    "@scratch/scratch-storage": "15.3.0",
+    "@scratch/scratch-vm": "15.3.0",
+    "canvas": "3.2.3",
+    "gl": "9.0.0-rc.10",
+    "jsdom": "29.0.0"
+  },
+  "allowScripts": {
+    "canvas@3.2.3": true,
+    "gl@9.0.0-rc.10": true
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}

@@ -10,6 +10,7 @@ import threading
 import time
 from multiprocessing import shared_memory
 import subprocess
+
 import requests
 
 from core.helpers import (
@@ -24,11 +25,20 @@ from core.app_env import (
     app_venv_setup_failed,
     ensure_app_venv,
     install_app_tarball,
+    reset_app_environment_async,
 )
 from core.app_metadata import read_app_metadata, resolve_app_metadata, write_app_metadata
 from core.retry import retry_with_backoff
+from core.scratch_payload import is_scratch_payload
+from runtime import scratch_runtime
 from runtime.api_token_store import build_api_headers
 from runtime.game_secret_store import get_pico8_key
+from runtime.snackbar_display import (
+    FAILED_TO_RESET_ENVIRONMENT_MESSAGE,
+    SETTING_UP_ENVIRONMENT_MESSAGE,
+    dismiss_snackbar,
+    show_snackbar,
+)
 from pico8_sync import sync_pico8_favourites
 import assets
 from PIL import Image
@@ -38,9 +48,20 @@ from validation_worker import ValidationWorker, FETCH_MISSING, VALIDATE_EXPIRED
 
 _log = logging.getLogger(__name__)
 
-
 _REMOVED_GAME_RESPONSE_CODE = "1001"
 _GAME_REMOVAL_RESPONSE_REASONS = ("private", "removed")
+
+# Shown while the shared Scratch runtime is being installed at launch.
+SCRATCH_SETTING_UP_MESSAGE = "SETTING UP SCRATCH"
+# An install that failed. The next launch retries it.
+SCRATCH_SETUP_FAILED_MESSAGE = "FAILED TO SETUP SCRATCH"
+# Shown when the device has no Node at all, which no amount of retrying fixes.
+SCRATCH_RUNTIME_UNSUPPORTED_MESSAGE = "GAME UNAVAILABLE"
+
+
+def _is_scratch_game(gameid: str) -> bool:
+    """True when the installed app carries a Scratch project."""
+    return is_scratch_payload(app_dir(gameid))
 
 
 class GameRemovedError(RuntimeError):
@@ -640,7 +661,80 @@ def launch_pending_pico8_process(game: dict | None) -> None:
         game["start_error"] = str(e)
 
 
-def start_game_process(gameid: str) -> dict:
+def _start_game_environment_reset(ctx, game_id: str) -> bool:
+    """Reset a game environment in the background, then relaunch the game."""
+    token: list = [None]
+
+    def on_start() -> None:
+        token[0] = show_snackbar(SETTING_UP_ENVIRONMENT_MESSAGE, persistent=True)
+        _set_status_safely(ctx, game_id, "downloading")
+
+    def on_done(success: bool) -> None:
+        dismiss_snackbar(token[0])
+        if not success:
+            show_snackbar(FAILED_TO_RESET_ENVIRONMENT_MESSAGE, error=True)
+            _set_status_safely(ctx, game_id, "error")
+            return
+        # Same guard as the Scratch runtime install: a reset can outlive the
+        # launch that asked for it, and must not tear down a game started since.
+        if getattr(ctx, "game", None) is not None:
+            _log.info(
+                "environment ready; not relaunching %s, another game is running", game_id
+            )
+            return
+        ctx.start_game = True
+        ctx.game_id = game_id
+
+    return reset_app_environment_async(game_id, on_start=on_start, on_done=on_done)
+
+
+def _set_status_safely(ctx, game_id: str, status: str) -> None:
+    setter = getattr(ctx, "set_game_status", None)
+    if not callable(setter):
+        return
+    try:
+        setter(game_id, status)
+    except Exception as e:
+        _log.warning("Error updating game status to %s for %s: %s", status, game_id, e)
+
+
+def _install_scratch_runtime_for_launch(ctx, game_id: str) -> bool:
+    """Install the shared runtime in the background, then relaunch the game.
+
+    False means an install was already running, so this launch left it alone and
+    stays waiting for that one.
+    """
+    token: list = [None]
+
+    def on_start() -> None:
+        token[0] = show_snackbar(SCRATCH_SETTING_UP_MESSAGE, persistent=True)
+        _set_status_safely(ctx, game_id, "downloading")
+
+    def on_done(success: bool) -> None:
+        dismiss_snackbar(token[0])
+        if not success:
+            _log.error(
+                "SCRATCH_SETUP_FAILED 1010: runtime install failed for %s", game_id
+            )
+            show_snackbar(SCRATCH_SETUP_FAILED_MESSAGE, error=True)
+            _set_status_safely(ctx, game_id, "error")
+            return
+        # The install takes ~35 s and the user is free to start something else
+        # meanwhile. Re-arming then would tear their game down mid-play, so only
+        # relaunch when nothing is running and the picker is still up.
+        running = getattr(ctx, "game", None)
+        if running is not None:
+            _log.info(
+                "scratch runtime ready; not relaunching %s, another game is running", game_id
+            )
+            return
+        ctx.start_game = True
+        ctx.game_id = game_id
+
+    return scratch_runtime.start_install_async(on_start=on_start, on_done=on_done)
+
+
+def start_game_process(gameid: str, ctx=None) -> dict:
     """Start game process and return its process/shared-memory runtime state."""
     game_path = os.path.join(os.getcwd(), "apps", gameid)
     if not os.path.isdir(game_path):
@@ -652,8 +746,33 @@ def start_game_process(gameid: str) -> dict:
         _log.error("Refusing to start %s: missing or invalid game sidecar", gameid)
         return None
     if not app_venv_ready(gameid):
-        _log.error("Refusing to start game %s: virtualenv is not ready", gameid)
-        return None
+        # Reset the environment instead of refusing: a stale stamp or a missing
+        # interpreter is recoverable with uv sync, and the caller relaunches.
+        _log.warning(
+            "Game %s environment is not ready; resetting it before launch", gameid
+        )
+        if ctx is not None and not _start_game_environment_reset(ctx, gameid):
+            _log.info("Game %s environment reset already in flight", gameid)
+        return {"game_id": gameid, "reset_pending": True}
+    # A Scratch game runs on the shared Node runtime rather than in its own
+    # virtualenv, so the venv check above says nothing about whether it can
+    # actually start. Install the runtime here, at launch, rather than at boot:
+    # npm ci costs ~35 s and a device that never launches a Scratch game must
+    # not pay it.
+    # Short-circuit on the cheap check first: is_installed() hashes every bundled
+    # source, and most launches are Python games.
+    if _is_scratch_game(gameid) and not scratch_runtime.is_installed():
+        # A device with no Node at all never resolves on its own, so say so
+        # instead of starting an install that cannot succeed.
+        if not scratch_runtime.node_abi():
+            _log.error("Refusing to start Scratch game %s: no Node on this device", gameid)
+            show_snackbar(SCRATCH_RUNTIME_UNSUPPORTED_MESSAGE, error=True)
+            return None
+        _log.warning(
+            "Scratch game %s launched before the runtime is installed; installing", gameid
+        )
+        _install_scratch_runtime_for_launch(ctx, gameid)
+        return {"game_id": gameid, "runtime_setup_pending": True}
     shm_name = "game_shm"
     shm_size = 128 * 160 * 3 + 1
     try:

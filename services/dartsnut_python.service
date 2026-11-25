@@ -1,12 +1,14 @@
 [Unit]
 Description=Dartsnut Python Service
-After=bluetooth.target network.target
+After=bluetooth.target network.target dartsnut_xvfb.service
+Wants=dartsnut_xvfb.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/home/rpi/dartsnut_rpi
 Environment=DARTSNUT_LOG_LEVEL=INFO
+Environment=DISPLAY=:99
 ExecStart=/home/rpi/dartsnut_rpi/uv run main.py
 Restart=always
 

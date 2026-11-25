@@ -9,11 +9,13 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from pathlib import Path, PurePosixPath
 
 from core.helpers import app_dir, uv_bin
 from core.app_metadata import resolve_app_metadata
+from core.scratch_payload import ScratchPayloadError, prepare_payload
 from core.retry import retry_with_backoff, FAST_BACKOFF_SECONDS
 from update_repair import mark_update_repair_pending, request_forcefsck
 
@@ -23,6 +25,68 @@ DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
 STAMP_FILENAME = ".dartsnut_stamp"
 STAMP_VERSION = "v2:"
 FAILED_SETUP_FILENAME = ".dartsnut_venv_failed"
+
+# Serializes environment resets per app: launch, download and widget paths can
+# race on the same .venv, and _remove_invalid_venv makes an interleaved sync
+# leave a half-built environment behind.
+_venv_locks: dict[str, threading.Lock] = {}
+_venv_locks_guard = threading.Lock()
+
+# Deduplicates background resets so a 30 FPS caller cannot stack uv sync runs.
+_env_reset_inflight: set[str] = set()
+_env_reset_lock = threading.Lock()
+
+
+def _venv_lock(app_id: str) -> threading.Lock:
+    with _venv_locks_guard:
+        return _venv_locks.setdefault(app_id, threading.Lock())
+
+
+def reset_app_environment_async(
+    app_id: str,
+    *,
+    on_start=None,
+    on_done=None,
+) -> bool:
+    """Reset an app environment in the background; True when a worker started.
+
+    `on_start()` and `on_done(success)` run on the worker thread. Failure never
+    sets the setup-failed stamp, so a launch-time reset stays a retry rather
+    than escalating into a full app re-download.
+    """
+    if not app_id:
+        return False
+    with _env_reset_lock:
+        if app_id in _env_reset_inflight:
+            return False
+        _env_reset_inflight.add(app_id)
+
+    def worker() -> None:
+        success = False
+        try:
+            if on_start is not None:
+                try:
+                    on_start()
+                except Exception as e:
+                    _log.warning("reset_app_environment: on_start error app_id=%s: %s", app_id, e)
+            success = ensure_app_venv(app_id, mark_failed=False)
+            if success:
+                _log.info("reset_app_environment: complete app_id=%s", app_id)
+            else:
+                _log.warning("reset_app_environment: failed app_id=%s", app_id)
+        except Exception as e:
+            _log.error("reset_app_environment: error app_id=%s: %s", app_id, e)
+        finally:
+            with _env_reset_lock:
+                _env_reset_inflight.discard(app_id)
+            if on_done is not None:
+                try:
+                    on_done(success)
+                except Exception as e:
+                    _log.warning("reset_app_environment: on_done error app_id=%s: %s", app_id, e)
+
+    threading.Thread(target=worker, daemon=True, name=f"env-reset-{app_id}").start()
+    return True
 
 
 def read_app_type(app_id: str) -> str | None:
@@ -210,53 +274,63 @@ def _remove_invalid_venv(app_id: str) -> None:
     _log.warning("Removed invalid app virtualenv for %s: %s", app_id, venv_path)
 
 
-def ensure_app_venv(app_id: str, *, force: bool = False) -> bool:
-    """Create or refresh apps/<id>/.venv. Returns False on failure."""
+def ensure_app_venv(app_id: str, *, force: bool = False, mark_failed: bool = True) -> bool:
+    """Create or refresh apps/<id>/.venv. Returns False on failure.
+
+    ``mark_failed=False`` is for launch-time resets: they must not leave the
+    failure stamp behind, because that escalates the next sync into a full app
+    re-download rather than another cheap retry.
+    """
     if not app_id:
         return False
     main_py = os.path.join(app_dir(app_id), "main.py")
     if not os.path.isfile(main_py):
         _log.warning("ensure_app_venv: missing main.py for %s", app_id)
-        _mark_app_venv_setup_failed(app_id)
+        if mark_failed:
+            _mark_app_venv_setup_failed(app_id)
         return False
 
-    if not force and app_venv_ready(app_id):
-        _clear_app_venv_setup_failed(app_id)
-        return True
+    with _venv_lock(app_id):
+        if not force and app_venv_ready(app_id):
+            _clear_app_venv_setup_failed(app_id)
+            return True
 
-    app_type = read_app_type(app_id)
-    if app_type is None:
-        _log.warning("ensure_app_venv: missing or invalid backend metadata for %s", app_id)
-        _mark_app_venv_setup_failed(app_id)
-        return False
-    started = time.monotonic()
-    try:
-        _materialize_pyproject(app_id, app_type)
-        _remove_invalid_venv(app_id)
-        _uv_sync(app_id)
-        _write_stamp(app_id)
-        _clear_app_venv_setup_failed(app_id)
-        _log.info(
-            "ensure_app_venv: ready app_id=%s type=%s elapsed=%.1fs",
-            app_id,
-            app_type,
-            time.monotonic() - started,
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        _mark_app_venv_setup_failed(app_id)
-        stderr = (e.stderr or "").strip()
-        _log.error(
-            "ensure_app_venv: uv sync failed app_id=%s: %s%s",
-            app_id,
-            e,
-            f" stderr={stderr}" if stderr else "",
-        )
-        return False
-    except Exception as e:
-        _mark_app_venv_setup_failed(app_id)
-        _log.error("ensure_app_venv: failed app_id=%s: %s", app_id, e)
-        return False
+        app_type = read_app_type(app_id)
+        if app_type is None:
+            _log.warning("ensure_app_venv: missing or invalid backend metadata for %s", app_id)
+            if mark_failed:
+                _mark_app_venv_setup_failed(app_id)
+            return False
+        started = time.monotonic()
+        try:
+            _materialize_pyproject(app_id, app_type)
+            _remove_invalid_venv(app_id)
+            _uv_sync(app_id)
+            _write_stamp(app_id)
+            _clear_app_venv_setup_failed(app_id)
+            _log.info(
+                "ensure_app_venv: ready app_id=%s type=%s elapsed=%.1fs",
+                app_id,
+                app_type,
+                time.monotonic() - started,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            if mark_failed:
+                _mark_app_venv_setup_failed(app_id)
+            stderr = (e.stderr or "").strip()
+            _log.error(
+                "ensure_app_venv: uv sync failed app_id=%s: %s%s",
+                app_id,
+                e,
+                f" stderr={stderr}" if stderr else "",
+            )
+            return False
+        except Exception as e:
+            if mark_failed:
+                _mark_app_venv_setup_failed(app_id)
+            _log.error("ensure_app_venv: failed app_id=%s: %s", app_id, e)
+            return False
 
 
 def ensure_sideload_app_venv(app_path: str, app_type: str) -> bool:
@@ -365,6 +439,15 @@ def install_app_tarball(tar_path: str, app_id: str) -> str:
             prepared_dir,
             ignore=shutil.ignore_patterns("._*", "__MACOSX"),
         )
+
+        # A Scratch payload is validated and given firmware-owned launch
+        # scaffolding here, while it is still staged, so a rejected project
+        # never reaches apps/ and never replaces a working install. A payload
+        # with no .sb3 is a Python game and passes through untouched.
+        try:
+            prepare_payload(prepared_dir)
+        except ScratchPayloadError as e:
+            raise ValueError(f"Invalid Scratch payload for {app_id!r}: {e}") from e
 
         backup_dir = None
         if os.path.exists(target_dir):

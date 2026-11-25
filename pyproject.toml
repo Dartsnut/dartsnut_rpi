@@ -1,6 +1,8 @@
 [project]
 name = "dartsnut-rpi"
-version = "2.1.1"
+version = "2.2.0"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "bluezero==0.9.1",

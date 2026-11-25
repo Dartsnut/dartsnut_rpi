@@ -150,6 +150,7 @@ echo "== Services and boot assets =="
 if [ -d "${SERVICES_DIR}" ]; then
     install_shared_runtime_tmpfiles || exit $?
     install_or_update_service_unit "dartsnut_matrix.service"
+    install_or_update_service_unit "dartsnut_xvfb.service"
     install_or_update_service_unit "dartsnut_python.service"
     install_or_update_service_unit "dartsnut_mcp.service"
     install_or_update_service_unit "dartsnut_watchdog.service"
@@ -299,3 +300,14 @@ sudo systemctl restart dartsnut_mcp.service
 echo "Restarted dartsnut_mcp.service"
 sudo systemctl restart dartsnut_watchdog.service
 echo "Restarted dartsnut_watchdog.service"
+
+# Xvfb is only restarted when its unit changed: it hosts the display every
+# Scratch launch renders into, so an edited ExecStart must take effect now
+# rather than at the next reboot. Restarting it unconditionally would kill a
+# running game for nothing.
+if [ "${SYSTEMD_UNITS_UPDATED}" -eq 1 ]; then
+    sudo systemctl restart dartsnut_xvfb.service
+    echo "Restarted dartsnut_xvfb.service"
+else
+    echo "Service units unchanged, skipping dartsnut_xvfb.service restart"
+fi

@@ -24,6 +24,30 @@ _UI_STATE_SNAPSHOT_PATH = "/tmp/dartsnut_ui_state.json"
 _ui_snapshot_last_write_at = 0.0
 _ui_snapshot_last_payload = ""
 
+# Target period of the main loop. The panel is driven at 30 FPS.
+FRAME_INTERVAL_SECONDS = 1.0 / 30
+
+
+def _advance_frame_deadline(deadline: float, now: float) -> float:
+    """Return the deadline of the frame that should be drawn at `now`.
+
+    Whole intervals only, so per-frame overhead never accumulates into drift: the
+    deadline stays on the original grid. When the loop has fallen more than one
+    interval behind, the deadline re-anchors to `now` instead of staying in the
+    past -- a long stall must not be followed by a burst of catch-up frames.
+    """
+    deadline += FRAME_INTERVAL_SECONDS
+    if deadline < now:
+        return now
+    return deadline
+
+
+def _sleep_until(deadline: float) -> None:
+    """Sleep until `deadline` (seconds on the time.monotonic() scale)."""
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        time.sleep(remaining)
+
 
 @dataclass
 class DimWindowRuntime:
@@ -221,9 +245,21 @@ def run_main_loop(
     in_game_state_cls: Type[Any],
     get_remote_sync: Callable[[], Any],
 ) -> None:
+    deadline = time.monotonic()
     while dartsnut.running:
         try:
-            time.sleep(1 / 30)
+            # Pace to a deadline, not with a fixed sleep.
+            #
+            # `time.sleep(1 / 30)` at the top of the body makes the real period
+            # 33.3 ms *plus* the frame's own work, so a 30 FPS loop measured
+            # ~26.8 FPS on a device and the shortfall grew with the work. Waiting
+            # only for the remaining time keeps the period at 33.3 ms.
+            #
+            # A frame that overruns its slot re-anchors the deadline to now rather
+            # than accumulating debt, so a long stall is not followed by a burst of
+            # catch-up frames.
+            deadline = _advance_frame_deadline(deadline, time.monotonic())
+            _sleep_until(deadline)
             assets.get_current_loading_frame()
 
             update_brightness_transition()
@@ -334,7 +370,14 @@ def run_main_loop(
             elif ctx.start_game:
                 ctx.start_game = False
                 term_game_process(ctx.game)
-                ctx.game = start_game_process(ctx.game_id)
+                started = start_game_process(ctx.game_id, ctx)
+                if started is not None and (
+                    started.get("reset_pending") or started.get("runtime_setup_pending")
+                ):
+                    # A background setup will re-arm ctx.start_game when it finishes.
+                    ctx.game = None
+                else:
+                    ctx.game = started
                 if ctx.game is not None:
                     term_widget_processes(ctx.pages)
                     ctx.transition_to(in_game_state_cls())

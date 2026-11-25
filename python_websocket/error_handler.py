@@ -21,6 +21,8 @@ ERROR_MESSAGES = {
     "1006": "A file system error occurred",
     "1007": "A file system error occurred",
     "1008": "A file system error occurred",
+    "1009": "Unable to set up the app environment",
+    "1010": "Unable to set up the game engine",
     
     # 2xxx: Network errors
     "2001": "Unable to connect to the network",
@@ -117,6 +119,8 @@ class ErrorCode(Enum):
     DIRECTORY_ALREADY_EXISTS = "1006"
     MD5_CALCULATION_ERROR = "1007"
     FILE_EXTRACTION_ERROR = "1008"
+    APP_ENV_SETUP_FAILED = "1009"
+    GAME_ENGINE_SETUP_FAILED = "1010"
     
     # 2xxx: Network errors
     NETWORK_ERROR = "2001"

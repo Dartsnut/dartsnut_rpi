@@ -16,8 +16,16 @@ PDM_HEIGHT = DISPLAY_HEIGHT - MAIN_SURFACE_HEIGHT
 SNACKBAR_HEIGHT = 12
 SNACKBAR_DURATION_SECONDS = 5.0
 SNACKBAR_ANIMATION_SECONDS = 0.2
+# Messages wider than the surface scroll so the tail stays readable; the timings
+# mirror the long-SSID scroller in states/settings.py.
+SNACKBAR_SCROLL_HOLD_SECONDS = 1.0
+SNACKBAR_SCROLL_PX_PER_SECOND = 20.0
+SNACKBAR_SCROLL_GAP = 18
+SNACKBAR_MAX_DURATION_SECONDS = 12.0
 CONTROLLER_CONNECTED_MESSAGE = "CONTROLLER CONNECTED"
 CONTROLLER_DISCONNECTED_MESSAGE = "CONTROLLER DISCONNECTED"
+SETTING_UP_ENVIRONMENT_MESSAGE = "SETTING UP ENVIRONMENT"
+FAILED_TO_RESET_ENVIRONMENT_MESSAGE = "FAILED TO RESET ENVIRONMENT"
 FIRMWARE_UPDATING_MESSAGE = "FIRMWARE UPDATING"
 FIRMWARE_UPDATE_FAILED_MESSAGE = "UPDATE FAILED"
 FIRMWARE_UPDATE_FAILED_FALLBACK_CODE = "6004"
@@ -25,6 +33,41 @@ SNACKBAR_DEFAULT_BACKGROUND = (255, 255, 255)
 SNACKBAR_DEFAULT_FOREGROUND = (0, 0, 0)
 SNACKBAR_ERROR_BACKGROUND = (192, 0, 0)
 SNACKBAR_ERROR_FOREGROUND = (255, 255, 255)
+
+# Process-wide display handle for callers with no context at hand (widget and
+# game lifecycle workers). Firmware registers the real display at startup.
+_active_display: "SnackbarDisplay | None" = None
+
+
+def register_snackbar_display(display: "SnackbarDisplay | None") -> None:
+    global _active_display
+    _active_display = display
+
+
+def show_snackbar(
+    message: str,
+    *,
+    persistent: bool = False,
+    error: bool = False,
+) -> int | None:
+    """Show a snackbar on the registered display; no-op when none is registered."""
+    display = _active_display
+    if display is None:
+        return None
+    if error:
+        return display.show_snackbar(
+            message,
+            background=SNACKBAR_ERROR_BACKGROUND,
+            foreground=SNACKBAR_ERROR_FOREGROUND,
+        )
+    return display.show_snackbar(message, persistent=persistent)
+
+
+def dismiss_snackbar(token: int | None) -> bool:
+    display = _active_display
+    if display is None or token is None:
+        return False
+    return display.dismiss_snackbar(token)
 
 
 class SnackbarDisplay:
@@ -121,7 +164,7 @@ class SnackbarDisplay:
         progress = self._snackbar_progress(now)
         frame = self._base_frame.copy()
         if self._message is not None and progress > 0:
-            self._draw_snackbar(frame, self._message, progress)
+            self._draw_snackbar(frame, self._message, progress, now)
         elif self._hide_base_frame is not None:
             frame = self._hide_base_frame.copy()
 
@@ -158,16 +201,37 @@ class SnackbarDisplay:
             return progress
 
         elapsed = max(0.0, now - self._shown_at)
-        hold_end = SNACKBAR_DURATION_SECONDS - SNACKBAR_ANIMATION_SECONDS
+        duration = self._duration_seconds()
+        hold_end = duration - SNACKBAR_ANIMATION_SECONDS
         if elapsed < hold_end:
             return progress
-        if elapsed < SNACKBAR_DURATION_SECONDS:
+        if elapsed < duration:
             return 1.0 - (
                 (elapsed - hold_end) / SNACKBAR_ANIMATION_SECONDS
             )
 
         self._clear_snackbar()
         return 0.0
+
+    def _text_width(self, message: str) -> int:
+        draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        return int(draw.textlength(message, font=self._font))
+
+    def _scrolls(self) -> bool:
+        if self._message is None:
+            return False
+        return self._text_width(self._message) > DISPLAY_WIDTH
+
+    def _duration_seconds(self) -> float:
+        """A scrolling message stays up for one full pass plus its hold times."""
+        if not self._scrolls():
+            return SNACKBAR_DURATION_SECONDS
+        cycle = self._text_width(self._message) + SNACKBAR_SCROLL_GAP
+        travel = cycle / SNACKBAR_SCROLL_PX_PER_SECOND
+        return min(
+            SNACKBAR_MAX_DURATION_SECONDS,
+            SNACKBAR_SCROLL_HOLD_SECONDS + travel + SNACKBAR_SCROLL_HOLD_SECONDS,
+        )
 
     def _active_progress(self, now: float) -> float:
         elapsed = max(0.0, now - self._shown_at)
@@ -181,7 +245,9 @@ class SnackbarDisplay:
         self._hide_base_frame = self._base_frame.copy()
         self._dirty = True
 
-    def _draw_snackbar(self, frame: Image.Image, message: str, progress: float) -> None:
+    def _draw_snackbar(
+        self, frame: Image.Image, message: str, progress: float, now: float
+    ) -> None:
         visible_height = max(
             0, min(SNACKBAR_HEIGHT, round(SNACKBAR_HEIGHT * progress))
         )
@@ -192,14 +258,30 @@ class SnackbarDisplay:
             "RGB", (DISPLAY_WIDTH, SNACKBAR_HEIGHT), self._background
         )
         draw = ImageDraw.Draw(snackbar)
+        draw.fontmode = "1"
         bbox = draw.textbbox((0, 0), message, font=self._font)
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
-        text_x = max(0, (DISPLAY_WIDTH - text_width) // 2 - bbox[0])
         text_y = max(0, (SNACKBAR_HEIGHT - text_height) // 2 - bbox[1])
-        draw.text(
-            (text_x, text_y), message, fill=self._foreground, font=self._font
-        )
+        if text_width <= DISPLAY_WIDTH:
+            positions = ((max(0, (DISPLAY_WIDTH - text_width) // 2 - bbox[0]), message),)
+        else:
+            cycle_width = max(1, text_width + SNACKBAR_SCROLL_GAP)
+            elapsed = max(0.0, now - self._shown_at)
+            if elapsed < SNACKBAR_SCROLL_HOLD_SECONDS:
+                offset = 0
+            else:
+                travelled = int(
+                    (elapsed - SNACKBAR_SCROLL_HOLD_SECONDS)
+                    * SNACKBAR_SCROLL_PX_PER_SECOND
+                )
+                offset = travelled % cycle_width
+            positions = ((-offset, message), (cycle_width - offset, message))
+
+        for text_x, label in positions:
+            draw.text(
+                (text_x, text_y), label, fill=self._foreground, font=self._font
+            )
 
         destination_y = MAIN_SURFACE_HEIGHT - visible_height
         source_y = SNACKBAR_HEIGHT - visible_height

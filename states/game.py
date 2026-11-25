@@ -66,8 +66,17 @@ class GameSelectState(BaseState):
                     present = getattr(display, "present", None)
                     if callable(present):
                         present()
-                game = ctx.start_game_process(gid)
+                game = ctx.start_game_process(gid, ctx)
                 if game is not None:
+                    if game.get("reset_pending") or game.get("runtime_setup_pending"):
+                        # Environment reset or runtime install runs in the
+                        # background and relaunches via ctx.start_game; stay on
+                        # the picker meanwhile.
+                        ctx.display.update_frame_buffer(assets.create_loading_image())
+                        present = getattr(ctx.display, "present", None)
+                        if callable(present):
+                            present()
+                        return
                     if ctx.term_widget_processes and ctx.pages is not None:
                         ctx.term_widget_processes(ctx.pages)
                     ctx.game = game

@@ -64,3 +64,32 @@ firmware overlay; when the exit overlay is active, the firmware consumes the
 controller controls again. The event reader is built into the runtime, so no
 extra Python or apt package is required. The deployed Python service currently
 runs as `root`, which provides access to `/dev/input/event*`.
+
+## License
+
+Dartsnut's own code in this repository is released under the **MIT License**
+(see `LICENSE`).
+
+Third-party components keep their own licenses, listed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Notable ones:
+
+- The **Scratch 3 runtime**, when bundled, is
+  [`@scratch/scratch-vm`](https://github.com/scratchfoundation/scratch-editor)
+  and friends, licensed **AGPL-3.0-only** (text in `LICENSE-AGPL-3.0.txt`).
+  Those packages are used unmodified. Dartsnut is **not affiliated with or
+  endorsed by the Scratch Foundation**; "Scratch" is referenced descriptively.
+- `DartsnutRGBMatrix` statically links
+  [hzeller/rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix)
+  (**GPL-2.0**). Its source will be published at
+  [Dartsnut/rgbmatrix](https://github.com/Dartsnut/rgbmatrix); until then it is
+  not covered by the MIT grant above.
+- `pybluez-dartsnut` (**GPL-2.0**) is the unmodified upstream
+  [PyBluez](https://github.com/pybluez/pybluez) source, republished at
+  [Dartsnut/pybluez](https://github.com/Dartsnut/pybluez) with the Raspberry Pi
+  arm64 wheels upstream does not ship. Wheel and source are published together,
+  so GPL-2.0 §3 is satisfied. It is imported by the Bluetooth operations, so its
+  copyleft reaches that module.
+
+Neither GPL-2.0 component is covered by the MIT grant above. Rationale and
+outstanding obligations: `THIRD_PARTY_NOTICES.md`,
+`docs/adr/0001-scratch-runtime-agpl.md`, `docs/adr/0002-license-policy.md`.
